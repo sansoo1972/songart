@@ -2,3 +2,8 @@ tmp/
 target/
 .DS_Store
 *.log
+
+
+# Added by cargo
+
+/target
