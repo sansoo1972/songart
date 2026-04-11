@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::fs;
 use std::process::Command;
 use std::{thread, time::Duration};
 
@@ -6,9 +7,8 @@ fn main() {
     let mut last_track = String::new();
 
     loop {
-        println!("🎤 Listening...");
+        println!("Listening...");
 
-        // Record audio
         let _ = Command::new("timeout")
             .args([
                 "10s",
@@ -21,7 +21,6 @@ fn main() {
             ])
             .status();
 
-        // Run SongRec
         let output = Command::new("/home/admin/projects/vendor/songrec/target/release/songrec")
             .args(["recognize", "sample.wav", "--json"])
             .output()
@@ -30,7 +29,7 @@ fn main() {
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         if stdout.trim().is_empty() {
-            println!("❌ No match");
+            println!("No JSON returned.");
             thread::sleep(Duration::from_secs(2));
             continue;
         }
@@ -38,7 +37,8 @@ fn main() {
         let json: Value = match serde_json::from_str(&stdout) {
             Ok(v) => v,
             Err(_) => {
-                println!("⚠️ Bad JSON");
+                println!("No match or bad JSON.");
+                thread::sleep(Duration::from_secs(2));
                 continue;
             }
         };
@@ -49,14 +49,50 @@ fn main() {
 
         let current = format!("{} - {}", artist, title);
 
-        // Only print if song changed
-        if current != last_track {
-            println!("\n🎵 Now Playing:");
-            println!("{}", current);
-            println!("🖼️ {}", cover);
-            last_track = current;
-        } else {
-            println!("⏸️ Same track...");
+        if current == last_track {
+            println!("Same track: {}", current);
+            thread::sleep(Duration::from_secs(2));
+            continue;
+        }
+
+        if cover.is_empty() {
+            println!("No artwork URL for {}", current);
+            thread::sleep(Duration::from_secs(2));
+            continue;
+        }
+
+        println!("Now playing: {}", current);
+        println!("Artwork: {}", cover);
+
+        match reqwest::blocking::get(cover) {
+            Ok(resp) => match resp.bytes() {
+                Ok(bytes) => {
+                    if fs::write("current.jpg", &bytes).is_ok() {
+                        let _ = Command::new("sudo")
+                            .args(["pkill", "fbi"])
+                            .status();
+
+                        let _ = Command::new("sudo")
+                            .args([
+                                "fbi",
+                                "-T",
+                                "1",
+                                "-d",
+                                "/dev/fb0",
+                                "--noverbose",
+                                "-a",
+                                "/home/admin/projects/songart/current.jpg",
+                            ])
+                            .status();
+
+                        last_track = current;
+                    } else {
+                        println!("Failed to save artwork.");
+                    }
+                }
+                Err(e) => println!("Failed reading image bytes: {e}"),
+            },
+            Err(e) => println!("Failed downloading artwork: {e}"),
         }
 
         thread::sleep(Duration::from_secs(2));
