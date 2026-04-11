@@ -24,12 +24,14 @@ Microphone → SongRec → JSON output → Rust app → Download artwork → Dis
 
 ## 📁 Project Structure
 
+```bash
 songart/
 ├── src/
 │   └── main.rs          # Core Rust application
 ├── current.jpg          # Latest downloaded artwork
 ├── Cargo.toml           # Rust dependencies
 └── README.md
+```
 
 ---
 
