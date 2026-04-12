@@ -3,6 +3,146 @@ use std::fs;
 use std::process::Command;
 use std::{thread, time::Duration};
 
+fn artwork_candidates(url: &str) -> Vec<String> {
+    let mut out = vec![url.to_string()];
+
+    if url.contains("mzstatic.com") {
+        let replacements = [
+            ("400x400cc.jpg", "3000x3000bb.jpg"),
+            ("400x400cc.jpg", "2000x2000bb.jpg"),
+            ("400x400cc.jpg", "1400x1400bb.jpg"),
+            ("400x400cc.jpg", "1200x1200bb.jpg"),
+            ("400x400cc.jpg", "800x800bb.jpg"),
+            ("400x400cc.jpg", "600x600bb.jpg"),
+            ("400x400cc.jpg", "400x400bb.jpg"),
+            ("400x400cc.jpg", "3000x3000cc.jpg"),
+            ("400x400cc.jpg", "1400x1400cc.jpg"),
+            ("400x400cc.jpg", "1200x1200cc.jpg"),
+            ("400x400cc.jpg", "800x800cc.jpg"),
+        ];
+
+        for (from, to) in replacements {
+            if url.contains(from) {
+                out.push(url.replace(from, to));
+            }
+        }
+    }
+
+    out.sort();
+    out.dedup();
+    out.reverse(); // larger variants tend to sort later; try them first
+    out
+}
+
+fn pick_artwork_url(json: &Value) -> Option<String> {
+    let mut base_urls = Vec::new();
+
+    if let Some(url) = json["track"]["images"]["coverarthq"].as_str() {
+        if !url.is_empty() {
+            base_urls.push(url.to_string());
+        }
+    }
+
+    if let Some(url) = json["track"]["images"]["coverart"].as_str() {
+        if !url.is_empty() {
+            base_urls.push(url.to_string());
+        }
+    }
+
+    if let Some(url) = json["track"]["images"]["background"].as_str() {
+        if !url.is_empty() {
+            base_urls.push(url.to_string());
+        }
+    }
+
+    if base_urls.is_empty() {
+        return None;
+    }
+
+    let mut candidates = Vec::new();
+    for url in base_urls {
+        candidates.extend(artwork_candidates(&url));
+    }
+
+    candidates.dedup();
+    candidates.into_iter().next()
+}
+
+fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, String> {
+    let mut base_urls = Vec::new();
+
+    if let Some(url) = json["track"]["images"]["coverarthq"].as_str() {
+        if !url.is_empty() {
+            base_urls.push(url.to_string());
+        }
+    }
+
+    if let Some(url) = json["track"]["images"]["coverart"].as_str() {
+        if !url.is_empty() {
+            base_urls.push(url.to_string());
+        }
+    }
+
+    if let Some(url) = json["track"]["images"]["background"].as_str() {
+        if !url.is_empty() {
+            base_urls.push(url.to_string());
+        }
+    }
+
+    if base_urls.is_empty() {
+        return Err("No artwork URL found in JSON".to_string());
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("songart/0.1")
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+    let mut candidates = Vec::new();
+    for url in base_urls {
+        candidates.extend(artwork_candidates(&url));
+    }
+
+    candidates.dedup();
+
+    for candidate in candidates {
+        println!("Trying artwork: {}", candidate);
+
+        let resp = match client.get(&candidate).send() {
+            Ok(r) => r,
+            Err(e) => {
+                println!("Download failed: {e}");
+                continue;
+            }
+        };
+
+        if !resp.status().is_success() {
+            println!("HTTP status {} for {}", resp.status(), candidate);
+            continue;
+        }
+
+        let bytes = match resp.bytes() {
+            Ok(b) => b,
+            Err(e) => {
+                println!("Failed reading bytes: {e}");
+                continue;
+            }
+        };
+
+        if bytes.len() < 10_000 {
+            println!("Rejected tiny image ({} bytes): {}", bytes.len(), candidate);
+            continue;
+        }
+
+        fs::write(output_path, &bytes)
+            .map_err(|e| format!("Failed to save artwork to {}: {e}", output_path))?;
+
+        return Ok(candidate);
+    }
+
+    Err("No usable artwork URL succeeded".to_string())
+}
+
 fn main() {
     let mut last_track = String::new();
 
@@ -45,8 +185,6 @@ fn main() {
 
         let title = json["track"]["title"].as_str().unwrap_or("Unknown");
         let artist = json["track"]["subtitle"].as_str().unwrap_or("Unknown");
-        let cover = json["track"]["images"]["coverart"].as_str().unwrap_or("");
-
         let current = format!("{} - {}", artist, title);
 
         if current == last_track {
@@ -55,44 +193,40 @@ fn main() {
             continue;
         }
 
-        if cover.is_empty() {
+        let preview_url = pick_artwork_url(&json).unwrap_or_default();
+        if preview_url.is_empty() {
             println!("No artwork URL for {}", current);
             thread::sleep(Duration::from_secs(2));
             continue;
         }
 
         println!("Now playing: {}", current);
-        println!("Artwork: {}", cover);
+        println!("Artwork seed URL: {}", preview_url);
 
-        match reqwest::blocking::get(cover) {
-            Ok(resp) => match resp.bytes() {
-                Ok(bytes) => {
-                    if fs::write("current.jpg", &bytes).is_ok() {
-                        let _ = Command::new("sudo")
-                            .args(["pkill", "fbi"])
-                            .status();
+        match download_best_artwork(&json, "current.jpg") {
+            Ok(final_url) => {
+                println!("Using artwork: {}", final_url);
 
-                        let _ = Command::new("sudo")
-                            .args([
-                                "fbi",
-                                "-T",
-                                "1",
-                                "-d",
-                                "/dev/fb0",
-                                "--noverbose",
-                                "-a",
-                                "/home/admin/projects/songart/current.jpg",
-                            ])
-                            .status();
+                let _ = Command::new("sudo").args(["pkill", "fbi"]).status();
 
-                        last_track = current;
-                    } else {
-                        println!("Failed to save artwork.");
-                    }
-                }
-                Err(e) => println!("Failed reading image bytes: {e}"),
-            },
-            Err(e) => println!("Failed downloading artwork: {e}"),
+                let _ = Command::new("sudo")
+                    .args([
+                        "fbi",
+                        "-T",
+                        "1",
+                        "-d",
+                        "/dev/fb0",
+                        "--noverbose",
+                        "-a",
+                        "/home/admin/projects/songart/current.jpg",
+                    ])
+                    .status();
+
+                last_track = current;
+            }
+            Err(e) => {
+                println!("Failed to download artwork: {}", e);
+            }
         }
 
         thread::sleep(Duration::from_secs(2));
