@@ -8,6 +8,10 @@ use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::process::Command;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::{thread, time::Duration};
 
 /// When true, extra debug information is printed and appended to a logfile.
@@ -337,8 +341,22 @@ fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, Stri
 }
 
 fn main() {
-    // Track the last displayed song and last displayed artwork URL so we can
-    // suppress redundant downloads and framebuffer refreshes.
+    // -----------------------------------------------------------------
+    // Ctrl+C handling
+    //
+    // We use an atomic flag so the app can shut down cleanly after the
+    // current blocking operation finishes.
+    // -----------------------------------------------------------------
+    let running = Arc::new(AtomicBool::new(true));
+    let running_flag = Arc::clone(&running);
+
+    ctrlc::set_handler(move || {
+        running_flag.store(false, Ordering::SeqCst);
+    })
+    .expect("failed to set Ctrl-C handler");
+
+    // Track the last displayed song and artwork URL so we can suppress
+    // redundant downloads and framebuffer refreshes.
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
 
@@ -347,7 +365,7 @@ fn main() {
         log_line(&format!("Log file: {LOG_FILE}"));
     }
 
-    loop {
+    while running.load(Ordering::SeqCst) {
         // -----------------------------------------------------------------
         // 1. Record a short audio sample from the configured microphone source
         // -----------------------------------------------------------------
@@ -382,6 +400,11 @@ fn main() {
             }
         }
 
+        // If Ctrl+C was pressed during recording, stop before doing more work.
+        if !running.load(Ordering::SeqCst) {
+            break;
+        }
+
         // -----------------------------------------------------------------
         // 2. Run SongRec on the recorded WAV file and capture JSON output
         // -----------------------------------------------------------------
@@ -399,6 +422,11 @@ fn main() {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // If Ctrl+C was pressed while SongRec was running, exit now.
+        if !running.load(Ordering::SeqCst) {
+            break;
+        }
 
         if VERBOSE {
             log_line(&format!("SongRec exit status: {}", output.status));
@@ -522,7 +550,7 @@ fn main() {
                     log_line("Artwork unchanged, skipping display refresh.");
                 }
 
-                // Update the last seen state only after successful artwork handling.
+                // Update last seen state only after a successful artwork pass.
                 last_track = current;
                 last_artwork_url = final_url;
             }
@@ -534,6 +562,18 @@ fn main() {
         // -----------------------------------------------------------------
         // 9. Pause briefly before the next recognition cycle
         // -----------------------------------------------------------------
-        thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
+        if running.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
+        }
     }
+
+    // -----------------------------------------------------------------
+    // 10. Clean shutdown
+    //
+    // When Ctrl+C is pressed, stop the framebuffer viewer so the console
+    // is returned to a sane state.
+    // -----------------------------------------------------------------
+    log_line("Shutting down songart...");
+    let _ = Command::new("sudo").args(["pkill", "fbi"]).status();
+    log_line("songart stopped.");
 }
