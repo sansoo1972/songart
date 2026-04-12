@@ -4,7 +4,7 @@ use std::process::Command;
 use std::{thread, time::Duration};
 
 fn artwork_candidates(url: &str) -> Vec<String> {
-    let mut out = vec![url.to_string()];
+    let mut out = Vec::new();
 
     if url.contains("mzstatic.com") {
         let replacements = [
@@ -28,9 +28,8 @@ fn artwork_candidates(url: &str) -> Vec<String> {
         }
     }
 
-    out.sort();
+    out.push(url.to_string()); // fallback to original last
     out.dedup();
-    out.reverse(); // larger variants tend to sort later; try them first
     out
 }
 
