@@ -3,6 +3,89 @@ use std::fs;
 use std::process::Command;
 use std::{thread, time::Duration};
 
+fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
+    let sections = json["track"]["sections"].as_array()?;
+
+    for section in sections {
+        let metadata = section["metadata"].as_array()?;
+        for item in metadata {
+            let title = item["title"].as_str().unwrap_or("");
+            if title.eq_ignore_ascii_case(wanted_title) {
+                let text = item["text"].as_str().unwrap_or("").trim();
+                if !text.is_empty() {
+                    return Some(text.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_album(json: &Value) -> String {
+    metadata_value(json, "Album").unwrap_or_else(|| "Unknown".to_string())
+}
+
+fn extract_label(json: &Value) -> String {
+    metadata_value(json, "Label").unwrap_or_else(|| "Unknown".to_string())
+}
+
+fn extract_released(json: &Value) -> String {
+    metadata_value(json, "Released").unwrap_or_else(|| "Unknown".to_string())
+}
+
+fn extract_composer(json: &Value) -> String {
+    metadata_value(json, "Composer")
+        .or_else(|| metadata_value(json, "Writers"))
+        .or_else(|| metadata_value(json, "Writer"))
+        .unwrap_or_else(|| "Unknown".to_string())
+}
+
+fn extract_track_number(json: &Value) -> String {
+    metadata_value(json, "Track")
+        .or_else(|| metadata_value(json, "Track Number"))
+        .unwrap_or_else(|| "Unknown".to_string())
+}
+
+fn extract_genre(json: &Value) -> String {
+    json["track"]["genres"]["primary"]
+        .as_str()
+        .unwrap_or("Unknown")
+        .to_string()
+}
+
+fn extract_isrc(json: &Value) -> String {
+    json["track"]["isrc"]
+        .as_str()
+        .unwrap_or("Unknown")
+        .to_string()
+}
+
+fn extract_notes(json: &Value) -> String {
+    let mut bits = Vec::new();
+
+    let genre = extract_genre(json);
+    if genre != "Unknown" {
+        bits.push(format!("Genre: {genre}"));
+    }
+
+    let label = extract_label(json);
+    if label != "Unknown" {
+        bits.push(format!("Label: {label}"));
+    }
+
+    let isrc = extract_isrc(json);
+    if isrc != "Unknown" {
+        bits.push(format!("ISRC: {isrc}"));
+    }
+
+    if bits.is_empty() {
+        "None".to_string()
+    } else {
+        bits.join(" | ")
+    }
+}
+
 fn artwork_candidates(url: &str) -> Vec<String> {
     let mut out = Vec::new();
 
@@ -28,7 +111,7 @@ fn artwork_candidates(url: &str) -> Vec<String> {
         }
     }
 
-    out.push(url.to_string()); // fallback to original last
+    out.push(url.to_string());
     out.dedup();
     out
 }
@@ -190,6 +273,14 @@ fn main() {
 
         let title = json["track"]["title"].as_str().unwrap_or("Unknown");
         let artist = json["track"]["subtitle"].as_str().unwrap_or("Unknown");
+        let album = extract_album(&json);
+        let track_number = extract_track_number(&json);
+        let composer = extract_composer(&json);
+        let released = extract_released(&json);
+        let genre = extract_genre(&json);
+        let label = extract_label(&json);
+        let notes = extract_notes(&json);
+
         let current = format!("{} - {}", artist, title);
 
         let preview_url = pick_artwork_url(&json).unwrap_or_default();
@@ -205,12 +296,25 @@ fn main() {
             continue;
         }
 
-        println!("Now playing: {}", current);
-        println!("Artwork seed URL: {}", preview_url);
+        println!();
+        println!("========================================");
+        println!("NOW PLAYING");
+        println!("Song Title:   {}", title);
+        println!("Artist:       {}", artist);
+        println!("Album:        {}", album);
+        println!("Track:        {}", track_number);
+        println!("Composer:     {}", composer);
+        println!("Released:     {}", released);
+        println!("Genre:        {}", genre);
+        println!("Label:        {}", label);
+        println!("Seed URL:     {}", preview_url);
+        println!("Notes:        {}", notes);
+        println!("========================================");
+        println!();
 
         match download_best_artwork(&json, "current.jpg") {
             Ok(final_url) => {
-                println!("Using artwork: {}", final_url);
+                println!("Final URL:    {}", final_url);
 
                 let artwork_changed = final_url != last_artwork_url;
 
