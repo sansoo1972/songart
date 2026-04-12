@@ -133,8 +133,13 @@ fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, Stri
             continue;
         }
 
-        fs::write(output_path, &bytes)
-            .map_err(|e| format!("Failed to save artwork to {}: {e}", output_path))?;
+        let tmp_path = format!("{output_path}.tmp");
+
+        fs::write(&tmp_path, &bytes)
+            .map_err(|e| format!("Failed to save temp artwork to {}: {e}", tmp_path))?;
+
+        fs::rename(&tmp_path, output_path)
+            .map_err(|e| format!("Failed to rename temp artwork to {}: {e}", output_path))?;
 
         return Ok(candidate);
     }
@@ -144,6 +149,7 @@ fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, Stri
 
 fn main() {
     let mut last_track = String::new();
+    let mut last_artwork_url = String::new();
 
     loop {
         println!("Listening...");
@@ -186,15 +192,15 @@ fn main() {
         let artist = json["track"]["subtitle"].as_str().unwrap_or("Unknown");
         let current = format!("{} - {}", artist, title);
 
-        if current == last_track {
-            println!("Same track: {}", current);
+        let preview_url = pick_artwork_url(&json).unwrap_or_default();
+        if preview_url.is_empty() {
+            println!("No artwork URL for {}", current);
             thread::sleep(Duration::from_secs(2));
             continue;
         }
 
-        let preview_url = pick_artwork_url(&json).unwrap_or_default();
-        if preview_url.is_empty() {
-            println!("No artwork URL for {}", current);
+        if current == last_track && preview_url == last_artwork_url {
+            println!("Same track and artwork: {}", current);
             thread::sleep(Duration::from_secs(2));
             continue;
         }
@@ -206,22 +212,31 @@ fn main() {
             Ok(final_url) => {
                 println!("Using artwork: {}", final_url);
 
-                let _ = Command::new("sudo").args(["pkill", "fbi"]).status();
+                let artwork_changed = final_url != last_artwork_url;
 
-                let _ = Command::new("sudo")
-                    .args([
-                        "fbi",
-                        "-T",
-                        "1",
-                        "-d",
-                        "/dev/fb0",
-                        "--noverbose",
-                        "-a",
-                        "/home/admin/projects/songart/current.jpg",
-                    ])
-                    .status();
+                if artwork_changed {
+                    println!("Refreshing display...");
+
+                    let _ = Command::new("sudo").args(["pkill", "fbi"]).status();
+
+                    let _ = Command::new("sudo")
+                        .args([
+                            "fbi",
+                            "-T",
+                            "1",
+                            "-d",
+                            "/dev/fb0",
+                            "--noverbose",
+                            "-a",
+                            "/home/admin/projects/songart/current.jpg",
+                        ])
+                        .status();
+                } else {
+                    println!("Artwork unchanged, skipping display refresh.");
+                }
 
                 last_track = current;
+                last_artwork_url = final_url;
             }
             Err(e) => {
                 println!("Failed to download artwork: {}", e);
