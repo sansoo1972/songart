@@ -2,35 +2,42 @@
 
 Real-time music recognition and album artwork display system built on Raspberry Pi.
 
-This project listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), and displays the corresponding album artwork fullscreen.
+`songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a fullscreen split-screen display with artwork on top and track metadata underneath.
 
 ---
 
 ## 🚀 Features
 
 - 🎧 Real-time music recognition via SongRec
-- 🖼️ Automatic album artwork retrieval
-- 📺 Fullscreen display using framebuffer (`fbi`)
-- ⚡ Lightweight, runs headless (no desktop environment required)
+- 🖼️ Automatic album artwork retrieval with higher-resolution artwork candidate selection
+- 🖥️ Fullscreen SDL-based display with:
+  - artwork panel
+  - metadata panel
+- 📝 Timestamped logging with configurable log levels
+- ⚙️ Externalized runtime configuration via TOML
+- ⚡ Runs from Raspberry Pi console without requiring a full desktop workflow
 - 🧠 Built in Rust for performance and control
 
 ---
 
 ## 🏗️ Architecture
 
-Microphone → SongRec → JSON output → Rust app → Download artwork → Display via `fbi`
+Microphone → SongRec → JSON output → Rust app → Download artwork → SDL fullscreen renderer
 
 ---
 
 ## 📁 Project Structure
 
-```bash
+```text
 songart/
+├── config/
+│   └── songart.toml     # Runtime configuration
 ├── src/
-│   └── main.rs          # Core Rust application
-├── current.jpg          # Latest downloaded artwork
+│   ├── config.rs        # Config structs and loader
+│   └── main.rs          # Core application logic
 ├── Cargo.toml           # Rust dependencies
-└── README.md
+├── README.md
+└── CHANGELOG.md
 ```
 
 ---
@@ -42,12 +49,17 @@ songart/
 - Raspberry Pi OS
 - USB microphone or supported audio input device
 - HDMI-connected display
+- Local console access for fullscreen display testing
 
 ### System packages
 
 ```bash
 sudo apt update
-sudo apt install -y fbi libssl-dev pkg-config
+sudo apt install -y \
+  libsdl2-dev \
+  libsdl2-image-dev \
+  libsdl2-ttf-dev \
+  pkg-config
 ```
 
 ### SongRec
@@ -63,13 +75,51 @@ cargo build --release
 
 ## 🔧 Configuration
 
-Make sure your audio input device is correct:
+Runtime configuration is stored in:
+
+```text
+config/songart.toml
+```
+
+Example:
+
+```toml
+[logging]
+level = "debug"
+file = "/home/admin/projects/songart/songart.log"
+reset_on_start = true
+
+[audio]
+device = "ps3eye_mono"
+sample_wav = "/home/admin/projects/songart/sample.wav"
+record_seconds = 10
+loop_delay_secs = 2
+
+[paths]
+songrec_bin = "/home/admin/projects/vendor/songrec/target/release/songrec"
+artwork_file = "/home/admin/projects/songart/current.jpg"
+font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+[display]
+window_title = "songart"
+width = 1280
+height = 720
+fullscreen = true
+top_panel_ratio = 0.72
+title_font_size = 34
+body_font_size = 24
+frame_delay_ms = 33
+```
+
+### Find your audio device
+
+List devices with:
 
 ```bash
 ~/projects/vendor/songrec/target/release/songrec recognize --list-devices
 ```
 
-If needed, update the device name used by your Rust app.
+If needed, remap or adjust the configured audio device in `config/songart.toml`.
 
 ---
 
@@ -78,41 +128,88 @@ If needed, update the device name used by your Rust app.
 ### Test SongRec manually
 
 ```bash
-~/projects/vendor/songrec/target/release/songrec recognize   -d "<your-audio-device>"   --json
+~/projects/vendor/songrec/target/release/songrec recognize \
+  -d "<your-audio-device>" \
+  --json
 ```
 
-### Run the Rust app
+### Build the app
 
 ```bash
 cd ~/projects/songart
-cargo run --release
+cargo build --release
 ```
+
+### Run the app
+
+From the Raspberry Pi console:
+
+```bash
+cd ~/projects/songart
+SDL_VIDEODRIVER=kmsdrm cargo run --release
+```
+
+If needed, adjust the SDL video driver depending on your Pi environment.
 
 ---
 
 ## 🖥️ Display
 
-The app uses `fbi` to render images directly to the framebuffer.
+The display is now rendered directly by the Rust application using SDL.
 
-- No X11 required
-- Works from the Linux console
-- Best run from the Pi’s local display session
+Layout:
+- top panel: album artwork
+- bottom panel: track metadata
 
-To test image display manually:
+Metadata shown includes:
+- song title
+- artist
+- album
+- track number
+- composer/writer
+- release year
+- genre
+- label
+- notes/trivia fields derived from available metadata
+
+---
+
+## 📝 Logging
+
+Logging is controlled by the configured log level in `config/songart.toml`.
+
+Supported levels:
+- `error`
+- `info`
+- `debug`
+
+The log file path is also configured in TOML.
+
+Example:
+
+```toml
+[logging]
+level = "debug"
+file = "/home/admin/projects/songart/songart.log"
+reset_on_start = true
+```
+
+To follow logs live:
 
 ```bash
-sudo fbi -T 1 -d /dev/fb0 --noverbose -a current.jpg
+tail -f /home/admin/projects/songart/songart.log
 ```
 
 ---
 
 ## ⚠️ Notes / Known Issues
 
-- Direct SDL/X11 display attempts may fail on CLI-only setups
-- Framebuffer display via `fbi` is currently the most reliable path
-- Correct audio device configuration is required for recognition
-- Artwork sources depend on metadata returned by SongRec
-- Some Rust crates may require OpenSSL development packages unless configured to use Rustls
+- SDL fullscreen behavior on Raspberry Pi may depend on the active video backend
+- `kmsdrm` is currently the preferred fullscreen console path
+- Correct audio input configuration is required for reliable recognition
+- SongRec metadata availability varies by track
+- Some fields may show as `Unknown` when not present in the Shazam response
+- Artwork quality depends on source availability, but Apple-hosted artwork is now upgraded through higher-resolution candidate URLs when possible
 
 ---
 
@@ -120,22 +217,24 @@ sudo fbi -T 1 -d /dev/fb0 --noverbose -a current.jpg
 
 - ✅ Song recognition working
 - ✅ JSON parsing working
-- ✅ Artwork download working
-- ✅ Fullscreen display working via framebuffer
-- ⬜ Continuous auto-refresh loop polish
-- ⬜ Smarter duplicate-track suppression
-- ⬜ UI transitions / overlay text
+- ✅ High-resolution artwork candidate selection working
+- ✅ Timestamped logging with configurable log levels
+- ✅ TOML-based runtime configuration working
+- ✅ SDL split-screen display working
+- ✅ Empty-text rendering edge case fixed
+- ✅ Graceful Ctrl+C shutdown working
 
 ---
 
 ## 🔮 Future Improvements
 
-- Continuous listening loop with better debounce logic
-- Smarter artwork resolution selection
-- Fade/transition effects between songs
-- On-screen artist/title overlay
-- Boot-time auto start
-- Additional metadata enrichment from streaming services
+- Smarter metadata enrichment from additional sources
+- Better fallback handling for missing album/track details
+- Artwork caching and reuse across repeated plays
+- Boot-time auto start / service mode
+- Transition/fade effects between tracks
+- Optional UI theming and layout customization
+- Operational packaging and deployment scripts
 
 ---
 
@@ -147,5 +246,4 @@ Richard (`sansoo1972`)
 
 ## 📄 License
 
-TBD
-
+MIT
