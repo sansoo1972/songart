@@ -8,21 +8,31 @@
 //!    - artwork on top
 //!    - metadata panel underneath
 
-use serde_json::Value;
 use sdl2::event::Event;
 use sdl2::image::{InitFlag, LoadTexture};
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
+use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{thread, time::Duration};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum LogLevel {
+    Error = 1,
+    Info = 2,
+    Debug = 3,
+}
+
+const LOG_LEVEL: LogLevel = LogLevel::Debug;
 
 /// Enables extra debug logging to stdout and to the logfile.
 const VERBOSE: bool = true;
@@ -52,7 +62,7 @@ const LOOP_DELAY_SECS: u64 = 2;
 const FONT_PATH: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 
 /// Shared UI state consumed by the SDL renderer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct SongState {
     title: String,
     artist: String,
@@ -68,18 +78,68 @@ struct SongState {
     version: u64,
 }
 
+impl Default for SongState {
+    fn default() -> Self {
+        Self {
+            title: "Waiting for music...".to_string(),
+            artist: "No track identified yet".to_string(),
+            album: "Album unknown".to_string(),
+            track_number: "Unknown".to_string(),
+            composer: "Unknown".to_string(),
+            released: "Unknown".to_string(),
+            genre: "Unknown".to_string(),
+            label: "Unknown".to_string(),
+            notes: "Listening for audio input".to_string(),
+            artwork_path: String::new(),
+            artwork_url: String::new(),
+            version: 0,
+        }
+    }
+}
+
+fn timestamp_string() -> String {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(dur) => format!("{}", dur.as_secs()),
+        Err(_) => "0".to_string(),
+    }
+}
+
+fn should_log(level: LogLevel) -> bool {
+    level <= LOG_LEVEL
+}
+
 /// Best-effort logfile write when verbose mode is enabled.
-fn log_debug(message: &str) {
-    if !VERBOSE {
+fn log_message(level: LogLevel, message: &str) {
+    if !should_log(level) {
         return;
     }
 
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(LOG_FILE)
-    {
-        let _ = writeln!(file, "{message}");
+    let line = format!("[{}] [{:?}] {}", timestamp_string(), level, message);
+    println!("{line}");
+
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(LOG_FILE) {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+fn log_error(message: &str) {
+    log_message(LogLevel::Error, message);
+}
+
+fn log_info(message: &str) {
+    log_message(LogLevel::Info, message);
+}
+
+fn log_debug(message: &str) {
+    log_message(LogLevel::Debug, message);
+}
+
+fn log_blank() {
+    if should_log(LogLevel::Info) {
+        println!();
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(LOG_FILE) {
+            let _ = writeln!(file);
+        }
     }
 }
 
@@ -93,6 +153,14 @@ fn log_line(message: &str) {
 fn log_blank() {
     println!();
     log_debug("");
+}
+
+fn reset_log_file() {
+    let _ = fs::write(LOG_FILE, "");
+}
+
+if should_log(LogLevel::Debug) {
+    reset_log_file();
 }
 
 /// Pulls a metadata value out of the nested SongRec/Shazam JSON sections by title.
@@ -289,31 +357,31 @@ fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, Stri
     candidates.dedup();
 
     for candidate in candidates {
-        log_line(&format!("Trying artwork: {candidate}"));
+        log_info(&format!("Trying artwork: {candidate}"));
 
         let resp = match client.get(&candidate).send() {
             Ok(r) => r,
             Err(e) => {
-                log_line(&format!("Download failed: {e}"));
+                log_error(&format!("Download failed: {e}"));
                 continue;
             }
         };
 
         if !resp.status().is_success() {
-            log_line(&format!("HTTP status {} for {}", resp.status(), candidate));
+            log_info(&format!("HTTP status {} for {}", resp.status(), candidate));
             continue;
         }
 
         let bytes = match resp.bytes() {
             Ok(b) => b,
             Err(e) => {
-                log_line(&format!("Failed reading bytes: {e}"));
+                log_error(&format!("Failed reading bytes: {e}"));
                 continue;
             }
         };
 
         if bytes.len() < 10_000 {
-            log_line(&format!(
+            log_info(&format!(
                 "Rejected tiny image ({} bytes): {}",
                 bytes.len(),
                 candidate
@@ -342,7 +410,10 @@ fn ellipsize(input: &str, max_chars: usize) -> String {
         return input.to_string();
     }
 
-    let trimmed: String = chars.into_iter().take(max_chars.saturating_sub(1)).collect();
+    let trimmed: String = chars
+        .into_iter()
+        .take(max_chars.saturating_sub(1))
+        .collect();
     format!("{trimmed}…")
 }
 
@@ -356,8 +427,10 @@ fn draw_text_line(
     x: i32,
     y: i32,
 ) -> Result<(), String> {
+    let safe_text = if text.trim().is_empty() { " " } else { text };
+
     let surface = font
-        .render(text)
+        .render(safe_text)
         .blended(color)
         .map_err(|e| e.to_string())?;
 
@@ -379,13 +452,13 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
     let mut last_artwork_url = String::new();
 
     if VERBOSE {
-        log_line("Verbose logging enabled.");
-        log_line(&format!("Log file: {LOG_FILE}"));
+        log_info("Verbose logging enabled.");
+        log_info(&format!("Log file: {LOG_FILE}"));
     }
 
     while running.load(Ordering::SeqCst) {
         // 1. Record a short audio sample.
-        log_line("Listening...");
+        log_info("Listening...");
 
         let record_status = Command::new("timeout")
             .args([
@@ -406,11 +479,11 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         match record_status {
             Ok(status) => {
                 if VERBOSE {
-                    log_line(&format!("Record command exit status: {status}"));
+                    log_info(&format!("Record command exit status: {status}"));
                 }
             }
             Err(e) => {
-                log_line(&format!("Failed to record sample audio: {e}"));
+                log_error(&format!("Failed to record sample audio: {e}"));
                 thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
                 continue;
             }
@@ -427,7 +500,7 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         {
             Ok(output) => output,
             Err(e) => {
-                log_line(&format!("Failed to execute songrec: {e}"));
+                log_error(&format!("Failed to execute songrec: {e}"));
                 thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
                 continue;
             }
@@ -441,15 +514,15 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         }
 
         if VERBOSE {
-            log_line(&format!("SongRec exit status: {}", output.status));
+            log_info(&format!("SongRec exit status: {}", output.status));
             if !stderr.trim().is_empty() {
-                log_line("SongRec stderr:");
-                log_line(stderr.trim());
+                log_error("SongRec stderr:");
+                log_error(stderr.trim());
             }
         }
 
         if stdout.trim().is_empty() {
-            log_line("No JSON returned.");
+            log_debug("No JSON returned.");
             thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
             continue;
         }
@@ -458,7 +531,7 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         let json: Value = match serde_json::from_str(&stdout) {
             Ok(v) => v,
             Err(e) => {
-                log_line(&format!("No match or bad JSON: {e}"));
+                log_debug(&format!("No match or bad JSON: {e}"));
                 thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
                 continue;
             }
@@ -480,39 +553,39 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         // 5. Pick artwork seed URL.
         let preview_url = pick_artwork_url(&json).unwrap_or_default();
         if preview_url.is_empty() {
-            log_line(&format!("No artwork URL for {current}"));
+            log_debug(&format!("No artwork URL for {current}"));
             thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
             continue;
         }
 
         // 6. Suppress duplicate work.
         if current == last_track && preview_url == last_artwork_url {
-            log_line(&format!("Same track and artwork: {current}"));
+            log_debug(&format!("Same track and artwork: {current}"));
             thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
             continue;
         }
 
         // 7. Print detailed now-playing block only when it changes.
         log_blank();
-        log_line("========================================");
-        log_line("NOW PLAYING");
-        log_line(&format!("Song Title:   {title}"));
-        log_line(&format!("Artist:       {artist}"));
-        log_line(&format!("Album:        {album}"));
-        log_line(&format!("Track:        {track_number}"));
-        log_line(&format!("Composer:     {composer}"));
-        log_line(&format!("Released:     {released}"));
-        log_line(&format!("Genre:        {genre}"));
-        log_line(&format!("Label:        {label}"));
-        log_line(&format!("Seed URL:     {preview_url}"));
-        log_line(&format!("Notes:        {notes}"));
-        log_line("========================================");
+        log_info("========================================");
+        log_info("NOW PLAYING");
+        log_info(&format!("Song Title:   {title}"));
+        log_info(&format!("Artist:       {artist}"));
+        log_info(&format!("Album:        {album}"));
+        log_info(&format!("Track:        {track_number}"));
+        log_info(&format!("Composer:     {composer}"));
+        log_info(&format!("Released:     {released}"));
+        log_info(&format!("Genre:        {genre}"));
+        log_info(&format!("Label:        {label}"));
+        log_info(&format!("Seed URL:     {preview_url}"));
+        log_info(&format!("Notes:        {notes}"));
+        log_info("========================================");
         log_blank();
 
         // 8. Download the best artwork and update shared UI state.
         match download_best_artwork(&json, CURRENT_ARTWORK) {
             Ok(final_url) => {
-                log_line(&format!("Final URL:    {final_url}"));
+                log_info(&format!("Final URL:    {final_url}"));
 
                 let artwork_changed = final_url != last_artwork_url;
 
@@ -531,14 +604,14 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
                     state.artwork_url = final_url.clone();
                     state.version = state.version.wrapping_add(1);
                 } else {
-                    log_line("Artwork unchanged, skipping UI state refresh.");
+                    log_debug("Artwork unchanged, skipping UI state refresh.");
                 }
 
                 last_track = current;
                 last_artwork_url = final_url;
             }
             Err(e) => {
-                log_line(&format!("Failed to download artwork: {e}"));
+                log_error(&format!("Failed to download artwork: {e}"));
             }
         }
 
@@ -547,7 +620,7 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         }
     }
 
-    log_line("Recognition loop stopped.");
+    log_error("Recognition loop stopped.");
 }
 
 /// SDL renderer loop.
@@ -621,7 +694,7 @@ fn run_display_loop(
                         artwork_texture = Some(texture);
                         loaded_version = state.version;
                         if VERBOSE {
-                            log_line(&format!(
+                            log_debug(&format!(
                                 "Renderer loaded artwork version {} from {}",
                                 loaded_version, state.artwork_path
                             ));
@@ -629,7 +702,7 @@ fn run_display_loop(
                     }
                     Err(e) => {
                         if VERBOSE {
-                            log_line(&format!("Renderer failed to load artwork: {e}"));
+                            log_error(&format!("Renderer failed to load artwork: {e}"));
                         }
                     }
                 }
@@ -672,10 +745,26 @@ fn run_display_loop(
         let panel_x = 40;
         let mut panel_y = top_h as i32 + 28;
 
-        let title_line = ellipsize(&state.title, 48);
-        let artist_line = ellipsize(&state.artist, 56);
+        let title_line = ellipsize(
+            if state.title.trim().is_empty() {
+                "Waiting for music..."
+            } else {
+                &state.title
+            },
+            48,
+        );
+
+        let artist_line = ellipsize(
+            if state.artist.trim().is_empty() {
+                "No track identified yet"
+            } else {
+                &state.artist
+            },
+            56,
+        );
 
         let mut third_line = state.album.clone();
+
         if !state.released.is_empty() && state.released != "Unknown" {
             if third_line.is_empty() || third_line == "Unknown" {
                 third_line = state.released.clone();
@@ -683,7 +772,12 @@ fn run_display_loop(
                 third_line = format!("{} • {}", state.album, state.released);
             }
         }
-        let third_line = ellipsize(&third_line, 56);
+
+        let third_line = if third_line.trim().is_empty() {
+            "Album unknown".to_string()
+        } else {
+            ellipsize(&third_line, 56)
+        };
 
         draw_text_line(
             &mut canvas,
@@ -738,7 +832,7 @@ fn run_display_loop(
         thread::sleep(Duration::from_millis(33));
     }
 
-    log_line("Display loop stopped.");
+    log_info("Display loop stopped.");
     Ok(())
 }
 
@@ -766,8 +860,8 @@ fn main() {
     let _ = recognizer.join();
 
     if let Err(e) = display_result {
-        log_line(&format!("Display loop error: {e}"));
+        log_error(&format!("Display loop error: {e}"));
     }
 
-    log_line("songart stopped.");
+    log_info("songart stopped.");
 }
