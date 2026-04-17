@@ -1,0 +1,25 @@
+[logging]
+level = "debug"
+file = "/home/admin/projects/songart/songart.log"
+reset_on_start = true
+
+[audio]
+device = "ps3eye_mono"
+sample_wav = "/home/admin/projects/songart/sample.wav"
+record_seconds = 10
+loop_delay_secs = 2
+
+[paths]
+songrec_bin = "/home/admin/projects/vendor/songrec/target/release/songrec"
+artwork_file = "/home/admin/projects/songart/current.jpg"
+font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+[display]
+window_title = "songart"
+width = 1280
+height = 720
+fullscreen = true
+top_panel_ratio = 0.72
+title_font_size = 34
+body_font_size = 24
+frame_delay_ms = 33

@@ -1,13 +1,17 @@
 //! songart main runtime.
 //!
 //! This binary:
-//! 1. records a short audio sample
-//! 2. identifies the song with SongRec
-//! 3. downloads high-resolution artwork
-//! 4. renders a fullscreen split layout:
+//! 1. loads runtime configuration from TOML
+//! 2. records a short audio sample
+//! 3. identifies the song with SongRec
+//! 4. downloads high-resolution artwork
+//! 5. renders a fullscreen split layout:
 //!    - artwork on top
 //!    - metadata panel underneath
 
+mod config;
+
+use crate::config::{load_config, AppConfig};
 use serde_json::Value;
 use sdl2::event::Event;
 use sdl2::image::{InitFlag, LoadTexture};
@@ -25,30 +29,6 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
-/// Log file path.
-const LOG_FILE: &str = "/home/admin/projects/songart/songart.log";
-
-/// Temporary WAV file recorded for each recognition cycle.
-const SAMPLE_WAV: &str = "/home/admin/projects/songart/sample.wav";
-
-/// Artwork file written by the downloader and loaded by the renderer.
-const CURRENT_ARTWORK: &str = "/home/admin/projects/songart/current.jpg";
-
-/// Full path to the SongRec binary.
-const SONGREC_BIN: &str = "/home/admin/projects/vendor/songrec/target/release/songrec";
-
-/// Name of the audio capture device used by `parecord`.
-const AUDIO_DEVICE: &str = "ps3eye_mono";
-
-/// Recording duration per recognition pass.
-const RECORD_SECONDS: &str = "10s";
-
-/// Delay between recognition attempts.
-const LOOP_DELAY_SECS: u64 = 2;
-
-/// Font used by SDL_ttf for the metadata panel.
-const FONT_PATH: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
-
 /// Logging severity used to control how noisy the app is.
 ///
 /// Lower values are more important. Higher values are noisier.
@@ -59,13 +39,14 @@ enum LogLevel {
     Debug = 3,
 }
 
-/// Current log level threshold.
+/// Shared runtime context.
 ///
-/// Set this to:
-/// - `LogLevel::Error` for minimal logging
-/// - `LogLevel::Info` for normal runtime logging
-/// - `LogLevel::Debug` for development/debugging
-const LOG_LEVEL: LogLevel = LogLevel::Debug;
+/// This makes configuration and derived logging state easy to pass around.
+#[derive(Clone)]
+struct AppContext {
+    config: AppConfig,
+    log_level: LogLevel,
+}
 
 /// Shared UI state consumed by the SDL renderer.
 ///
@@ -108,9 +89,19 @@ impl Default for SongState {
     }
 }
 
+/// Converts a configured log level string into the enum used by the app.
+fn parse_log_level(level: &str) -> LogLevel {
+    match level.to_ascii_lowercase().as_str() {
+        "error" => LogLevel::Error,
+        "info" => LogLevel::Info,
+        "debug" => LogLevel::Debug,
+        _ => LogLevel::Info,
+    }
+}
+
 /// Returns `true` when a message at `level` should be logged.
-fn should_log(level: LogLevel) -> bool {
-    level <= LOG_LEVEL
+fn should_log(ctx: &AppContext, level: LogLevel) -> bool {
+    level <= ctx.log_level
 }
 
 /// Builds a simple timestamp string.
@@ -124,15 +115,15 @@ fn timestamp_string() -> String {
 }
 
 /// Truncates the log file on startup in debug mode so test runs start fresh.
-fn reset_log_file() {
-    let _ = fs::write(LOG_FILE, "");
+fn reset_log_file(ctx: &AppContext) {
+    let _ = fs::write(&ctx.config.logging.file, "");
 }
 
-/// Writes a log message to stdout and to the logfile when enabled.
+/// Writes a log message to stdout and to the configured logfile when enabled.
 ///
 /// Messages are prefixed with a timestamp and level.
-fn log_message(level: LogLevel, message: &str) {
-    if !should_log(level) {
+fn log_message(ctx: &AppContext, level: LogLevel, message: &str) {
+    if !should_log(ctx, level) {
         return;
     }
 
@@ -142,32 +133,32 @@ fn log_message(level: LogLevel, message: &str) {
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(LOG_FILE)
+        .open(&ctx.config.logging.file)
     {
         let _ = writeln!(file, "{line}");
     }
 }
 
 /// Logs an error-level message.
-fn log_error(message: &str) {
-    log_message(LogLevel::Error, message);
+fn log_error(ctx: &AppContext, message: &str) {
+    log_message(ctx, LogLevel::Error, message);
 }
 
 /// Logs an info-level message.
-fn log_info(message: &str) {
-    log_message(LogLevel::Info, message);
+fn log_info(ctx: &AppContext, message: &str) {
+    log_message(ctx, LogLevel::Info, message);
 }
 
 /// Logs a debug-level message.
-fn log_debug(message: &str) {
-    log_message(LogLevel::Debug, message);
+fn log_debug(ctx: &AppContext, message: &str) {
+    log_message(ctx, LogLevel::Debug, message);
 }
 
 /// Writes a blank line to stdout and the logfile.
 ///
 /// Useful for visual separation in logs.
-fn log_blank() {
-    if !should_log(LogLevel::Info) {
+fn log_blank(ctx: &AppContext) {
+    if !should_log(ctx, LogLevel::Info) {
         return;
     }
 
@@ -176,7 +167,7 @@ fn log_blank() {
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(LOG_FILE)
+        .open(&ctx.config.logging.file)
     {
         let _ = writeln!(file);
     }
@@ -358,7 +349,7 @@ fn pick_artwork_url(json: &Value) -> Option<String> {
 /// Downloads the best available artwork and writes it atomically.
 ///
 /// The file is written to `output_path.tmp` first, then renamed into place.
-fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, String> {
+fn download_best_artwork(ctx: &AppContext, json: &Value, output_path: &str) -> Result<String, String> {
     let mut base_urls = Vec::new();
 
     if let Some(url) = json["track"]["images"]["coverarthq"].as_str() {
@@ -396,36 +387,35 @@ fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, Stri
     candidates.dedup();
 
     for candidate in candidates {
-        log_debug(&format!("Trying artwork: {candidate}"));
+        log_debug(ctx, &format!("Trying artwork: {candidate}"));
 
         let resp = match client.get(&candidate).send() {
             Ok(r) => r,
             Err(e) => {
-                log_debug(&format!("Download failed: {e}"));
+                log_debug(ctx, &format!("Download failed: {e}"));
                 continue;
             }
         };
 
         if !resp.status().is_success() {
-            log_debug(&format!("HTTP status {} for {}", resp.status(), candidate));
+            log_debug(ctx, &format!("HTTP status {} for {}", resp.status(), candidate));
             continue;
         }
 
         let bytes = match resp.bytes() {
             Ok(b) => b,
             Err(e) => {
-                log_debug(&format!("Failed reading bytes: {e}"));
+                log_debug(ctx, &format!("Failed reading bytes: {e}"));
                 continue;
             }
         };
 
         // Reject obviously tiny placeholder responses.
         if bytes.len() < 10_000 {
-            log_debug(&format!(
-                "Rejected tiny image ({} bytes): {}",
-                bytes.len(),
-                candidate
-            ));
+            log_debug(
+                ctx,
+                &format!("Rejected tiny image ({} bytes): {}", bytes.len(), candidate),
+            );
             continue;
         }
 
@@ -491,41 +481,40 @@ fn draw_text_line(
 /// - parses metadata
 /// - downloads artwork
 /// - updates shared state for the renderer
-fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongState>>) {
+fn run_recognition_loop(ctx: Arc<AppContext>, running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongState>>) {
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
 
-    log_info(&format!("Log file: {LOG_FILE}"));
-    log_info("Recognition loop started.");
+    log_info(&ctx, &format!("Log file: {}", ctx.config.logging.file));
+    log_info(&ctx, "Recognition loop started.");
 
     while running.load(Ordering::SeqCst) {
         // 1. Record a short audio sample.
-        log_info("Listening...");
+        log_info(&ctx, "Listening...");
 
         let record_status = Command::new("timeout")
             .args([
-                RECORD_SECONDS,
+                format!("{}s", ctx.config.audio.record_seconds).as_str(),
                 "parecord",
                 "--device",
-                AUDIO_DEVICE,
+                &ctx.config.audio.device,
                 "--rate",
                 "16000",
                 "--channels",
                 "1",
                 "--format",
                 "s16le",
-                SAMPLE_WAV,
+                &ctx.config.audio.sample_wav,
             ])
             .status();
 
         match record_status {
             Ok(status) => {
-                // timeout returns 124 when it stops the command on schedule.
-                log_debug(&format!("Record command exit status: {status}"));
+                log_debug(&ctx, &format!("Record command exit status: {status}"));
             }
             Err(e) => {
-                log_error(&format!("Failed to record sample audio: {e}"));
-                thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
+                log_error(&ctx, &format!("Failed to record sample audio: {e}"));
+                thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
                 continue;
             }
         }
@@ -535,14 +524,14 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         }
 
         // 2. Run SongRec on the captured WAV file.
-        let output = match Command::new(SONGREC_BIN)
-            .args(["recognize", SAMPLE_WAV, "--json"])
+        let output = match Command::new(&ctx.config.paths.songrec_bin)
+            .args(["recognize", &ctx.config.audio.sample_wav, "--json"])
             .output()
         {
             Ok(output) => output,
             Err(e) => {
-                log_error(&format!("Failed to execute songrec: {e}"));
-                thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
+                log_error(&ctx, &format!("Failed to execute songrec: {e}"));
+                thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
                 continue;
             }
         };
@@ -554,15 +543,15 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
             break;
         }
 
-        log_debug(&format!("SongRec exit status: {}", output.status));
+        log_debug(&ctx, &format!("SongRec exit status: {}", output.status));
         if !stderr.trim().is_empty() {
-            log_debug("SongRec stderr:");
-            log_debug(stderr.trim());
+            log_debug(&ctx, "SongRec stderr:");
+            log_debug(&ctx, stderr.trim());
         }
 
         if stdout.trim().is_empty() {
-            log_info("No JSON returned.");
-            thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
+            log_info(&ctx, "No JSON returned.");
+            thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
             continue;
         }
 
@@ -570,8 +559,8 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         let json: Value = match serde_json::from_str(&stdout) {
             Ok(v) => v,
             Err(e) => {
-                log_error(&format!("No match or bad JSON: {e}"));
-                thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
+                log_error(&ctx, &format!("No match or bad JSON: {e}"));
+                thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
                 continue;
             }
         };
@@ -592,39 +581,39 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         // 5. Pick an artwork seed URL before downloading anything.
         let preview_url = pick_artwork_url(&json).unwrap_or_default();
         if preview_url.is_empty() {
-            log_info(&format!("No artwork URL for {current}"));
-            thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
+            log_info(&ctx, &format!("No artwork URL for {current}"));
+            thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
             continue;
         }
 
         // 6. Skip redundant work if track and artwork seed are unchanged.
         if current == last_track && preview_url == last_artwork_url {
-            log_info(&format!("Same track and artwork: {current}"));
-            thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
+            log_info(&ctx, &format!("Same track and artwork: {current}"));
+            thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
             continue;
         }
 
         // 7. Print a structured now-playing block when the song changes.
-        log_blank();
-        log_info("========================================");
-        log_info("NOW PLAYING");
-        log_info(&format!("Song Title:   {title}"));
-        log_info(&format!("Artist:       {artist}"));
-        log_info(&format!("Album:        {album}"));
-        log_info(&format!("Track:        {track_number}"));
-        log_info(&format!("Composer:     {composer}"));
-        log_info(&format!("Released:     {released}"));
-        log_info(&format!("Genre:        {genre}"));
-        log_info(&format!("Label:        {label}"));
-        log_info(&format!("Seed URL:     {preview_url}"));
-        log_info(&format!("Notes:        {notes}"));
-        log_info("========================================");
-        log_blank();
+        log_blank(&ctx);
+        log_info(&ctx, "========================================");
+        log_info(&ctx, "NOW PLAYING");
+        log_info(&ctx, &format!("Song Title:   {title}"));
+        log_info(&ctx, &format!("Artist:       {artist}"));
+        log_info(&ctx, &format!("Album:        {album}"));
+        log_info(&ctx, &format!("Track:        {track_number}"));
+        log_info(&ctx, &format!("Composer:     {composer}"));
+        log_info(&ctx, &format!("Released:     {released}"));
+        log_info(&ctx, &format!("Genre:        {genre}"));
+        log_info(&ctx, &format!("Label:        {label}"));
+        log_info(&ctx, &format!("Seed URL:     {preview_url}"));
+        log_info(&ctx, &format!("Notes:        {notes}"));
+        log_info(&ctx, "========================================");
+        log_blank(&ctx);
 
         // 8. Download artwork and update shared UI state.
-        match download_best_artwork(&json, CURRENT_ARTWORK) {
+        match download_best_artwork(&ctx, &json, &ctx.config.paths.artwork_file) {
             Ok(final_url) => {
-                log_info(&format!("Final URL:    {final_url}"));
+                log_info(&ctx, &format!("Final URL:    {final_url}"));
 
                 let artwork_changed = final_url != last_artwork_url;
 
@@ -639,28 +628,28 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
                     state.genre = genre;
                     state.label = label;
                     state.notes = notes;
-                    state.artwork_path = CURRENT_ARTWORK.to_string();
+                    state.artwork_path = ctx.config.paths.artwork_file.clone();
                     state.artwork_url = final_url.clone();
                     state.version = state.version.wrapping_add(1);
-                    log_info("Updated UI state with new artwork.");
+                    log_info(&ctx, "Updated UI state with new artwork.");
                 } else {
-                    log_info("Artwork unchanged, skipping UI state refresh.");
+                    log_info(&ctx, "Artwork unchanged, skipping UI state refresh.");
                 }
 
                 last_track = current;
                 last_artwork_url = final_url;
             }
             Err(e) => {
-                log_error(&format!("Failed to download artwork: {e}"));
+                log_error(&ctx, &format!("Failed to download artwork: {e}"));
             }
         }
 
         if running.load(Ordering::SeqCst) {
-            thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
+            thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
         }
     }
 
-    log_info("Recognition loop stopped.");
+    log_info(&ctx, "Recognition loop stopped.");
 }
 
 /// SDL display loop.
@@ -669,6 +658,7 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
 /// It redraws continuously and reloads the artwork texture only when the
 /// shared state version changes.
 fn run_display_loop(
+    ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
     shared_state: Arc<Mutex<SongState>>,
 ) -> Result<(), String> {
@@ -677,12 +667,21 @@ fn run_display_loop(
     let _image_ctx = sdl2::image::init(InitFlag::JPG | InitFlag::PNG)?;
     let ttf_ctx = sdl2::ttf::init().map_err(|e| e.to_string())?;
 
-    let window = video
-        .window("songart", 1280, 720)
-        .position_centered()
-        .fullscreen_desktop()
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut window_builder = video.window(
+        &ctx.config.display.window_title,
+        ctx.config.display.width,
+        ctx.config.display.height,
+    );
+    window_builder.position_centered();
+
+    let window = if ctx.config.display.fullscreen {
+        window_builder
+            .fullscreen_desktop()
+            .build()
+            .map_err(|e| e.to_string())?
+    } else {
+        window_builder.build().map_err(|e| e.to_string())?
+    };
 
     let mut canvas = window
         .into_canvas()
@@ -694,18 +693,18 @@ fn run_display_loop(
     let texture_creator = canvas.texture_creator();
 
     let title_font = ttf_ctx
-        .load_font(FONT_PATH, 34)
-        .map_err(|e| format!("Failed to load title font from {FONT_PATH}: {e}"))?;
+        .load_font(&ctx.config.paths.font_path, ctx.config.display.title_font_size)
+        .map_err(|e| format!("Failed to load title font from {}: {e}", ctx.config.paths.font_path))?;
 
     let body_font = ttf_ctx
-        .load_font(FONT_PATH, 24)
-        .map_err(|e| format!("Failed to load body font from {FONT_PATH}: {e}"))?;
+        .load_font(&ctx.config.paths.font_path, ctx.config.display.body_font_size)
+        .map_err(|e| format!("Failed to load body font from {}: {e}", ctx.config.paths.font_path))?;
 
     let mut event_pump = sdl.event_pump()?;
     let mut loaded_version: u64 = u64::MAX;
     let mut artwork_texture: Option<sdl2::render::Texture<'_>> = None;
 
-    log_info("Display loop started.");
+    log_info(&ctx, "Display loop started.");
 
     while running.load(Ordering::SeqCst) {
         // Handle keyboard/window events.
@@ -735,13 +734,16 @@ fn run_display_loop(
                     Ok(texture) => {
                         artwork_texture = Some(texture);
                         loaded_version = state.version;
-                        log_debug(&format!(
-                            "Renderer loaded artwork version {} from {}",
-                            loaded_version, state.artwork_path
-                        ));
+                        log_debug(
+                            &ctx,
+                            &format!(
+                                "Renderer loaded artwork version {} from {}",
+                                loaded_version, state.artwork_path
+                            ),
+                        );
                     }
                     Err(e) => {
-                        log_error(&format!("Renderer failed to load artwork: {e}"));
+                        log_error(&ctx, &format!("Renderer failed to load artwork: {e}"));
                     }
                 }
             }
@@ -749,7 +751,7 @@ fn run_display_loop(
 
         // Compute layout regions.
         let (win_w, win_h) = canvas.output_size().map_err(|e| e.to_string())?;
-        let top_h = ((win_h as f32) * 0.72) as u32;
+        let top_h = ((win_h as f32) * ctx.config.display.top_panel_ratio) as u32;
         let bottom_h = win_h - top_h;
 
         // Clear background.
@@ -868,21 +870,30 @@ fn run_display_loop(
         // Present the completed frame.
         canvas.present();
 
-        thread::sleep(Duration::from_millis(33));
+        thread::sleep(Duration::from_millis(ctx.config.display.frame_delay_ms));
     }
 
-    log_info("Display loop stopped.");
+    log_info(&ctx, "Display loop stopped.");
     Ok(())
 }
 
 /// Program entry point.
 ///
-/// Sets up Ctrl+C handling, starts the recognizer thread, and runs the SDL
-/// display loop on the main thread.
+/// Sets up Ctrl+C handling, loads config, starts the recognizer thread,
+/// and runs the SDL display loop on the main thread.
 fn main() {
-    // Reset the log file only during debug-oriented runs.
-    if should_log(LogLevel::Debug) {
-        reset_log_file();
+    // Load runtime configuration first.
+    let config = load_config("config/songart.toml")
+        .expect("failed to load config/songart.toml");
+
+    let ctx = Arc::new(AppContext {
+        log_level: parse_log_level(&config.logging.level),
+        config,
+    });
+
+    // Reset the log file when configured to do so.
+    if ctx.config.logging.reset_on_start && should_log(&ctx, LogLevel::Debug) {
+        reset_log_file(&ctx);
     }
 
     // Shared shutdown flag used by both threads.
@@ -900,21 +911,22 @@ fn main() {
     // Spawn the background recognition thread.
     let recognizer_running = Arc::clone(&running);
     let recognizer_state = Arc::clone(&shared_state);
+    let recognizer_ctx = Arc::clone(&ctx);
 
     let recognizer = thread::spawn(move || {
-        run_recognition_loop(recognizer_running, recognizer_state);
+        run_recognition_loop(recognizer_ctx, recognizer_running, recognizer_state);
     });
 
     // Keep the renderer on the main thread.
-    let display_result = run_display_loop(Arc::clone(&running), Arc::clone(&shared_state));
+    let display_result = run_display_loop(Arc::clone(&ctx), Arc::clone(&running), Arc::clone(&shared_state));
 
     // Ensure the background thread is asked to stop and joined cleanly.
     running.store(false, Ordering::SeqCst);
     let _ = recognizer.join();
 
     if let Err(e) = display_result {
-        log_error(&format!("Display loop error: {e}"));
+        log_error(&ctx, &format!("Display loop error: {e}"));
     }
 
-    log_info("songart stopped.");
+    log_info(&ctx, "songart stopped.");
 }
