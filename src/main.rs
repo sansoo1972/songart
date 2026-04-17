@@ -159,10 +159,6 @@ fn reset_log_file() {
     let _ = fs::write(LOG_FILE, "");
 }
 
-if should_log(LogLevel::Debug) {
-    reset_log_file();
-}
-
 /// Pulls a metadata value out of the nested SongRec/Shazam JSON sections by title.
 fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
     let sections = json["track"]["sections"].as_array()?;
@@ -844,6 +840,10 @@ fn main() {
         running_flag.store(false, Ordering::SeqCst);
     })
     .expect("failed to set Ctrl-C handler");
+
+    if should_log(LogLevel::Debug) {
+        reset_log_file();
+    }
 
     let shared_state = Arc::new(Mutex::new(SongState::default()));
 
