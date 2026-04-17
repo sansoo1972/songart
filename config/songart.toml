@@ -40,7 +40,7 @@ body_line_spacing = 34
 detail_line_spacing = 40
 
 [fonts]
-theme = "fantasy"
+theme = "grunge"
 
 [font_themes.modern]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
