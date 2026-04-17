@@ -1,30 +1,62 @@
 //! songart main runtime.
 //!
 //! This binary:
-//! 1. records a short audio clip
+//! 1. records a short audio sample
 //! 2. identifies the song with SongRec
 //! 3. downloads high-resolution artwork
 //! 4. renders a fullscreen split layout:
 //!    - artwork on top
 //!    - metadata panel underneath
 
+use serde_json::Value;
 use sdl2::event::Event;
 use sdl2::image::{InitFlag, LoadTexture};
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
-use serde_json::Value;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{thread, time::Duration};
+use std::thread;
+use std::time::Duration;
 
+/// Enables extra debug logging when set to `true`.
+///
+/// Set this to `false` for quieter output once the app is stable.
+const VERBOSE: bool = true;
+
+/// Log file path.
+const LOG_FILE: &str = "/home/admin/projects/songart/songart.log";
+
+/// Temporary WAV file recorded for each recognition cycle.
+const SAMPLE_WAV: &str = "/home/admin/projects/songart/sample.wav";
+
+/// Artwork file written by the downloader and loaded by the renderer.
+const CURRENT_ARTWORK: &str = "/home/admin/projects/songart/current.jpg";
+
+/// Full path to the SongRec binary.
+const SONGREC_BIN: &str = "/home/admin/projects/vendor/songrec/target/release/songrec";
+
+/// Name of the audio capture device used by `parecord`.
+const AUDIO_DEVICE: &str = "ps3eye_mono";
+
+/// Recording duration per recognition pass.
+const RECORD_SECONDS: &str = "10s";
+
+/// Delay between recognition attempts.
+const LOOP_DELAY_SECS: u64 = 2;
+
+/// Font used by SDL_ttf for the metadata panel.
+const FONT_PATH: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+
+/// Logging severity used to control how noisy the app is.
+///
+/// Lower values are more important. Higher values are noisier.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum LogLevel {
     Error = 1,
@@ -32,36 +64,20 @@ enum LogLevel {
     Debug = 3,
 }
 
-const LOG_LEVEL: LogLevel = LogLevel::Debug;
-
-/// Enables extra debug logging to stdout and to the logfile.
-const VERBOSE: bool = true;
-
-/// Logfile path used when verbose logging is enabled.
-const LOG_FILE: &str = "/home/admin/projects/songart/songart.log";
-
-/// Temporary audio sample path recorded each cycle.
-const SAMPLE_WAV: &str = "/home/admin/projects/songart/sample.wav";
-
-/// Artwork file path used by the renderer.
-const CURRENT_ARTWORK: &str = "/home/admin/projects/songart/current.jpg";
-
-/// Full path to the SongRec binary.
-const SONGREC_BIN: &str = "/home/admin/projects/vendor/songrec/target/release/songrec";
-
-/// Audio device used for capture.
-const AUDIO_DEVICE: &str = "ps3eye_mono";
-
-/// Recording duration for each recognition pass.
-const RECORD_SECONDS: &str = "10s";
-
-/// Delay between recognition loop iterations.
-const LOOP_DELAY_SECS: u64 = 2;
-
-/// Font path used for the metadata panel.
-const FONT_PATH: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+/// Current log level threshold.
+///
+/// When `VERBOSE` is `true`, default to `Debug`.
+/// When `VERBOSE` is `false`, default to `Info`.
+const LOG_LEVEL: LogLevel = if VERBOSE {
+    LogLevel::Debug
+} else {
+    LogLevel::Info
+};
 
 /// Shared UI state consumed by the SDL renderer.
+///
+/// The recognition thread updates this when a new track/artwork is found.
+/// The display loop reads it to redraw the screen.
 #[derive(Clone, Debug)]
 struct SongState {
     title: String,
@@ -79,6 +95,8 @@ struct SongState {
 }
 
 impl Default for SongState {
+    /// Provides friendly placeholder text so the renderer does not attempt
+    /// to draw empty strings before the first song is recognized.
     fn default() -> Self {
         Self {
             title: "Waiting for music...".to_string(),
@@ -97,18 +115,29 @@ impl Default for SongState {
     }
 }
 
-fn timestamp_string() -> String {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(dur) => format!("{}", dur.as_secs()),
-        Err(_) => "0".to_string(),
-    }
-}
-
+/// Returns `true` when a message at `level` should be logged.
 fn should_log(level: LogLevel) -> bool {
     level <= LOG_LEVEL
 }
 
-/// Best-effort logfile write when verbose mode is enabled.
+/// Builds a simple timestamp string.
+///
+/// This keeps dependencies minimal. It uses epoch seconds.
+fn timestamp_string() -> String {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(dur) => dur.as_secs().to_string(),
+        Err(_) => "0".to_string(),
+    }
+}
+
+/// Truncates the log file on startup in debug mode so test runs start fresh.
+fn reset_log_file() {
+    let _ = fs::write(LOG_FILE, "");
+}
+
+/// Writes a log message to stdout and to the logfile when enabled.
+///
+/// Messages are prefixed with a timestamp and level.
 fn log_message(level: LogLevel, message: &str) {
     if !should_log(level) {
         return;
@@ -117,49 +146,57 @@ fn log_message(level: LogLevel, message: &str) {
     let line = format!("[{}] [{:?}] {}", timestamp_string(), level, message);
     println!("{line}");
 
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(LOG_FILE) {
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(LOG_FILE)
+    {
         let _ = writeln!(file, "{line}");
     }
 }
 
+/// Logs an error-level message.
 fn log_error(message: &str) {
     log_message(LogLevel::Error, message);
 }
 
+/// Logs an info-level message.
 fn log_info(message: &str) {
     log_message(LogLevel::Info, message);
 }
 
+/// Logs a debug-level message.
 fn log_debug(message: &str) {
     log_message(LogLevel::Debug, message);
 }
 
+/// Writes a blank line to stdout and the logfile.
+///
+/// Useful for visual separation in logs.
 fn log_blank() {
-    if should_log(LogLevel::Info) {
-        println!();
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(LOG_FILE) {
-            let _ = writeln!(file);
-        }
+    if !should_log(LogLevel::Info) {
+        return;
+    }
+
+    println!();
+
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(LOG_FILE)
+    {
+        let _ = writeln!(file);
     }
 }
 
-/// Prints to stdout and mirrors to the logfile when verbose mode is enabled.
-fn log_line(message: &str) {
-    println!("{message}");
-    log_debug(message);
-}
-
-/// Writes a blank line to stdout and the logfile.
-fn log_blank() {
-    println!();
-    log_debug("");
-}
-
-fn reset_log_file() {
-    let _ = fs::write(LOG_FILE, "");
-}
-
 /// Pulls a metadata value out of the nested SongRec/Shazam JSON sections by title.
+///
+/// Example metadata titles include:
+/// - Album
+/// - Label
+/// - Released
+/// - Composer
+/// - Track
 fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
     let sections = json["track"]["sections"].as_array()?;
 
@@ -179,18 +216,22 @@ fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
     None
 }
 
+/// Extracts album title.
 fn extract_album(json: &Value) -> String {
     metadata_value(json, "Album").unwrap_or_else(|| "Unknown".to_string())
 }
 
+/// Extracts label/publisher.
 fn extract_label(json: &Value) -> String {
     metadata_value(json, "Label").unwrap_or_else(|| "Unknown".to_string())
 }
 
+/// Extracts release year/date.
 fn extract_released(json: &Value) -> String {
     metadata_value(json, "Released").unwrap_or_else(|| "Unknown".to_string())
 }
 
+/// Extracts composer or writer information.
 fn extract_composer(json: &Value) -> String {
     metadata_value(json, "Composer")
         .or_else(|| metadata_value(json, "Writers"))
@@ -198,12 +239,14 @@ fn extract_composer(json: &Value) -> String {
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
+/// Extracts track number if present.
 fn extract_track_number(json: &Value) -> String {
     metadata_value(json, "Track")
         .or_else(|| metadata_value(json, "Track Number"))
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
+/// Extracts primary genre.
 fn extract_genre(json: &Value) -> String {
     json["track"]["genres"]["primary"]
         .as_str()
@@ -211,6 +254,7 @@ fn extract_genre(json: &Value) -> String {
         .to_string()
 }
 
+/// Extracts ISRC.
 fn extract_isrc(json: &Value) -> String {
     json["track"]["isrc"]
         .as_str()
@@ -218,6 +262,9 @@ fn extract_isrc(json: &Value) -> String {
         .to_string()
 }
 
+/// Builds a short notes/trivia line from available metadata.
+///
+/// This intentionally uses only data already present in SongRec JSON.
 fn extract_notes(json: &Value) -> String {
     let mut bits = Vec::new();
 
@@ -243,10 +290,10 @@ fn extract_notes(json: &Value) -> String {
     }
 }
 
-/// Builds an ordered list of artwork candidates.
+/// Builds an ordered list of artwork URL candidates.
 ///
 /// For Apple-hosted artwork, larger variants are tried first.
-/// The original URL is kept as the final fallback.
+/// The original URL is retained as the final fallback.
 fn artwork_candidates(url: &str) -> Vec<String> {
     let mut out = Vec::new();
 
@@ -272,12 +319,15 @@ fn artwork_candidates(url: &str) -> Vec<String> {
         }
     }
 
+    // Keep the original URL as a fallback.
     out.push(url.to_string());
     out.dedup();
     out
 }
 
-/// Picks the first available seed artwork URL from the JSON payload.
+/// Picks the first available seed artwork URL from the JSON response.
+///
+/// This does not download anything. It just selects the base URL set.
 fn pick_artwork_url(json: &Value) -> Option<String> {
     let mut base_urls = Vec::new();
 
@@ -312,9 +362,9 @@ fn pick_artwork_url(json: &Value) -> Option<String> {
     candidates.into_iter().next()
 }
 
-/// Downloads the best artwork and writes it atomically.
+/// Downloads the best available artwork and writes it atomically.
 ///
-/// This writes to `output_path.tmp` first, then renames it into place.
+/// The file is written to `output_path.tmp` first, then renamed into place.
 fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, String> {
     let mut base_urls = Vec::new();
 
@@ -353,31 +403,32 @@ fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, Stri
     candidates.dedup();
 
     for candidate in candidates {
-        log_info(&format!("Trying artwork: {candidate}"));
+        log_debug(&format!("Trying artwork: {candidate}"));
 
         let resp = match client.get(&candidate).send() {
             Ok(r) => r,
             Err(e) => {
-                log_error(&format!("Download failed: {e}"));
+                log_debug(&format!("Download failed: {e}"));
                 continue;
             }
         };
 
         if !resp.status().is_success() {
-            log_info(&format!("HTTP status {} for {}", resp.status(), candidate));
+            log_debug(&format!("HTTP status {} for {}", resp.status(), candidate));
             continue;
         }
 
         let bytes = match resp.bytes() {
             Ok(b) => b,
             Err(e) => {
-                log_error(&format!("Failed reading bytes: {e}"));
+                log_debug(&format!("Failed reading bytes: {e}"));
                 continue;
             }
         };
 
+        // Reject obviously tiny placeholder responses.
         if bytes.len() < 10_000 {
-            log_info(&format!(
+            log_debug(&format!(
                 "Rejected tiny image ({} bytes): {}",
                 bytes.len(),
                 candidate
@@ -406,14 +457,14 @@ fn ellipsize(input: &str, max_chars: usize) -> String {
         return input.to_string();
     }
 
-    let trimmed: String = chars
-        .into_iter()
-        .take(max_chars.saturating_sub(1))
-        .collect();
+    let trimmed: String = chars.into_iter().take(max_chars.saturating_sub(1)).collect();
     format!("{trimmed}…")
 }
 
-/// Renders a single line of text at the given position.
+/// Renders a single line of text.
+///
+/// Empty strings are converted to a single space so SDL_ttf does not error
+/// with "Text has zero width".
 fn draw_text_line(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     texture_creator: &sdl2::render::TextureCreator<sdl2::video::WindowContext>,
@@ -441,8 +492,12 @@ fn draw_text_line(
 
 /// Background recognition loop.
 ///
-/// This thread records audio, calls SongRec, downloads artwork, and updates
-/// shared UI state for the renderer.
+/// This thread:
+/// - records audio
+/// - calls SongRec
+/// - parses metadata
+/// - downloads artwork
+/// - updates shared state for the renderer
 fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongState>>) {
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
@@ -453,7 +508,9 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
     }
 
     while running.load(Ordering::SeqCst) {
-        // 1. Record a short audio sample.
+        // -----------------------------------------------------------------
+        // 1. Record a short audio sample
+        // -----------------------------------------------------------------
         log_info("Listening...");
 
         let record_status = Command::new("timeout")
@@ -474,9 +531,8 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
 
         match record_status {
             Ok(status) => {
-                if VERBOSE {
-                    log_info(&format!("Record command exit status: {status}"));
-                }
+                // timeout returns 124 when it stops the command on schedule.
+                log_debug(&format!("Record command exit status: {status}"));
             }
             Err(e) => {
                 log_error(&format!("Failed to record sample audio: {e}"));
@@ -489,7 +545,9 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
             break;
         }
 
-        // 2. Run SongRec against the recorded sample.
+        // -----------------------------------------------------------------
+        // 2. Run SongRec on the captured WAV file
+        // -----------------------------------------------------------------
         let output = match Command::new(SONGREC_BIN)
             .args(["recognize", SAMPLE_WAV, "--json"])
             .output()
@@ -509,31 +567,33 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
             break;
         }
 
-        if VERBOSE {
-            log_info(&format!("SongRec exit status: {}", output.status));
-            if !stderr.trim().is_empty() {
-                log_error("SongRec stderr:");
-                log_error(stderr.trim());
-            }
+        log_debug(&format!("SongRec exit status: {}", output.status));
+        if !stderr.trim().is_empty() {
+            log_debug("SongRec stderr:");
+            log_debug(stderr.trim());
         }
 
         if stdout.trim().is_empty() {
-            log_debug("No JSON returned.");
+            log_info("No JSON returned.");
             thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
             continue;
         }
 
-        // 3. Parse JSON payload.
+        // -----------------------------------------------------------------
+        // 3. Parse the SongRec JSON payload
+        // -----------------------------------------------------------------
         let json: Value = match serde_json::from_str(&stdout) {
             Ok(v) => v,
             Err(e) => {
-                log_debug(&format!("No match or bad JSON: {e}"));
+                log_error(&format!("No match or bad JSON: {e}"));
                 thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
                 continue;
             }
         };
 
-        // 4. Extract metadata.
+        // -----------------------------------------------------------------
+        // 4. Extract metadata for logging and display
+        // -----------------------------------------------------------------
         let title = json["track"]["title"].as_str().unwrap_or("Unknown");
         let artist = json["track"]["subtitle"].as_str().unwrap_or("Unknown");
         let album = extract_album(&json);
@@ -546,22 +606,28 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
 
         let current = format!("{artist} - {title}");
 
-        // 5. Pick artwork seed URL.
+        // -----------------------------------------------------------------
+        // 5. Pick an artwork seed URL before downloading anything
+        // -----------------------------------------------------------------
         let preview_url = pick_artwork_url(&json).unwrap_or_default();
         if preview_url.is_empty() {
-            log_debug(&format!("No artwork URL for {current}"));
+            log_info(&format!("No artwork URL for {current}"));
             thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
             continue;
         }
 
-        // 6. Suppress duplicate work.
+        // -----------------------------------------------------------------
+        // 6. Skip redundant work if track and artwork seed are unchanged
+        // -----------------------------------------------------------------
         if current == last_track && preview_url == last_artwork_url {
-            log_debug(&format!("Same track and artwork: {current}"));
+            log_info(&format!("Same track and artwork: {current}"));
             thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
             continue;
         }
 
-        // 7. Print detailed now-playing block only when it changes.
+        // -----------------------------------------------------------------
+        // 7. Print a structured now-playing block when the song changes
+        // -----------------------------------------------------------------
         log_blank();
         log_info("========================================");
         log_info("NOW PLAYING");
@@ -578,7 +644,9 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         log_info("========================================");
         log_blank();
 
-        // 8. Download the best artwork and update shared UI state.
+        // -----------------------------------------------------------------
+        // 8. Download artwork and update shared UI state
+        // -----------------------------------------------------------------
         match download_best_artwork(&json, CURRENT_ARTWORK) {
             Ok(final_url) => {
                 log_info(&format!("Final URL:    {final_url}"));
@@ -599,8 +667,9 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
                     state.artwork_path = CURRENT_ARTWORK.to_string();
                     state.artwork_url = final_url.clone();
                     state.version = state.version.wrapping_add(1);
+                    log_info("Updated UI state with new artwork.");
                 } else {
-                    log_debug("Artwork unchanged, skipping UI state refresh.");
+                    log_info("Artwork unchanged, skipping UI state refresh.");
                 }
 
                 last_track = current;
@@ -616,14 +685,14 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         }
     }
 
-    log_error("Recognition loop stopped.");
+    log_info("Recognition loop stopped.");
 }
 
-/// SDL renderer loop.
+/// SDL display loop.
 ///
-/// This runs on the main thread and owns the screen. It redraws the current
-/// song state continuously and reloads the artwork texture only when the
-/// shared state's version changes.
+/// This runs on the main thread and owns the full screen.
+/// It redraws continuously and reloads the artwork texture only when the
+/// shared state version changes.
 fn run_display_loop(
     running: Arc<AtomicBool>,
     shared_state: Arc<Mutex<SongState>>,
@@ -662,7 +731,9 @@ fn run_display_loop(
     let mut artwork_texture: Option<sdl2::render::Texture<'_>> = None;
 
     while running.load(Ordering::SeqCst) {
-        // Handle keyboard/window events.
+        // -----------------------------------------------------------------
+        // Handle keyboard/window events
+        // -----------------------------------------------------------------
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -676,45 +747,51 @@ fn run_display_loop(
             }
         }
 
-        // Snapshot the current shared state once per frame.
+        // -----------------------------------------------------------------
+        // Snapshot shared state once per frame
+        // -----------------------------------------------------------------
         let state = {
             let state_guard = shared_state.lock().unwrap();
             state_guard.clone()
         };
 
-        // Reload artwork texture only when the version changes.
+        // -----------------------------------------------------------------
+        // Reload artwork texture only when a new version arrives
+        // -----------------------------------------------------------------
         if state.version != loaded_version {
             if !state.artwork_path.is_empty() && Path::new(&state.artwork_path).exists() {
                 match texture_creator.load_texture(&state.artwork_path) {
                     Ok(texture) => {
                         artwork_texture = Some(texture);
                         loaded_version = state.version;
-                        if VERBOSE {
-                            log_debug(&format!(
-                                "Renderer loaded artwork version {} from {}",
-                                loaded_version, state.artwork_path
-                            ));
-                        }
+                        log_debug(&format!(
+                            "Renderer loaded artwork version {} from {}",
+                            loaded_version, state.artwork_path
+                        ));
                     }
                     Err(e) => {
-                        if VERBOSE {
-                            log_error(&format!("Renderer failed to load artwork: {e}"));
-                        }
+                        log_error(&format!("Renderer failed to load artwork: {e}"));
                     }
                 }
             }
         }
 
-        // Screen dimensions and layout math.
+        // -----------------------------------------------------------------
+        // Compute layout regions
+        // -----------------------------------------------------------------
         let (win_w, win_h) = canvas.output_size().map_err(|e| e.to_string())?;
         let top_h = ((win_h as f32) * 0.72) as u32;
         let bottom_h = win_h - top_h;
 
-        // Background.
+        // -----------------------------------------------------------------
+        // Clear background
+        // -----------------------------------------------------------------
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
 
-        // Draw artwork in the top region.
+        // -----------------------------------------------------------------
+        // Draw artwork in the top region
+        // -----------------------------------------------------------------
         if let Some(texture) = artwork_texture.as_ref() {
             let query = texture.query();
             let art_w = query.width as f32;
@@ -734,7 +811,9 @@ fn run_display_loop(
             canvas.copy(texture, None, Rect::new(x, y, draw_w, draw_h))?;
         }
 
-        // Draw the bottom metadata panel.
+        // -----------------------------------------------------------------
+        // Draw bottom metadata panel
+        // -----------------------------------------------------------------
         canvas.set_draw_color(Color::RGB(18, 18, 18));
         canvas.fill_rect(Rect::new(0, top_h as i32, win_w, bottom_h))?;
 
@@ -760,7 +839,6 @@ fn run_display_loop(
         );
 
         let mut third_line = state.album.clone();
-
         if !state.released.is_empty() && state.released != "Unknown" {
             if third_line.is_empty() || third_line == "Unknown" {
                 third_line = state.released.clone();
@@ -813,6 +891,7 @@ fn run_display_loop(
             ellipsize(&state.genre, 20),
             ellipsize(&state.composer, 28)
         );
+
         draw_text_line(
             &mut canvas,
             &texture_creator,
@@ -823,6 +902,9 @@ fn run_display_loop(
             panel_y,
         )?;
 
+        // -----------------------------------------------------------------
+        // Present the completed frame
+        // -----------------------------------------------------------------
         canvas.present();
 
         thread::sleep(Duration::from_millis(33));
@@ -832,7 +914,17 @@ fn run_display_loop(
     Ok(())
 }
 
+/// Program entry point.
+///
+/// Sets up Ctrl+C handling, starts the recognizer thread, and runs the SDL
+/// display loop on the main thread.
 fn main() {
+    // Reset the log file only during debug-oriented runs.
+    if should_log(LogLevel::Debug) {
+        reset_log_file();
+    }
+
+    // Shared shutdown flag used by both threads.
     let running = Arc::new(AtomicBool::new(true));
     let running_flag = Arc::clone(&running);
 
@@ -841,12 +933,10 @@ fn main() {
     })
     .expect("failed to set Ctrl-C handler");
 
-    if should_log(LogLevel::Debug) {
-        reset_log_file();
-    }
-
+    // Shared UI state passed between recognizer and renderer.
     let shared_state = Arc::new(Mutex::new(SongState::default()));
 
+    // Spawn the background recognition thread.
     let recognizer_running = Arc::clone(&running);
     let recognizer_state = Arc::clone(&shared_state);
 
@@ -854,8 +944,10 @@ fn main() {
         run_recognition_loop(recognizer_running, recognizer_state);
     });
 
+    // Keep the renderer on the main thread.
     let display_result = run_display_loop(Arc::clone(&running), Arc::clone(&shared_state));
 
+    // Ensure the background thread is asked to stop and joined cleanly.
     running.store(false, Ordering::SeqCst);
     let _ = recognizer.join();
 
