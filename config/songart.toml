@@ -15,18 +15,36 @@ artwork_file = "/home/admin/projects/songart/current.jpg"
 
 [display]
 window_title = "songart"
+fullscreen = true
+orientation = "portrait"   # selects the preset below
+frame_delay_ms = 33
+
+[display_presets.portrait]
+width = 720
+height = 1280
+top_panel_ratio = 0.72
+panel_x = 40
+panel_y = 28
+title_line_spacing = 46
+body_line_spacing = 34
+detail_line_spacing = 40
+title_size = 34
+body_size = 24
+
+[display_presets.landscape]
 width = 1280
 height = 720
-fullscreen = true
-orientation = "portrait"   # portrait | landscape
-rotation = 0              # 0 | 90 | 180 | 270
 top_panel_ratio = 0.72
-frame_delay_ms = 33
+panel_x = 40
+panel_y = 28
+title_line_spacing = 46
+body_line_spacing = 34
+detail_line_spacing = 40
+title_size = 34
+body_size = 24
 
 [fonts]
 theme = "retro"
-title_size = 34
-body_size = 24
 
 [font_themes.modern]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"

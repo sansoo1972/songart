@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub audio: AudioConfig,
     pub paths: PathsConfig,
     pub display: DisplayConfig,
+    pub display_presets: HashMap<String, DisplayPreset>,
     pub fonts: FontsConfig,
     pub font_themes: HashMap<String, FontTheme>,
 }
@@ -37,32 +38,37 @@ pub struct PathsConfig {
     pub artwork_file: String,
 }
 
-/// Display and rendering settings.
+/// High-level display settings.
 #[derive(Debug, Deserialize, Clone)]
 pub struct DisplayConfig {
     pub window_title: String,
-    pub width: u32,
-    pub height: u32,
     pub fullscreen: bool,
     pub orientation: String,
-    pub rotation: i32,
-    pub top_panel_ratio: f32,
     pub frame_delay_ms: u64,
 }
 
-/// High-level font configuration.
-///
-/// `theme` selects which entry to use from `font_themes`.
+/// A full named layout preset selected by `display.orientation`.
 #[derive(Debug, Deserialize, Clone)]
-pub struct FontsConfig {
-    pub theme: String,
+pub struct DisplayPreset {
+    pub width: u32,
+    pub height: u32,
+    pub top_panel_ratio: f32,
+    pub panel_x: i32,
+    pub panel_y: i32,
+    pub title_line_spacing: i32,
+    pub body_line_spacing: i32,
+    pub detail_line_spacing: i32,
     pub title_size: u16,
     pub body_size: u16,
 }
 
+/// High-level font selection.
+#[derive(Debug, Deserialize, Clone)]
+pub struct FontsConfig {
+    pub theme: String,
+}
+
 /// A single named font theme.
-///
-/// This lets the app use one font for titles and another for body text.
 #[derive(Debug, Deserialize, Clone)]
 pub struct FontTheme {
     pub title: String,

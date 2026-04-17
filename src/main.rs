@@ -8,10 +8,16 @@
 //! 5. renders a fullscreen split layout:
 //!    - artwork on top
 //!    - metadata panel underneath
+//!
+//! Design rule:
+//! - The operator config is authoritative.
+//! - No auto-detection or auto-correction of orientation is performed.
+//! - If config says portrait, the app renders portrait.
+//! - If config says landscape, the app renders landscape.
 
 mod config;
 
-use crate::config::{AppConfig, load_config};
+use crate::config::{AppConfig, DisplayPreset, load_config};
 use sdl2::event::Event;
 use sdl2::image::{InitFlag, LoadTexture};
 use sdl2::keyboard::Keycode;
@@ -119,7 +125,7 @@ fn reset_log_file(ctx: &AppContext) {
     let _ = fs::write(&ctx.config.logging.file, "");
 }
 
-/// Writes a log message to stdout and to the configured logfile when enabled.
+/// Writes a log message to stdout and to the logfile when enabled.
 ///
 /// Messages are prefixed with a timestamp and level.
 fn log_message(ctx: &AppContext, level: LogLevel, message: &str) {
@@ -303,7 +309,6 @@ fn artwork_candidates(url: &str) -> Vec<String> {
         }
     }
 
-    // Keep the original URL as a fallback.
     out.push(url.to_string());
     out.dedup();
     out
@@ -417,7 +422,6 @@ fn download_best_artwork(
             }
         };
 
-        // Reject obviously tiny placeholder responses.
         if bytes.len() < 10_000 {
             log_debug(
                 ctx,
@@ -452,6 +456,22 @@ fn ellipsize(input: &str, max_chars: usize) -> String {
         .take(max_chars.saturating_sub(1))
         .collect();
     format!("{trimmed}…")
+}
+
+/// Resolves the configured font theme into title/body font paths.
+///
+/// Falls back to system DejaVu Sans if the configured theme is missing.
+fn selected_fonts<'a>(ctx: &'a AppContext) -> (&'a str, &'a str) {
+    let theme_name = ctx.config.fonts.theme.to_ascii_lowercase();
+
+    if let Some(theme) = ctx.config.font_themes.get(&theme_name) {
+        (&theme.title, &theme.body)
+    } else {
+        (
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        )
+    }
 }
 
 /// Renders a single line of text.
@@ -503,12 +523,13 @@ fn run_recognition_loop(
     log_info(&ctx, "Recognition loop started.");
 
     while running.load(Ordering::SeqCst) {
-        // 1. Record a short audio sample.
         log_info(&ctx, "Listening...");
+
+        let record_duration = format!("{}s", ctx.config.audio.record_seconds);
 
         let record_status = Command::new("timeout")
             .args([
-                format!("{}s", ctx.config.audio.record_seconds).as_str(),
+                record_duration.as_str(),
                 "parecord",
                 "--device",
                 &ctx.config.audio.device,
@@ -537,7 +558,6 @@ fn run_recognition_loop(
             break;
         }
 
-        // 2. Run SongRec on the captured WAV file.
         let output = match Command::new(&ctx.config.paths.songrec_bin)
             .args(["recognize", &ctx.config.audio.sample_wav, "--json"])
             .output()
@@ -569,7 +589,6 @@ fn run_recognition_loop(
             continue;
         }
 
-        // 3. Parse the SongRec JSON payload.
         let json: Value = match serde_json::from_str(&stdout) {
             Ok(v) => v,
             Err(e) => {
@@ -579,7 +598,6 @@ fn run_recognition_loop(
             }
         };
 
-        // 4. Extract metadata for logging and display.
         let title = json["track"]["title"].as_str().unwrap_or("Unknown");
         let artist = json["track"]["subtitle"].as_str().unwrap_or("Unknown");
         let album = extract_album(&json);
@@ -592,7 +610,6 @@ fn run_recognition_loop(
 
         let current = format!("{artist} - {title}");
 
-        // 5. Pick an artwork seed URL before downloading anything.
         let preview_url = pick_artwork_url(&json).unwrap_or_default();
         if preview_url.is_empty() {
             log_info(&ctx, &format!("No artwork URL for {current}"));
@@ -600,14 +617,12 @@ fn run_recognition_loop(
             continue;
         }
 
-        // 6. Skip redundant work if track and artwork seed are unchanged.
         if current == last_track && preview_url == last_artwork_url {
             log_info(&ctx, &format!("Same track and artwork: {current}"));
             thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
             continue;
         }
 
-        // 7. Print a structured now-playing block when the song changes.
         log_blank(&ctx);
         log_info(&ctx, "========================================");
         log_info(&ctx, "NOW PLAYING");
@@ -624,7 +639,6 @@ fn run_recognition_loop(
         log_info(&ctx, "========================================");
         log_blank(&ctx);
 
-        // 8. Download artwork and update shared UI state.
         match download_best_artwork(&ctx, &json, &ctx.config.paths.artwork_file) {
             Ok(final_url) => {
                 log_info(&ctx, &format!("Final URL:    {final_url}"));
@@ -666,56 +680,13 @@ fn run_recognition_loop(
     log_info(&ctx, "Recognition loop stopped.");
 }
 
-/// Returns the effective window size after applying the configured orientation.
+/// Resolves the selected display preset from config.
 ///
-/// If portrait is requested but width > height, swap them.
-/// If landscape is requested but height > width, swap them.
-fn configured_window_size(ctx: &AppContext) -> (u32, u32) {
-    let w = ctx.config.display.width;
-    let h = ctx.config.display.height;
-
-    match ctx.config.display.orientation.to_ascii_lowercase().as_str() {
-        "portrait" if w > h => (h, w),
-        "landscape" if h > w => (h, w),
-        _ => (w, h),
-    }
-}
-
-/// Returns the effective top-panel ratio for the current orientation.
-///
-/// Portrait mode gets a slightly smaller ratio than landscape so the
-/// metadata panel still has room, but the overall taller screen still
-/// allows a larger square cover.
-fn effective_top_panel_ratio(ctx: &AppContext) -> f32 {
-    match ctx.config.display.orientation.to_ascii_lowercase().as_str() {
-        "portrait" => 0.68,
-        "landscape" => ctx.config.display.top_panel_ratio,
-        _ => ctx.config.display.top_panel_ratio,
-    }
-}
-
-/// Returns true when the display is configured for portrait orientation.
-fn is_portrait(ctx: &AppContext) -> bool {
-    ctx.config
-        .display
-        .orientation
-        .eq_ignore_ascii_case("portrait")
-}
-
-/// Resolves the configured font theme into title/body font paths.
-///
-/// Falls back to system DejaVu Sans if the configured theme is missing.
-fn selected_fonts<'a>(ctx: &'a AppContext) -> (&'a str, &'a str) {
-    let theme_name = ctx.config.fonts.theme.to_ascii_lowercase();
-
-    if let Some(theme) = ctx.config.font_themes.get(&theme_name) {
-        (&theme.title, &theme.body)
-    } else {
-        (
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        )
-    }
+/// The operator-selected `display.orientation` is used as a key into the
+/// `display_presets` map. No auto-correction is performed.
+fn selected_display_preset<'a>(ctx: &'a AppContext) -> Option<&'a DisplayPreset> {
+    let key = ctx.config.display.orientation.to_ascii_lowercase();
+    ctx.config.display_presets.get(&key)
 }
 
 /// SDL display loop.
@@ -723,6 +694,22 @@ fn selected_fonts<'a>(ctx: &'a AppContext) -> (&'a str, &'a str) {
 /// This runs on the main thread and owns the full screen.
 /// It redraws continuously and reloads the artwork texture only when the
 /// shared state version changes.
+///
+/// Layout is fully config-driven:
+/// - configured width/height are trusted
+/// - configured top_panel_ratio is trusted
+/// - no portrait/landscape spacing overrides are applied
+/// SDL display loop.
+///
+/// This runs on the main thread and owns the full screen.
+/// It redraws continuously and reloads the artwork texture only when the
+/// shared state version changes.
+///
+/// Layout is fully preset-driven:
+/// - the selected display preset defines width/height
+/// - the selected display preset defines panel spacing
+/// - the selected display preset defines default font sizes
+/// - no auto-correction is performed
 fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
@@ -733,9 +720,14 @@ fn run_display_loop(
     let _image_ctx = sdl2::image::init(InitFlag::JPG | InitFlag::PNG)?;
     let ttf_ctx = sdl2::ttf::init().map_err(|e| e.to_string())?;
 
-    let (window_w, window_h) = configured_window_size(&ctx);
+    let preset = selected_display_preset(&ctx)
+        .ok_or_else(|| format!("Unknown display preset: {}", ctx.config.display.orientation))?;
 
-    let mut window_builder = video.window(&ctx.config.display.window_title, window_w, window_h);
+    let mut window_builder = video.window(
+        &ctx.config.display.window_title,
+        preset.width,
+        preset.height,
+    );
     window_builder.position_centered();
 
     let window = if ctx.config.display.fullscreen {
@@ -756,15 +748,14 @@ fn run_display_loop(
 
     let texture_creator = canvas.texture_creator();
 
-    // Resolve the configured theme into concrete title/body font files.
     let (title_font_path, body_font_path) = selected_fonts(&ctx);
 
     let title_font = ttf_ctx
-        .load_font(title_font_path, ctx.config.fonts.title_size)
+        .load_font(title_font_path, preset.title_size)
         .map_err(|e| format!("Failed to load title font from {}: {e}", title_font_path))?;
 
     let body_font = ttf_ctx
-        .load_font(body_font_path, ctx.config.fonts.body_size)
+        .load_font(body_font_path, preset.body_size)
         .map_err(|e| format!("Failed to load body font from {}: {e}", body_font_path))?;
 
     let mut event_pump = sdl.event_pump()?;
@@ -774,7 +765,6 @@ fn run_display_loop(
     log_info(&ctx, "Display loop started.");
 
     while running.load(Ordering::SeqCst) {
-        // Handle keyboard/window events.
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -788,13 +778,11 @@ fn run_display_loop(
             }
         }
 
-        // Snapshot shared state once per frame.
         let state = {
             let state_guard = shared_state.lock().unwrap();
             state_guard.clone()
         };
 
-        // Reload artwork texture only when a new version arrives.
         if state.version != loaded_version {
             if !state.artwork_path.is_empty() && Path::new(&state.artwork_path).exists() {
                 match texture_creator.load_texture(&state.artwork_path) {
@@ -816,30 +804,21 @@ fn run_display_loop(
             }
         }
 
-        // Compute layout regions.
-        //
-        // In portrait mode we use a slightly different panel split so the artwork
-        // can stay large while still leaving space for metadata below.
         let (win_w, win_h) = canvas.output_size().map_err(|e| e.to_string())?;
-        log_info(&ctx, &format!("Canvas output size: {}x{}", win_w, win_h));
-        let top_h = ((win_h as f32) * effective_top_panel_ratio(&ctx)) as u32;
-        let bottom_h = win_h - top_h;
-        let portrait = is_portrait(&ctx);
+        log_debug(&ctx, &format!("Canvas output size: {}x{}", win_w, win_h));
 
-        // Clear background.
+        let top_h = ((win_h as f32) * preset.top_panel_ratio) as u32;
+        let bottom_h = win_h - top_h;
+
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
 
-        // Draw artwork in the top region.
-        //
-        // For portrait mode, use slightly smaller side padding so the square cover
-        // can grow as large as the narrower screen allows.
         if let Some(texture) = artwork_texture.as_ref() {
             let query = texture.query();
             let art_w = query.width as f32;
             let art_h = query.height as f32;
 
-            let padding = if portrait { 16.0 } else { 24.0 };
+            let padding = 24.0;
             let max_w = win_w as f32 - (padding * 2.0);
             let max_h = top_h as f32 - (padding * 2.0);
 
@@ -853,18 +832,11 @@ fn run_display_loop(
             canvas.copy(texture, None, Rect::new(x, y, draw_w, draw_h))?;
         }
 
-        // Draw bottom metadata panel.
         canvas.set_draw_color(Color::RGB(18, 18, 18));
         canvas.fill_rect(Rect::new(0, top_h as i32, win_w, bottom_h))?;
 
-        // Position the metadata panel slightly differently in portrait mode so the
-        // text stays visually balanced below the larger artwork block.
-        let panel_x = if portrait { 28 } else { 40 };
-        let mut panel_y = if portrait {
-            top_h as i32 + 22
-        } else {
-            top_h as i32 + 28
-        };
+        let panel_x = preset.panel_x;
+        let mut panel_y = top_h as i32 + preset.panel_y;
 
         let title_line = ellipsize(
             if state.title.trim().is_empty() {
@@ -908,7 +880,7 @@ fn run_display_loop(
             panel_x,
             panel_y,
         )?;
-        panel_y += if portrait { 42 } else { 46 };
+        panel_y += preset.title_line_spacing;
 
         draw_text_line(
             &mut canvas,
@@ -919,7 +891,7 @@ fn run_display_loop(
             panel_x,
             panel_y,
         )?;
-        panel_y += if portrait { 30 } else { 34 };
+        panel_y += preset.body_line_spacing;
 
         draw_text_line(
             &mut canvas,
@@ -930,7 +902,7 @@ fn run_display_loop(
             panel_x,
             panel_y,
         )?;
-        panel_y += if portrait { 34 } else { 40 };
+        panel_y += preset.detail_line_spacing;
 
         let detail_line = format!(
             "Genre: {}    Composer: {}",
@@ -948,7 +920,6 @@ fn run_display_loop(
             panel_y,
         )?;
 
-        // Present the completed frame.
         canvas.present();
 
         thread::sleep(Duration::from_millis(ctx.config.display.frame_delay_ms));
@@ -963,7 +934,6 @@ fn run_display_loop(
 /// Sets up Ctrl+C handling, loads config, starts the recognizer thread,
 /// and runs the SDL display loop on the main thread.
 fn main() {
-    // Load runtime configuration first.
     let config = load_config("config/songart.toml").expect("failed to load config/songart.toml");
 
     let ctx = Arc::new(AppContext {
@@ -971,12 +941,10 @@ fn main() {
         config,
     });
 
-    // Reset the log file when configured to do so.
     if ctx.config.logging.reset_on_start && should_log(&ctx, LogLevel::Debug) {
         reset_log_file(&ctx);
     }
 
-    // Shared shutdown flag used by both threads.
     let running = Arc::new(AtomicBool::new(true));
     let running_flag = Arc::clone(&running);
 
@@ -985,10 +953,8 @@ fn main() {
     })
     .expect("failed to set Ctrl-C handler");
 
-    // Shared UI state passed between recognizer and renderer.
     let shared_state = Arc::new(Mutex::new(SongState::default()));
 
-    // Spawn the background recognition thread.
     let recognizer_running = Arc::clone(&running);
     let recognizer_state = Arc::clone(&shared_state);
     let recognizer_ctx = Arc::clone(&ctx);
@@ -997,14 +963,12 @@ fn main() {
         run_recognition_loop(recognizer_ctx, recognizer_running, recognizer_state);
     });
 
-    // Keep the renderer on the main thread.
     let display_result = run_display_loop(
         Arc::clone(&ctx),
         Arc::clone(&running),
         Arc::clone(&shared_state),
     );
 
-    // Ensure the background thread is asked to stop and joined cleanly.
     running.store(false, Ordering::SeqCst);
     let _ = recognizer.join();
 
