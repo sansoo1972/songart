@@ -12,14 +12,46 @@ loop_delay_secs = 2
 [paths]
 songrec_bin = "/home/admin/projects/vendor/songrec/target/release/songrec"
 artwork_file = "/home/admin/projects/songart/current.jpg"
-font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 [display]
 window_title = "songart"
 width = 1280
 height = 720
 fullscreen = true
+orientation = "portrait"   # portrait | landscape
+rotation = 90              # 0 | 90 | 180 | 270
 top_panel_ratio = 0.72
-title_font_size = 34
-body_font_size = 24
 frame_delay_ms = 33
+
+[fonts]
+theme = "retro"
+title_size = 34
+body_size = 24
+
+[font_themes.modern]
+title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
+body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+
+[font_themes.simple]
+title = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+
+[font_themes.retro]
+title = "/home/admin/projects/songart/assets/fonts/Audiowide-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+
+[font_themes.techy]
+title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
+body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+
+[font_themes.grungy]
+title = "/home/admin/projects/songart/assets/fonts/SpecialElite-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+
+[font_themes.fantasy]
+title = "/home/admin/projects/songart/assets/fonts/Elvencommonspeak-0WVxz.ttf"
+body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+
+[font_themes.scripted]
+title = "/home/admin/projects/songart/assets/fonts/GloriaHallelujah-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"

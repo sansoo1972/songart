@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 
 /// Top-level application configuration loaded from TOML.
@@ -8,6 +9,8 @@ pub struct AppConfig {
     pub audio: AudioConfig,
     pub paths: PathsConfig,
     pub display: DisplayConfig,
+    pub fonts: FontsConfig,
+    pub font_themes: HashMap<String, FontTheme>,
 }
 
 /// Logging configuration.
@@ -32,7 +35,6 @@ pub struct AudioConfig {
 pub struct PathsConfig {
     pub songrec_bin: String,
     pub artwork_file: String,
-    pub font_path: String,
 }
 
 /// Display and rendering settings.
@@ -42,17 +44,35 @@ pub struct DisplayConfig {
     pub width: u32,
     pub height: u32,
     pub fullscreen: bool,
+    pub orientation: String,
+    pub rotation: i32,
     pub top_panel_ratio: f32,
-    pub title_font_size: u16,
-    pub body_font_size: u16,
     pub frame_delay_ms: u64,
+}
+
+/// High-level font configuration.
+///
+/// `theme` selects which entry to use from `font_themes`.
+#[derive(Debug, Deserialize, Clone)]
+pub struct FontsConfig {
+    pub theme: String,
+    pub title_size: u16,
+    pub body_size: u16,
+}
+
+/// A single named font theme.
+///
+/// This lets the app use one font for titles and another for body text.
+#[derive(Debug, Deserialize, Clone)]
+pub struct FontTheme {
+    pub title: String,
+    pub body: String,
 }
 
 /// Loads application configuration from a TOML file.
 pub fn load_config(path: &str) -> Result<AppConfig, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read config {}: {e}", path))?;
+    let raw =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read config {}: {e}", path))?;
 
-    toml::from_str(&raw)
-        .map_err(|e| format!("Failed to parse config {}: {e}", path))
+    toml::from_str(&raw).map_err(|e| format!("Failed to parse config {}: {e}", path))
 }
