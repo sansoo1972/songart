@@ -58,8 +58,6 @@ pub struct DisplayPreset {
     pub title_line_spacing: i32,
     pub body_line_spacing: i32,
     pub detail_line_spacing: i32,
-    pub title_size: u16,
-    pub body_size: u16,
 }
 
 /// High-level font selection.
@@ -73,6 +71,8 @@ pub struct FontsConfig {
 pub struct FontTheme {
     pub title: String,
     pub body: String,
+    pub title_size: u16,
+    pub body_size: u16,
 }
 
 /// Loads application configuration from a TOML file.

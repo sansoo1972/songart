@@ -404,20 +404,23 @@ fn ellipsize(input: &str, max_chars: usize) -> String {
     format!("{trimmed}…")
 }
 
-/// Resolves the configured font theme into title/body font paths.
-fn selected_fonts<'a>(ctx: &'a AppContext) -> (&'a str, &'a str) {
+/// Resolves the configured font theme into title/body font paths and sizes.
+///
+/// Falls back to system DejaVu Sans defaults if the configured theme is missing.
+fn selected_fonts<'a>(ctx: &'a AppContext) -> (&'a str, &'a str, u16, u16) {
     let theme_name = ctx.config.fonts.theme.to_ascii_lowercase();
 
     if let Some(theme) = ctx.config.font_themes.get(&theme_name) {
-        (&theme.title, &theme.body)
+        (&theme.title, &theme.body, theme.title_size, theme.body_size)
     } else {
         (
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            34,
+            24,
         )
     }
 }
-
 /// Resolves the selected display preset from config.
 fn selected_display_preset<'a>(ctx: &'a AppContext) -> Option<&'a DisplayPreset> {
     let key = ctx.config.display.orientation.to_ascii_lowercase();
@@ -656,14 +659,15 @@ fn run_display_loop(
 
     let texture_creator = canvas.texture_creator();
 
-    let (title_font_path, body_font_path) = selected_fonts(&ctx);
+    // Resolve the selected font theme into font files and sizes.
+    let (title_font_path, body_font_path, title_font_size, body_font_size) = selected_fonts(&ctx);
 
     let title_font = ttf_ctx
-        .load_font(title_font_path, preset.title_size)
+        .load_font(title_font_path, title_font_size)
         .map_err(|e| format!("Failed to load title font from {}: {e}", title_font_path))?;
 
     let body_font = ttf_ctx
-        .load_font(body_font_path, preset.body_size)
+        .load_font(body_font_path, body_font_size)
         .map_err(|e| format!("Failed to load body font from {}: {e}", body_font_path))?;
 
     let mut event_pump = sdl.event_pump()?;

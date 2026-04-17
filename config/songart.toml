@@ -28,8 +28,6 @@ panel_y = 28
 title_line_spacing = 46
 body_line_spacing = 34
 detail_line_spacing = 40
-title_size = 34
-body_size = 24
 
 [display_presets.landscape]
 width = 1280
@@ -40,8 +38,6 @@ panel_y = 28
 title_line_spacing = 46
 body_line_spacing = 34
 detail_line_spacing = 40
-title_size = 34
-body_size = 24
 
 [fonts]
 theme = "fantasy"
@@ -49,27 +45,41 @@ theme = "fantasy"
 [font_themes.modern]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
 body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+title_size = 34
+body_size = 24
 
 [font_themes.simple]
 title = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
 body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+title_size = 32
+body_size = 22
 
 [font_themes.retro]
 title = "/home/admin/projects/songart/assets/fonts/Audiowide-Regular.ttf"
 body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+title_size = 36
+body_size = 24
 
 [font_themes.techy]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
 body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+title_size = 36
+body_size = 24
 
 [font_themes.grungy]
 title = "/home/admin/projects/songart/assets/fonts/SpecialElite-Regular.ttf"
 body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+title_size = 34
+body_size = 23
 
 [font_themes.fantasy]
 title = "/home/admin/projects/songart/assets/fonts/Elvencommonspeak-0WXz.ttf"
 body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+title_size = 38
+body_size = 22
 
 [font_themes.scripted]
 title = "/home/admin/projects/songart/assets/fonts/GloriaHallelujah-Regular.ttf"
 body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+title_size = 34
+body_size = 22
