@@ -754,9 +754,7 @@ fn run_display_loop(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let texture_creator = canvas.texture_creator();
-
-    let font_path = selected_font_path(&ctx);
+    let texture_creator = canvas.texture_creator(); 
 
     // Resolve the configured theme into concrete title/body font files.
     let (title_font_path, body_font_path) = selected_fonts(&ctx);
