@@ -11,7 +11,7 @@
 
 mod config;
 
-use crate::config::{AppConfig, FontTheme, load_config};
+use crate::config::{AppConfig, load_config};
 use sdl2::event::Event;
 use sdl2::image::{InitFlag, LoadTexture};
 use sdl2::keyboard::Keycode;
@@ -479,7 +479,15 @@ fn draw_text_line(
         .map_err(|e| e.to_string())?;
 
     let target = Rect::new(x, y, surface.width(), surface.height());
-    canvas.copy(&texture, None, target)?;
+    canvas.copy_ex(
+        texture,
+        None,
+        Rect::new(x, y, draw_w, draw_h),
+        ctx.config.display.rotation as f64,
+        None,
+        false,
+        false,
+    )?;
     Ok(())
 }
 
@@ -754,7 +762,7 @@ fn run_display_loop(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let texture_creator = canvas.texture_creator(); 
+    let texture_creator = canvas.texture_creator();
 
     // Resolve the configured theme into concrete title/body font files.
     let (title_font_path, body_font_path) = selected_fonts(&ctx);
@@ -849,7 +857,15 @@ fn run_display_loop(
             let x = ((win_w - draw_w) / 2) as i32;
             let y = ((top_h - draw_h) / 2) as i32;
 
-            canvas.copy(texture, None, Rect::new(x, y, draw_w, draw_h))?;
+            canvas.copy_ex(
+                texture,
+                None,
+                Rect::new(x, y, draw_w, draw_h),
+                ctx.config.display.rotation as f64,
+                None,
+                false,
+                false,
+            )?;
         }
 
         // Draw bottom metadata panel.
