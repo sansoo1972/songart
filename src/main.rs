@@ -821,6 +821,7 @@ fn run_display_loop(
         // In portrait mode we use a slightly different panel split so the artwork
         // can stay large while still leaving space for metadata below.
         let (win_w, win_h) = canvas.output_size().map_err(|e| e.to_string())?;
+        log_info(&ctx, &format!("Canvas output size: {}x{}", win_w, win_h));
         let top_h = ((win_h as f32) * effective_top_panel_ratio(&ctx)) as u32;
         let bottom_h = win_h - top_h;
         let portrait = is_portrait(&ctx);
@@ -849,15 +850,7 @@ fn run_display_loop(
             let x = ((win_w - draw_w) / 2) as i32;
             let y = ((top_h - draw_h) / 2) as i32;
 
-            canvas.copy_ex(
-                texture,
-                None,
-                Rect::new(x, y, draw_w, draw_h),
-                ctx.config.display.rotation as f64,
-                None,
-                false,
-                false,
-            )?;
+            canvas.copy(texture, None, Rect::new(x, y, draw_w, draw_h))?;
         }
 
         // Draw bottom metadata panel.

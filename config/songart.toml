@@ -19,7 +19,7 @@ width = 1280
 height = 720
 fullscreen = true
 orientation = "portrait"   # portrait | landscape
-rotation = 90              # 0 | 90 | 180 | 270
+rotation = 0              # 0 | 90 | 180 | 270
 top_panel_ratio = 0.72
 frame_delay_ms = 33
 
