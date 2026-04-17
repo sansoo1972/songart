@@ -1,77 +1,101 @@
-//! songart main runtime loop.
+//! songart main runtime.
 //!
-//! This binary listens to ambient audio, identifies the current song using
-//! SongRec, downloads the best available artwork, and displays it fullscreen
-//! on the Pi framebuffer via `fbi`.
+//! This binary:
+//! 1. records a short audio clip
+//! 2. identifies the song with SongRec
+//! 3. downloads high-resolution artwork
+//! 4. renders a fullscreen split layout:
+//!    - artwork on top
+//!    - metadata panel underneath
 
 use serde_json::Value;
+use sdl2::event::Event;
+use sdl2::image::{InitFlag, LoadTexture};
+use sdl2::keyboard::Keycode;
+use sdl2::pixels::Color;
+use sdl2::rect::Rect;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::{thread, time::Duration};
 
-/// When true, extra debug information is printed and appended to a logfile.
+/// Enables extra debug logging to stdout and to the logfile.
 const VERBOSE: bool = true;
 
-/// Local logfile path used when verbose logging is enabled.
+/// Logfile path used when verbose logging is enabled.
 const LOG_FILE: &str = "/home/admin/projects/songart/songart.log";
 
-/// Audio sample file recorded before each SongRec recognition pass.
-const SAMPLE_WAV: &str = "sample.wav";
+/// Temporary audio sample path recorded each cycle.
+const SAMPLE_WAV: &str = "/home/admin/projects/songart/sample.wav";
 
-/// Local artwork file displayed by `fbi`.
+/// Artwork file path used by the renderer.
 const CURRENT_ARTWORK: &str = "/home/admin/projects/songart/current.jpg";
 
-/// Full path to the SongRec binary on the Pi.
+/// Full path to the SongRec binary.
 const SONGREC_BIN: &str = "/home/admin/projects/vendor/songrec/target/release/songrec";
 
-/// Name of the remapped mono audio source created for the PS3 Eye.
+/// Audio device used for capture.
 const AUDIO_DEVICE: &str = "ps3eye_mono";
 
-/// Recording duration for each recognition attempt.
+/// Recording duration for each recognition pass.
 const RECORD_SECONDS: &str = "10s";
 
-/// Sleep time between loop iterations.
+/// Delay between recognition loop iterations.
 const LOOP_DELAY_SECS: u64 = 2;
 
-/// Appends a message to the logfile when verbose logging is enabled.
-///
-/// This is intentionally best-effort. Logging failures should not stop
-/// the recognition/display loop.
+/// Font path used for the metadata panel.
+const FONT_PATH: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+
+/// Shared UI state consumed by the SDL renderer.
+#[derive(Clone, Debug, Default)]
+struct SongState {
+    title: String,
+    artist: String,
+    album: String,
+    track_number: String,
+    composer: String,
+    released: String,
+    genre: String,
+    label: String,
+    notes: String,
+    artwork_path: String,
+    artwork_url: String,
+    version: u64,
+}
+
+/// Best-effort logfile write when verbose mode is enabled.
 fn log_debug(message: &str) {
     if !VERBOSE {
         return;
     }
 
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(LOG_FILE) {
-        let _ = writeln!(file, "{}", message);
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(LOG_FILE)
+    {
+        let _ = writeln!(file, "{message}");
     }
 }
 
-/// Prints a message to stdout and optionally mirrors it into the logfile.
+/// Prints to stdout and mirrors to the logfile when verbose mode is enabled.
 fn log_line(message: &str) {
     println!("{message}");
     log_debug(message);
 }
 
-/// Writes a blank line to stdout and the logfile when verbose logging is enabled.
+/// Writes a blank line to stdout and the logfile.
 fn log_blank() {
     println!();
     log_debug("");
 }
 
 /// Pulls a metadata value out of the nested SongRec/Shazam JSON sections by title.
-///
-/// Example titles seen in metadata include:
-/// - Album
-/// - Label
-/// - Released
-/// - Composer
-/// - Track
 fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
     let sections = json["track"]["sections"].as_array()?;
 
@@ -91,24 +115,18 @@ fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
     None
 }
 
-/// Extracts album title from SongRec metadata.
 fn extract_album(json: &Value) -> String {
     metadata_value(json, "Album").unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Extracts label/publisher from SongRec metadata.
 fn extract_label(json: &Value) -> String {
     metadata_value(json, "Label").unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Extracts released year/date from SongRec metadata.
 fn extract_released(json: &Value) -> String {
     metadata_value(json, "Released").unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Extracts composer/writer information from SongRec metadata.
-///
-/// Different tracks expose this under different field names.
 fn extract_composer(json: &Value) -> String {
     metadata_value(json, "Composer")
         .or_else(|| metadata_value(json, "Writers"))
@@ -116,17 +134,12 @@ fn extract_composer(json: &Value) -> String {
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Extracts track number from SongRec metadata if present.
-///
-/// Note: total track count is often not exposed in SongRec JSON, so this may
-/// only return a simple track number or "Unknown".
 fn extract_track_number(json: &Value) -> String {
     metadata_value(json, "Track")
         .or_else(|| metadata_value(json, "Track Number"))
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Extracts the primary genre from the top-level track object.
 fn extract_genre(json: &Value) -> String {
     json["track"]["genres"]["primary"]
         .as_str()
@@ -134,7 +147,6 @@ fn extract_genre(json: &Value) -> String {
         .to_string()
 }
 
-/// Extracts the ISRC if present.
 fn extract_isrc(json: &Value) -> String {
     json["track"]["isrc"]
         .as_str()
@@ -142,10 +154,6 @@ fn extract_isrc(json: &Value) -> String {
         .to_string()
 }
 
-/// Builds a short notes/trivia line from any useful metadata that is available.
-///
-/// This is intentionally lightweight and only uses data already present in the
-/// SongRec response.
 fn extract_notes(json: &Value) -> String {
     let mut bits = Vec::new();
 
@@ -171,11 +179,10 @@ fn extract_notes(json: &Value) -> String {
     }
 }
 
-/// Builds an ordered list of artwork URL candidates.
+/// Builds an ordered list of artwork candidates.
 ///
-/// For Apple-hosted `mzstatic.com` images, this function tries to upgrade
-/// lower-resolution `400x400` URLs to larger variants first, then falls back
-/// to the original URL last.
+/// For Apple-hosted artwork, larger variants are tried first.
+/// The original URL is kept as the final fallback.
 fn artwork_candidates(url: &str) -> Vec<String> {
     let mut out = Vec::new();
 
@@ -201,16 +208,12 @@ fn artwork_candidates(url: &str) -> Vec<String> {
         }
     }
 
-    // Keep the original URL as the final fallback.
     out.push(url.to_string());
     out.dedup();
     out
 }
 
-/// Picks the first available seed artwork URL from the JSON response.
-///
-/// This does not download anything; it only decides what base image URL should
-/// be used to generate candidate artwork URLs.
+/// Picks the first available seed artwork URL from the JSON payload.
 fn pick_artwork_url(json: &Value) -> Option<String> {
     let mut base_urls = Vec::new();
 
@@ -245,16 +248,9 @@ fn pick_artwork_url(json: &Value) -> Option<String> {
     candidates.into_iter().next()
 }
 
-/// Downloads the best available artwork candidate and writes it atomically.
+/// Downloads the best artwork and writes it atomically.
 ///
-/// The function:
-/// 1. gathers artwork URLs from the JSON
-/// 2. expands Apple-hosted images into larger candidate sizes
-/// 3. tries each candidate in order
-/// 4. saves to `output_path.tmp` first
-/// 5. renames it into place on success
-///
-/// Returns the winning artwork URL if successful.
+/// This writes to `output_path.tmp` first, then renames it into place.
 fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, String> {
     let mut base_urls = Vec::new();
 
@@ -316,7 +312,6 @@ fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, Stri
             }
         };
 
-        // Reject obviously tiny placeholder or bad-image responses.
         if bytes.len() < 10_000 {
             log_line(&format!(
                 "Rejected tiny image ({} bytes): {}",
@@ -340,23 +335,46 @@ fn download_best_artwork(json: &Value, output_path: &str) -> Result<String, Stri
     Err("No usable artwork URL succeeded".to_string())
 }
 
-fn main() {
-    // -----------------------------------------------------------------
-    // Ctrl+C handling
-    //
-    // We use an atomic flag so the app can shut down cleanly after the
-    // current blocking operation finishes.
-    // -----------------------------------------------------------------
-    let running = Arc::new(AtomicBool::new(true));
-    let running_flag = Arc::clone(&running);
+/// Truncates long strings so they fit better in the metadata panel.
+fn ellipsize(input: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    if chars.len() <= max_chars {
+        return input.to_string();
+    }
 
-    ctrlc::set_handler(move || {
-        running_flag.store(false, Ordering::SeqCst);
-    })
-    .expect("failed to set Ctrl-C handler");
+    let trimmed: String = chars.into_iter().take(max_chars.saturating_sub(1)).collect();
+    format!("{trimmed}…")
+}
 
-    // Track the last displayed song and artwork URL so we can suppress
-    // redundant downloads and framebuffer refreshes.
+/// Renders a single line of text at the given position.
+fn draw_text_line(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    texture_creator: &sdl2::render::TextureCreator<sdl2::video::WindowContext>,
+    font: &sdl2::ttf::Font,
+    text: &str,
+    color: Color,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
+    let surface = font
+        .render(text)
+        .blended(color)
+        .map_err(|e| e.to_string())?;
+
+    let texture = texture_creator
+        .create_texture_from_surface(&surface)
+        .map_err(|e| e.to_string())?;
+
+    let target = Rect::new(x, y, surface.width(), surface.height());
+    canvas.copy(&texture, None, target)?;
+    Ok(())
+}
+
+/// Background recognition loop.
+///
+/// This thread records audio, calls SongRec, downloads artwork, and updates
+/// shared UI state for the renderer.
+fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongState>>) {
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
 
@@ -366,9 +384,7 @@ fn main() {
     }
 
     while running.load(Ordering::SeqCst) {
-        // -----------------------------------------------------------------
-        // 1. Record a short audio sample from the configured microphone source
-        // -----------------------------------------------------------------
+        // 1. Record a short audio sample.
         log_line("Listening...");
 
         let record_status = Command::new("timeout")
@@ -400,14 +416,11 @@ fn main() {
             }
         }
 
-        // If Ctrl+C was pressed during recording, stop before doing more work.
         if !running.load(Ordering::SeqCst) {
             break;
         }
 
-        // -----------------------------------------------------------------
-        // 2. Run SongRec on the recorded WAV file and capture JSON output
-        // -----------------------------------------------------------------
+        // 2. Run SongRec against the recorded sample.
         let output = match Command::new(SONGREC_BIN)
             .args(["recognize", SAMPLE_WAV, "--json"])
             .output()
@@ -423,7 +436,6 @@ fn main() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        // If Ctrl+C was pressed while SongRec was running, exit now.
         if !running.load(Ordering::SeqCst) {
             break;
         }
@@ -442,9 +454,7 @@ fn main() {
             continue;
         }
 
-        // -----------------------------------------------------------------
-        // 3. Parse the SongRec JSON payload
-        // -----------------------------------------------------------------
+        // 3. Parse JSON payload.
         let json: Value = match serde_json::from_str(&stdout) {
             Ok(v) => v,
             Err(e) => {
@@ -454,9 +464,7 @@ fn main() {
             }
         };
 
-        // -----------------------------------------------------------------
-        // 4. Extract human-readable metadata for logging and display logic
-        // -----------------------------------------------------------------
+        // 4. Extract metadata.
         let title = json["track"]["title"].as_str().unwrap_or("Unknown");
         let artist = json["track"]["subtitle"].as_str().unwrap_or("Unknown");
         let album = extract_album(&json);
@@ -467,11 +475,9 @@ fn main() {
         let label = extract_label(&json);
         let notes = extract_notes(&json);
 
-        let current = format!("{} - {}", artist, title);
+        let current = format!("{artist} - {title}");
 
-        // -----------------------------------------------------------------
-        // 5. Pick an artwork seed URL before doing any downloads
-        // -----------------------------------------------------------------
+        // 5. Pick artwork seed URL.
         let preview_url = pick_artwork_url(&json).unwrap_or_default();
         if preview_url.is_empty() {
             log_line(&format!("No artwork URL for {current}"));
@@ -479,18 +485,14 @@ fn main() {
             continue;
         }
 
-        // -----------------------------------------------------------------
-        // 6. Skip work if both track and seed artwork are unchanged
-        // -----------------------------------------------------------------
+        // 6. Suppress duplicate work.
         if current == last_track && preview_url == last_artwork_url {
             log_line(&format!("Same track and artwork: {current}"));
             thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
             continue;
         }
 
-        // -----------------------------------------------------------------
-        // 7. Print the debug "NOW PLAYING" block only when track/artwork changes
-        // -----------------------------------------------------------------
+        // 7. Print detailed now-playing block only when it changes.
         log_blank();
         log_line("========================================");
         log_line("NOW PLAYING");
@@ -507,9 +509,7 @@ fn main() {
         log_line("========================================");
         log_blank();
 
-        // -----------------------------------------------------------------
-        // 8. Download the best available artwork and update the display if needed
-        // -----------------------------------------------------------------
+        // 8. Download the best artwork and update shared UI state.
         match download_best_artwork(&json, CURRENT_ARTWORK) {
             Ok(final_url) => {
                 log_line(&format!("Final URL:    {final_url}"));
@@ -517,40 +517,23 @@ fn main() {
                 let artwork_changed = final_url != last_artwork_url;
 
                 if artwork_changed {
-                    log_line("Refreshing display...");
-
-                    let pkill_status = Command::new("sudo").args(["pkill", "fbi"]).status();
-                    if VERBOSE {
-                        match pkill_status {
-                            Ok(status) => log_line(&format!("pkill fbi exit status: {status}")),
-                            Err(e) => log_line(&format!("pkill fbi failed: {e}")),
-                        }
-                    }
-
-                    let fbi_status = Command::new("sudo")
-                        .args([
-                            "fbi",
-                            "-T",
-                            "1",
-                            "-d",
-                            "/dev/fb0",
-                            "--noverbose",
-                            "-a",
-                            CURRENT_ARTWORK,
-                        ])
-                        .status();
-
-                    if VERBOSE {
-                        match fbi_status {
-                            Ok(status) => log_line(&format!("fbi exit status: {status}")),
-                            Err(e) => log_line(&format!("fbi failed: {e}")),
-                        }
-                    }
+                    let mut state = shared_state.lock().unwrap();
+                    state.title = title.to_string();
+                    state.artist = artist.to_string();
+                    state.album = album;
+                    state.track_number = track_number;
+                    state.composer = composer;
+                    state.released = released;
+                    state.genre = genre;
+                    state.label = label;
+                    state.notes = notes;
+                    state.artwork_path = CURRENT_ARTWORK.to_string();
+                    state.artwork_url = final_url.clone();
+                    state.version = state.version.wrapping_add(1);
                 } else {
-                    log_line("Artwork unchanged, skipping display refresh.");
+                    log_line("Artwork unchanged, skipping UI state refresh.");
                 }
 
-                // Update last seen state only after a successful artwork pass.
                 last_track = current;
                 last_artwork_url = final_url;
             }
@@ -559,21 +542,232 @@ fn main() {
             }
         }
 
-        // -----------------------------------------------------------------
-        // 9. Pause briefly before the next recognition cycle
-        // -----------------------------------------------------------------
         if running.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
         }
     }
 
-    // -----------------------------------------------------------------
-    // 10. Clean shutdown
-    //
-    // When Ctrl+C is pressed, stop the framebuffer viewer so the console
-    // is returned to a sane state.
-    // -----------------------------------------------------------------
-    log_line("Shutting down songart...");
-    let _ = Command::new("sudo").args(["pkill", "fbi"]).status();
+    log_line("Recognition loop stopped.");
+}
+
+/// SDL renderer loop.
+///
+/// This runs on the main thread and owns the screen. It redraws the current
+/// song state continuously and reloads the artwork texture only when the
+/// shared state's version changes.
+fn run_display_loop(
+    running: Arc<AtomicBool>,
+    shared_state: Arc<Mutex<SongState>>,
+) -> Result<(), String> {
+    let sdl = sdl2::init()?;
+    let video = sdl.video()?;
+    let _image_ctx = sdl2::image::init(InitFlag::JPG | InitFlag::PNG)?;
+    let ttf_ctx = sdl2::ttf::init().map_err(|e| e.to_string())?;
+
+    let window = video
+        .window("songart", 1280, 720)
+        .position_centered()
+        .fullscreen_desktop()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut canvas = window
+        .into_canvas()
+        .accelerated()
+        .present_vsync()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let texture_creator = canvas.texture_creator();
+
+    let title_font = ttf_ctx
+        .load_font(FONT_PATH, 34)
+        .map_err(|e| format!("Failed to load title font from {FONT_PATH}: {e}"))?;
+
+    let body_font = ttf_ctx
+        .load_font(FONT_PATH, 24)
+        .map_err(|e| format!("Failed to load body font from {FONT_PATH}: {e}"))?;
+
+    let mut event_pump = sdl.event_pump()?;
+    let mut loaded_version: u64 = u64::MAX;
+    let mut artwork_texture: Option<sdl2::render::Texture<'_>> = None;
+
+    while running.load(Ordering::SeqCst) {
+        // Handle keyboard/window events.
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit { .. }
+                | Event::KeyDown {
+                    keycode: Some(Keycode::Escape),
+                    ..
+                } => {
+                    running.store(false, Ordering::SeqCst);
+                }
+                _ => {}
+            }
+        }
+
+        // Snapshot the current shared state once per frame.
+        let state = {
+            let state_guard = shared_state.lock().unwrap();
+            state_guard.clone()
+        };
+
+        // Reload artwork texture only when the version changes.
+        if state.version != loaded_version {
+            if !state.artwork_path.is_empty() && Path::new(&state.artwork_path).exists() {
+                match texture_creator.load_texture(&state.artwork_path) {
+                    Ok(texture) => {
+                        artwork_texture = Some(texture);
+                        loaded_version = state.version;
+                        if VERBOSE {
+                            log_line(&format!(
+                                "Renderer loaded artwork version {} from {}",
+                                loaded_version, state.artwork_path
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        if VERBOSE {
+                            log_line(&format!("Renderer failed to load artwork: {e}"));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Screen dimensions and layout math.
+        let (win_w, win_h) = canvas.output_size().map_err(|e| e.to_string())?;
+        let top_h = ((win_h as f32) * 0.72) as u32;
+        let bottom_h = win_h - top_h;
+
+        // Background.
+        canvas.set_draw_color(Color::RGB(0, 0, 0));
+        canvas.clear();
+
+        // Draw artwork in the top region.
+        if let Some(texture) = artwork_texture.as_ref() {
+            let query = texture.query();
+            let art_w = query.width as f32;
+            let art_h = query.height as f32;
+
+            let padding = 24.0;
+            let max_w = win_w as f32 - (padding * 2.0);
+            let max_h = top_h as f32 - (padding * 2.0);
+
+            let scale = f32::min(max_w / art_w, max_h / art_h);
+            let draw_w = (art_w * scale) as u32;
+            let draw_h = (art_h * scale) as u32;
+
+            let x = ((win_w - draw_w) / 2) as i32;
+            let y = ((top_h - draw_h) / 2) as i32;
+
+            canvas.copy(texture, None, Rect::new(x, y, draw_w, draw_h))?;
+        }
+
+        // Draw the bottom metadata panel.
+        canvas.set_draw_color(Color::RGB(18, 18, 18));
+        canvas.fill_rect(Rect::new(0, top_h as i32, win_w, bottom_h))?;
+
+        let panel_x = 40;
+        let mut panel_y = top_h as i32 + 28;
+
+        let title_line = ellipsize(&state.title, 48);
+        let artist_line = ellipsize(&state.artist, 56);
+
+        let mut third_line = state.album.clone();
+        if !state.released.is_empty() && state.released != "Unknown" {
+            if third_line.is_empty() || third_line == "Unknown" {
+                third_line = state.released.clone();
+            } else {
+                third_line = format!("{} • {}", state.album, state.released);
+            }
+        }
+        let third_line = ellipsize(&third_line, 56);
+
+        draw_text_line(
+            &mut canvas,
+            &texture_creator,
+            &title_font,
+            &title_line,
+            Color::RGB(255, 255, 255),
+            panel_x,
+            panel_y,
+        )?;
+        panel_y += 46;
+
+        draw_text_line(
+            &mut canvas,
+            &texture_creator,
+            &body_font,
+            &artist_line,
+            Color::RGB(210, 210, 210),
+            panel_x,
+            panel_y,
+        )?;
+        panel_y += 34;
+
+        draw_text_line(
+            &mut canvas,
+            &texture_creator,
+            &body_font,
+            &third_line,
+            Color::RGB(180, 180, 180),
+            panel_x,
+            panel_y,
+        )?;
+        panel_y += 40;
+
+        let detail_line = format!(
+            "Genre: {}    Composer: {}",
+            ellipsize(&state.genre, 20),
+            ellipsize(&state.composer, 28)
+        );
+        draw_text_line(
+            &mut canvas,
+            &texture_creator,
+            &body_font,
+            &detail_line,
+            Color::RGB(140, 140, 140),
+            panel_x,
+            panel_y,
+        )?;
+
+        canvas.present();
+
+        thread::sleep(Duration::from_millis(33));
+    }
+
+    log_line("Display loop stopped.");
+    Ok(())
+}
+
+fn main() {
+    let running = Arc::new(AtomicBool::new(true));
+    let running_flag = Arc::clone(&running);
+
+    ctrlc::set_handler(move || {
+        running_flag.store(false, Ordering::SeqCst);
+    })
+    .expect("failed to set Ctrl-C handler");
+
+    let shared_state = Arc::new(Mutex::new(SongState::default()));
+
+    let recognizer_running = Arc::clone(&running);
+    let recognizer_state = Arc::clone(&shared_state);
+
+    let recognizer = thread::spawn(move || {
+        run_recognition_loop(recognizer_running, recognizer_state);
+    });
+
+    let display_result = run_display_loop(Arc::clone(&running), Arc::clone(&shared_state));
+
+    running.store(false, Ordering::SeqCst);
+    let _ = recognizer.join();
+
+    if let Err(e) = display_result {
+        log_line(&format!("Display loop error: {e}"));
+    }
+
     log_line("songart stopped.");
 }
