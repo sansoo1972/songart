@@ -25,11 +25,6 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
-/// Enables extra debug logging when set to `true`.
-///
-/// Set this to `false` for quieter output once the app is stable.
-const VERBOSE: bool = true;
-
 /// Log file path.
 const LOG_FILE: &str = "/home/admin/projects/songart/songart.log";
 
@@ -66,13 +61,11 @@ enum LogLevel {
 
 /// Current log level threshold.
 ///
-/// When `VERBOSE` is `true`, default to `Debug`.
-/// When `VERBOSE` is `false`, default to `Info`.
-const LOG_LEVEL: LogLevel = if VERBOSE {
-    LogLevel::Debug
-} else {
-    LogLevel::Info
-};
+/// Set this to:
+/// - `LogLevel::Error` for minimal logging
+/// - `LogLevel::Info` for normal runtime logging
+/// - `LogLevel::Debug` for development/debugging
+const LOG_LEVEL: LogLevel = LogLevel::Debug;
 
 /// Shared UI state consumed by the SDL renderer.
 ///
@@ -502,15 +495,11 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
 
-    if VERBOSE {
-        log_info("Verbose logging enabled.");
-        log_info(&format!("Log file: {LOG_FILE}"));
-    }
+    log_info(&format!("Log file: {LOG_FILE}"));
+    log_info("Recognition loop started.");
 
     while running.load(Ordering::SeqCst) {
-        // -----------------------------------------------------------------
-        // 1. Record a short audio sample
-        // -----------------------------------------------------------------
+        // 1. Record a short audio sample.
         log_info("Listening...");
 
         let record_status = Command::new("timeout")
@@ -545,9 +534,7 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
             break;
         }
 
-        // -----------------------------------------------------------------
-        // 2. Run SongRec on the captured WAV file
-        // -----------------------------------------------------------------
+        // 2. Run SongRec on the captured WAV file.
         let output = match Command::new(SONGREC_BIN)
             .args(["recognize", SAMPLE_WAV, "--json"])
             .output()
@@ -579,9 +566,7 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
             continue;
         }
 
-        // -----------------------------------------------------------------
-        // 3. Parse the SongRec JSON payload
-        // -----------------------------------------------------------------
+        // 3. Parse the SongRec JSON payload.
         let json: Value = match serde_json::from_str(&stdout) {
             Ok(v) => v,
             Err(e) => {
@@ -591,9 +576,7 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
             }
         };
 
-        // -----------------------------------------------------------------
-        // 4. Extract metadata for logging and display
-        // -----------------------------------------------------------------
+        // 4. Extract metadata for logging and display.
         let title = json["track"]["title"].as_str().unwrap_or("Unknown");
         let artist = json["track"]["subtitle"].as_str().unwrap_or("Unknown");
         let album = extract_album(&json);
@@ -606,9 +589,7 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
 
         let current = format!("{artist} - {title}");
 
-        // -----------------------------------------------------------------
-        // 5. Pick an artwork seed URL before downloading anything
-        // -----------------------------------------------------------------
+        // 5. Pick an artwork seed URL before downloading anything.
         let preview_url = pick_artwork_url(&json).unwrap_or_default();
         if preview_url.is_empty() {
             log_info(&format!("No artwork URL for {current}"));
@@ -616,18 +597,14 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
             continue;
         }
 
-        // -----------------------------------------------------------------
-        // 6. Skip redundant work if track and artwork seed are unchanged
-        // -----------------------------------------------------------------
+        // 6. Skip redundant work if track and artwork seed are unchanged.
         if current == last_track && preview_url == last_artwork_url {
             log_info(&format!("Same track and artwork: {current}"));
             thread::sleep(Duration::from_secs(LOOP_DELAY_SECS));
             continue;
         }
 
-        // -----------------------------------------------------------------
-        // 7. Print a structured now-playing block when the song changes
-        // -----------------------------------------------------------------
+        // 7. Print a structured now-playing block when the song changes.
         log_blank();
         log_info("========================================");
         log_info("NOW PLAYING");
@@ -644,9 +621,7 @@ fn run_recognition_loop(running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongSt
         log_info("========================================");
         log_blank();
 
-        // -----------------------------------------------------------------
-        // 8. Download artwork and update shared UI state
-        // -----------------------------------------------------------------
+        // 8. Download artwork and update shared UI state.
         match download_best_artwork(&json, CURRENT_ARTWORK) {
             Ok(final_url) => {
                 log_info(&format!("Final URL:    {final_url}"));
@@ -730,10 +705,10 @@ fn run_display_loop(
     let mut loaded_version: u64 = u64::MAX;
     let mut artwork_texture: Option<sdl2::render::Texture<'_>> = None;
 
+    log_info("Display loop started.");
+
     while running.load(Ordering::SeqCst) {
-        // -----------------------------------------------------------------
-        // Handle keyboard/window events
-        // -----------------------------------------------------------------
+        // Handle keyboard/window events.
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -747,17 +722,13 @@ fn run_display_loop(
             }
         }
 
-        // -----------------------------------------------------------------
-        // Snapshot shared state once per frame
-        // -----------------------------------------------------------------
+        // Snapshot shared state once per frame.
         let state = {
             let state_guard = shared_state.lock().unwrap();
             state_guard.clone()
         };
 
-        // -----------------------------------------------------------------
-        // Reload artwork texture only when a new version arrives
-        // -----------------------------------------------------------------
+        // Reload artwork texture only when a new version arrives.
         if state.version != loaded_version {
             if !state.artwork_path.is_empty() && Path::new(&state.artwork_path).exists() {
                 match texture_creator.load_texture(&state.artwork_path) {
@@ -776,22 +747,16 @@ fn run_display_loop(
             }
         }
 
-        // -----------------------------------------------------------------
-        // Compute layout regions
-        // -----------------------------------------------------------------
+        // Compute layout regions.
         let (win_w, win_h) = canvas.output_size().map_err(|e| e.to_string())?;
         let top_h = ((win_h as f32) * 0.72) as u32;
         let bottom_h = win_h - top_h;
 
-        // -----------------------------------------------------------------
-        // Clear background
-        // -----------------------------------------------------------------
+        // Clear background.
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
 
-        // -----------------------------------------------------------------
-        // Draw artwork in the top region
-        // -----------------------------------------------------------------
+        // Draw artwork in the top region.
         if let Some(texture) = artwork_texture.as_ref() {
             let query = texture.query();
             let art_w = query.width as f32;
@@ -811,9 +776,7 @@ fn run_display_loop(
             canvas.copy(texture, None, Rect::new(x, y, draw_w, draw_h))?;
         }
 
-        // -----------------------------------------------------------------
-        // Draw bottom metadata panel
-        // -----------------------------------------------------------------
+        // Draw bottom metadata panel.
         canvas.set_draw_color(Color::RGB(18, 18, 18));
         canvas.fill_rect(Rect::new(0, top_h as i32, win_w, bottom_h))?;
 
@@ -902,9 +865,7 @@ fn run_display_loop(
             panel_y,
         )?;
 
-        // -----------------------------------------------------------------
-        // Present the completed frame
-        // -----------------------------------------------------------------
+        // Present the completed frame.
         canvas.present();
 
         thread::sleep(Duration::from_millis(33));
