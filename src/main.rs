@@ -5,19 +5,19 @@
 //! 2. records a short audio sample
 //! 3. identifies the song with SongRec
 //! 4. downloads high-resolution artwork
-//! 5. renders a fullscreen split layout:
+//! 5. renders a split layout:
 //!    - artwork on top
 //!    - metadata panel underneath
 //!
 //! Design rule:
 //! - The operator config is authoritative.
 //! - No auto-detection or auto-correction of orientation is performed.
-//! - If config says portrait, the app renders portrait.
-//! - If config says landscape, the app renders landscape.
+//! - The selected display preset defines the intended scene size and layout.
+//! - The real SDL canvas may be larger; the scene is scaled to fit.
 
 mod config;
 
-use crate::config::{AppConfig, DisplayPreset, load_config};
+use crate::config::{load_config, AppConfig, DisplayPreset};
 use sdl2::event::Event;
 use sdl2::image::{InitFlag, LoadTexture};
 use sdl2::keyboard::Keycode;
@@ -29,15 +29,13 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 use std::thread;
 use std::time::Duration;
 
 /// Logging severity used to control how noisy the app is.
-///
-/// Lower values are more important. Higher values are noisier.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum LogLevel {
     Error = 1,
@@ -46,8 +44,6 @@ enum LogLevel {
 }
 
 /// Shared runtime context.
-///
-/// This makes configuration and derived logging state easy to pass around.
 #[derive(Clone)]
 struct AppContext {
     config: AppConfig,
@@ -55,9 +51,6 @@ struct AppContext {
 }
 
 /// Shared UI state consumed by the SDL renderer.
-///
-/// The recognition thread updates this when a new track/artwork is found.
-/// The display loop reads it to redraw the screen.
 #[derive(Clone, Debug)]
 struct SongState {
     title: String,
@@ -75,8 +68,6 @@ struct SongState {
 }
 
 impl Default for SongState {
-    /// Provides friendly placeholder text so the renderer does not attempt
-    /// to draw empty strings before the first song is recognized.
     fn default() -> Self {
         Self {
             title: "Waiting for music...".to_string(),
@@ -110,9 +101,7 @@ fn should_log(ctx: &AppContext, level: LogLevel) -> bool {
     level <= ctx.log_level
 }
 
-/// Builds a simple timestamp string.
-///
-/// This keeps dependencies minimal. It uses epoch seconds.
+/// Builds a simple timestamp string using epoch seconds.
 fn timestamp_string() -> String {
     match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         Ok(dur) => dur.as_secs().to_string(),
@@ -126,8 +115,6 @@ fn reset_log_file(ctx: &AppContext) {
 }
 
 /// Writes a log message to stdout and to the logfile when enabled.
-///
-/// Messages are prefixed with a timestamp and level.
 fn log_message(ctx: &AppContext, level: LogLevel, message: &str) {
     if !should_log(ctx, level) {
         return;
@@ -145,24 +132,18 @@ fn log_message(ctx: &AppContext, level: LogLevel, message: &str) {
     }
 }
 
-/// Logs an error-level message.
 fn log_error(ctx: &AppContext, message: &str) {
     log_message(ctx, LogLevel::Error, message);
 }
 
-/// Logs an info-level message.
 fn log_info(ctx: &AppContext, message: &str) {
     log_message(ctx, LogLevel::Info, message);
 }
 
-/// Logs a debug-level message.
 fn log_debug(ctx: &AppContext, message: &str) {
     log_message(ctx, LogLevel::Debug, message);
 }
 
-/// Writes a blank line to stdout and the logfile.
-///
-/// Useful for visual separation in logs.
 fn log_blank(ctx: &AppContext) {
     if !should_log(ctx, LogLevel::Info) {
         return;
@@ -180,13 +161,6 @@ fn log_blank(ctx: &AppContext) {
 }
 
 /// Pulls a metadata value out of the nested SongRec/Shazam JSON sections by title.
-///
-/// Example metadata titles include:
-/// - Album
-/// - Label
-/// - Released
-/// - Composer
-/// - Track
 fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
     let sections = json["track"]["sections"].as_array()?;
 
@@ -206,22 +180,18 @@ fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
     None
 }
 
-/// Extracts album title.
 fn extract_album(json: &Value) -> String {
     metadata_value(json, "Album").unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Extracts label/publisher.
 fn extract_label(json: &Value) -> String {
     metadata_value(json, "Label").unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Extracts release year/date.
 fn extract_released(json: &Value) -> String {
     metadata_value(json, "Released").unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Extracts composer or writer information.
 fn extract_composer(json: &Value) -> String {
     metadata_value(json, "Composer")
         .or_else(|| metadata_value(json, "Writers"))
@@ -229,14 +199,12 @@ fn extract_composer(json: &Value) -> String {
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Extracts track number if present.
 fn extract_track_number(json: &Value) -> String {
     metadata_value(json, "Track")
         .or_else(|| metadata_value(json, "Track Number"))
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Extracts primary genre.
 fn extract_genre(json: &Value) -> String {
     json["track"]["genres"]["primary"]
         .as_str()
@@ -244,7 +212,6 @@ fn extract_genre(json: &Value) -> String {
         .to_string()
 }
 
-/// Extracts ISRC.
 fn extract_isrc(json: &Value) -> String {
     json["track"]["isrc"]
         .as_str()
@@ -252,9 +219,6 @@ fn extract_isrc(json: &Value) -> String {
         .to_string()
 }
 
-/// Builds a short notes/trivia line from available metadata.
-///
-/// This intentionally uses only data already present in SongRec JSON.
 fn extract_notes(json: &Value) -> String {
     let mut bits = Vec::new();
 
@@ -281,9 +245,6 @@ fn extract_notes(json: &Value) -> String {
 }
 
 /// Builds an ordered list of artwork URL candidates.
-///
-/// For Apple-hosted artwork, larger variants are tried first.
-/// The original URL is retained as the final fallback.
 fn artwork_candidates(url: &str) -> Vec<String> {
     let mut out = Vec::new();
 
@@ -315,8 +276,6 @@ fn artwork_candidates(url: &str) -> Vec<String> {
 }
 
 /// Picks the first available seed artwork URL from the JSON response.
-///
-/// This does not download anything. It just selects the base URL set.
 fn pick_artwork_url(json: &Value) -> Option<String> {
     let mut base_urls = Vec::new();
 
@@ -352,13 +311,7 @@ fn pick_artwork_url(json: &Value) -> Option<String> {
 }
 
 /// Downloads the best available artwork and writes it atomically.
-///
-/// The file is written to `output_path.tmp` first, then renamed into place.
-fn download_best_artwork(
-    ctx: &AppContext,
-    json: &Value,
-    output_path: &str,
-) -> Result<String, String> {
+fn download_best_artwork(ctx: &AppContext, json: &Value, output_path: &str) -> Result<String, String> {
     let mut base_urls = Vec::new();
 
     if let Some(url) = json["track"]["images"]["coverarthq"].as_str() {
@@ -407,10 +360,7 @@ fn download_best_artwork(
         };
 
         if !resp.status().is_success() {
-            log_debug(
-                ctx,
-                &format!("HTTP status {} for {}", resp.status(), candidate),
-            );
+            log_debug(ctx, &format!("HTTP status {} for {}", resp.status(), candidate));
             continue;
         }
 
@@ -444,23 +394,17 @@ fn download_best_artwork(
     Err("No usable artwork URL succeeded".to_string())
 }
 
-/// Truncates long strings so they fit better in the metadata panel.
 fn ellipsize(input: &str, max_chars: usize) -> String {
     let chars: Vec<char> = input.chars().collect();
     if chars.len() <= max_chars {
         return input.to_string();
     }
 
-    let trimmed: String = chars
-        .into_iter()
-        .take(max_chars.saturating_sub(1))
-        .collect();
+    let trimmed: String = chars.into_iter().take(max_chars.saturating_sub(1)).collect();
     format!("{trimmed}…")
 }
 
 /// Resolves the configured font theme into title/body font paths.
-///
-/// Falls back to system DejaVu Sans if the configured theme is missing.
 fn selected_fonts<'a>(ctx: &'a AppContext) -> (&'a str, &'a str) {
     let theme_name = ctx.config.fonts.theme.to_ascii_lowercase();
 
@@ -474,10 +418,12 @@ fn selected_fonts<'a>(ctx: &'a AppContext) -> (&'a str, &'a str) {
     }
 }
 
-/// Renders a single line of text.
-///
-/// Empty strings are converted to a single space so SDL_ttf does not error
-/// with "Text has zero width".
+/// Resolves the selected display preset from config.
+fn selected_display_preset<'a>(ctx: &'a AppContext) -> Option<&'a DisplayPreset> {
+    let key = ctx.config.display.orientation.to_ascii_lowercase();
+    ctx.config.display_presets.get(&key)
+}
+
 fn draw_text_line(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     texture_creator: &sdl2::render::TextureCreator<sdl2::video::WindowContext>,
@@ -503,19 +449,7 @@ fn draw_text_line(
     Ok(())
 }
 
-/// Background recognition loop.
-///
-/// This thread:
-/// - records audio
-/// - calls SongRec
-/// - parses metadata
-/// - downloads artwork
-/// - updates shared state for the renderer
-fn run_recognition_loop(
-    ctx: Arc<AppContext>,
-    running: Arc<AtomicBool>,
-    shared_state: Arc<Mutex<SongState>>,
-) {
+fn run_recognition_loop(ctx: Arc<AppContext>, running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongState>>) {
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
 
@@ -680,37 +614,10 @@ fn run_recognition_loop(
     log_info(&ctx, "Recognition loop stopped.");
 }
 
-/// Resolves the selected display preset from config.
-///
-/// The operator-selected `display.orientation` is used as a key into the
-/// `display_presets` map. No auto-correction is performed.
-fn selected_display_preset<'a>(ctx: &'a AppContext) -> Option<&'a DisplayPreset> {
-    let key = ctx.config.display.orientation.to_ascii_lowercase();
-    ctx.config.display_presets.get(&key)
-}
-
 /// SDL display loop.
 ///
-/// This runs on the main thread and owns the full screen.
-/// It redraws continuously and reloads the artwork texture only when the
-/// shared state version changes.
-///
-/// Layout is fully config-driven:
-/// - configured width/height are trusted
-/// - configured top_panel_ratio is trusted
-/// - no portrait/landscape spacing overrides are applied
-/// SDL display loop.
-///
-/// This runs on the main thread and owns the full screen.
-/// It redraws continuously and reloads the artwork texture only when the
-/// shared state version changes.
-///
-/// Layout is fully preset-driven:
-/// - the selected display preset defines width/height
-/// - the selected display preset defines panel spacing
-/// - the selected display preset defines default font sizes
-/// - no auto-correction is performed
-
+/// The selected display preset defines the intended scene size.
+/// The actual SDL canvas may be larger; the scene is scaled to fit.
 fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
@@ -806,15 +713,33 @@ fn run_display_loop(
             }
         }
 
-        let (win_w, win_h) = canvas.output_size().map_err(|e| e.to_string())?;
-
-        if last_canvas_size != Some((win_w, win_h)) {
-            log_debug(&ctx, &format!("Canvas output size: {}x{}", win_w, win_h));
-            last_canvas_size = Some((win_w, win_h));
+        let (canvas_w, canvas_h) = canvas.output_size().map_err(|e| e.to_string())?;
+        if last_canvas_size != Some((canvas_w, canvas_h)) {
+            log_debug(&ctx, &format!("Canvas output size: {}x{}", canvas_w, canvas_h));
+            last_canvas_size = Some((canvas_w, canvas_h));
         }
 
-        let top_h = ((win_h as f32) * preset.top_panel_ratio) as u32;
-        let bottom_h = win_h - top_h;
+        // Scene size comes from the selected preset, not from the real canvas.
+        let scene_w = preset.width;
+        let scene_h = preset.height;
+        let top_h = ((scene_h as f32) * preset.top_panel_ratio) as u32;
+        let bottom_h = scene_h - top_h;
+
+        // Fit the configured scene into the actual SDL canvas.
+        let scale_x = canvas_w as f32 / scene_w as f32;
+        let scale_y = canvas_h as f32 / scene_h as f32;
+        let scene_scale = f32::min(scale_x, scale_y);
+
+        let render_w = (scene_w as f32 * scene_scale) as u32;
+        let render_h = (scene_h as f32 * scene_scale) as u32;
+
+        let offset_x = ((canvas_w - render_w) / 2) as i32;
+        let offset_y = ((canvas_h - render_h) / 2) as i32;
+
+        let sx = |x: i32| offset_x + ((x as f32) * scene_scale) as i32;
+        let sy = |y: i32| offset_y + ((y as f32) * scene_scale) as i32;
+        let sw = |w: u32| ((w as f32) * scene_scale) as u32;
+        let sh = |h: u32| ((h as f32) * scene_scale) as u32;
 
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
@@ -825,21 +750,30 @@ fn run_display_loop(
             let art_h = query.height as f32;
 
             let padding = 24.0;
-            let max_w = win_w as f32 - (padding * 2.0);
+            let max_w = scene_w as f32 - (padding * 2.0);
             let max_h = top_h as f32 - (padding * 2.0);
 
             let scale = f32::min(max_w / art_w, max_h / art_h);
             let draw_w = (art_w * scale) as u32;
             let draw_h = (art_h * scale) as u32;
 
-            let x = ((win_w - draw_w) / 2) as i32;
+            let x = ((scene_w - draw_w) / 2) as i32;
             let y = ((top_h - draw_h) / 2) as i32;
 
-            canvas.copy(texture, None, Rect::new(x, y, draw_w, draw_h))?;
+            canvas.copy(
+                texture,
+                None,
+                Rect::new(sx(x), sy(y), sw(draw_w), sh(draw_h)),
+            )?;
         }
 
         canvas.set_draw_color(Color::RGB(18, 18, 18));
-        canvas.fill_rect(Rect::new(0, top_h as i32, win_w, bottom_h))?;
+        canvas.fill_rect(Rect::new(
+            offset_x,
+            sy(top_h as i32),
+            render_w,
+            sh(bottom_h),
+        ))?;
 
         let panel_x = preset.panel_x;
         let mut panel_y = top_h as i32 + preset.panel_y;
@@ -883,8 +817,8 @@ fn run_display_loop(
             &title_font,
             &title_line,
             Color::RGB(255, 255, 255),
-            panel_x,
-            panel_y,
+            sx(panel_x),
+            sy(panel_y),
         )?;
         panel_y += preset.title_line_spacing;
 
@@ -894,8 +828,8 @@ fn run_display_loop(
             &body_font,
             &artist_line,
             Color::RGB(210, 210, 210),
-            panel_x,
-            panel_y,
+            sx(panel_x),
+            sy(panel_y),
         )?;
         panel_y += preset.body_line_spacing;
 
@@ -905,8 +839,8 @@ fn run_display_loop(
             &body_font,
             &third_line,
             Color::RGB(180, 180, 180),
-            panel_x,
-            panel_y,
+            sx(panel_x),
+            sy(panel_y),
         )?;
         panel_y += preset.detail_line_spacing;
 
@@ -922,8 +856,8 @@ fn run_display_loop(
             &body_font,
             &detail_line,
             Color::RGB(140, 140, 140),
-            panel_x,
-            panel_y,
+            sx(panel_x),
+            sy(panel_y),
         )?;
 
         canvas.present();
@@ -935,12 +869,9 @@ fn run_display_loop(
     Ok(())
 }
 
-/// Program entry point.
-///
-/// Sets up Ctrl+C handling, loads config, starts the recognizer thread,
-/// and runs the SDL display loop on the main thread.
 fn main() {
-    let config = load_config("config/songart.toml").expect("failed to load config/songart.toml");
+    let config = load_config("config/songart.toml")
+        .expect("failed to load config/songart.toml");
 
     let ctx = Arc::new(AppContext {
         log_level: parse_log_level(&config.logging.level),
