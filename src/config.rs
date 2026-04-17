@@ -48,18 +48,6 @@ pub struct DisplayConfig {
     pub frame_delay_ms: u64,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct VisualizerConfig {
-    pub enabled: bool,
-    pub mode: String,
-    pub position: String,
-    pub style: String,
-    pub height: u32,
-    pub padding: u32,
-    pub peak_hold: bool,
-    pub smoothing: f32,
-}
-
 /// A full named layout preset selected by `display.orientation`.
 #[derive(Debug, Deserialize, Clone)]
 pub struct DisplayPreset {
@@ -80,12 +68,31 @@ pub struct FontsConfig {
 }
 
 /// A single named font theme.
+///
+/// This lets the app use one font for titles and another for body text,
+/// with sizes bundled into the theme itself.
 #[derive(Debug, Deserialize, Clone)]
 pub struct FontTheme {
     pub title: String,
     pub body: String,
     pub title_size: u16,
     pub body_size: u16,
+}
+
+/// Visualizer configuration.
+///
+/// The first implementation is a simple digital mono VU meter driven from
+/// the recorded WAV sample.
+#[derive(Debug, Deserialize, Clone)]
+pub struct VisualizerConfig {
+    pub enabled: bool,
+    pub mode: String,      // off | vu
+    pub position: String,  // bottom
+    pub style: String,     // digital
+    pub height: u32,
+    pub padding: u32,
+    pub peak_hold: bool,
+    pub smoothing: f32,
 }
 
 /// Loads application configuration from a TOML file.

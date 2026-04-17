@@ -39,16 +39,6 @@ title_line_spacing = 46
 body_line_spacing = 34
 detail_line_spacing = 40
 
-[visualizer]
-enabled = true
-mode = "vu"          # off | vu
-position = "bottom"  # bottom
-style = "digital"    # digital
-height = 80
-padding = 16
-peak_hold = true
-smoothing = 0.35
-
 [fonts]
 theme = "fantasy"
 
@@ -93,3 +83,13 @@ title = "/home/admin/projects/songart/assets/fonts/GloriaHallelujah-Regular.ttf"
 body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
 title_size = 34
 body_size = 22
+
+[visualizer]
+enabled = true
+mode = "vu"          # off | vu
+position = "bottom"  # bottom
+style = "digital"    # digital
+height = 60
+padding = 16
+peak_hold = true
+smoothing = 0.35
