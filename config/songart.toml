@@ -15,7 +15,7 @@ artwork_file = "/home/admin/projects/songart/current.jpg"
 
 [display]
 window_title = "songart"
-fullscreen = true
+fullscreen = false
 orientation = "portrait"   # selects the preset below
 frame_delay_ms = 33
 
@@ -44,7 +44,7 @@ title_size = 34
 body_size = 24
 
 [fonts]
-theme = "retro"
+theme = "scripted"
 
 [font_themes.modern]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"

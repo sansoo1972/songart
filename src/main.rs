@@ -710,6 +710,7 @@ fn selected_display_preset<'a>(ctx: &'a AppContext) -> Option<&'a DisplayPreset>
 /// - the selected display preset defines panel spacing
 /// - the selected display preset defines default font sizes
 /// - no auto-correction is performed
+
 fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
@@ -761,6 +762,7 @@ fn run_display_loop(
     let mut event_pump = sdl.event_pump()?;
     let mut loaded_version: u64 = u64::MAX;
     let mut artwork_texture: Option<sdl2::render::Texture<'_>> = None;
+    let mut last_canvas_size: Option<(u32, u32)> = None;
 
     log_info(&ctx, "Display loop started.");
 
@@ -805,7 +807,11 @@ fn run_display_loop(
         }
 
         let (win_w, win_h) = canvas.output_size().map_err(|e| e.to_string())?;
-        log_debug(&ctx, &format!("Canvas output size: {}x{}", win_w, win_h));
+
+        if last_canvas_size != Some((win_w, win_h)) {
+            log_debug(&ctx, &format!("Canvas output size: {}x{}", win_w, win_h));
+            last_canvas_size = Some((win_w, win_h));
+        }
 
         let top_h = ((win_h as f32) * preset.top_panel_ratio) as u32;
         let bottom_h = win_h - top_h;
