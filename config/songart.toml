@@ -15,7 +15,7 @@ artwork_file = "/home/admin/projects/songart/current.jpg"
 
 [display]
 window_title = "songart"
-fullscreen = false
+fullscreen = true
 orientation = "portrait"   # selects the preset below
 frame_delay_ms = 33
 
@@ -44,7 +44,7 @@ title_size = 34
 body_size = 24
 
 [fonts]
-theme = "scripted"
+theme = "fantasy"
 
 [font_themes.modern]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
@@ -67,7 +67,7 @@ title = "/home/admin/projects/songart/assets/fonts/SpecialElite-Regular.ttf"
 body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
 
 [font_themes.fantasy]
-title = "/home/admin/projects/songart/assets/fonts/Elvencommonspeak-0WVxz.ttf"
+title = "/home/admin/projects/songart/assets/fonts/Elvencommonspeak-0WXz.ttf"
 body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
 
 [font_themes.scripted]
