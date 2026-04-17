@@ -479,15 +479,7 @@ fn draw_text_line(
         .map_err(|e| e.to_string())?;
 
     let target = Rect::new(x, y, surface.width(), surface.height());
-    canvas.copy_ex(
-        texture,
-        None,
-        Rect::new(x, y, draw_w, draw_h),
-        ctx.config.display.rotation as f64,
-        None,
-        false,
-        false,
-    )?;
+    canvas.copy(&texture, None, target)?;
     Ok(())
 }
 
