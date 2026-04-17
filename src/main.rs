@@ -398,7 +398,7 @@ fn download_best_artwork(ctx: &AppContext, json: &Value, output_path: &str) -> R
         fs::rename(&tmp_path, output_path)
             .map_err(|e| format!("Failed to rename temp artwork to {}: {e}", output_path))?;
 
-        Ok(candidate)?
+        return Ok(candidate);
     }
 
     Err("No usable artwork URL succeeded".to_string())
