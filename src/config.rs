@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub display_presets: HashMap<String, DisplayPreset>,
     pub fonts: FontsConfig,
     pub font_themes: HashMap<String, FontTheme>,
+    pub visualizer: VisualizerConfig,
 }
 
 /// Logging configuration.
@@ -45,6 +46,18 @@ pub struct DisplayConfig {
     pub fullscreen: bool,
     pub orientation: String,
     pub frame_delay_ms: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct VisualizerConfig {
+    pub enabled: bool,
+    pub mode: String,
+    pub position: String,
+    pub style: String,
+    pub height: u32,
+    pub padding: u32,
+    pub peak_hold: bool,
+    pub smoothing: f32,
 }
 
 /// A full named layout preset selected by `display.orientation`.

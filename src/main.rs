@@ -17,21 +17,18 @@
 
 mod config;
 
-use crate::config::{load_config, AppConfig, DisplayPreset};
+use crate::config::{ load_config, AppConfig, DisplayPreset };
 use sdl2::event::Event;
-use sdl2::image::{InitFlag, LoadTexture};
+use sdl2::image::{ InitFlag, LoadTexture };
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 use serde_json::Value;
-use std::fs::{self, OpenOptions};
+use std::fs::{ self, OpenOptions };
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
 use std::time::Duration;
 
@@ -41,6 +38,12 @@ enum LogLevel {
     Error = 1,
     Info = 2,
     Debug = 3,
+}
+
+#[derive(Clone, Debug, Default)]
+struct MeterState {
+    level: f32,
+    peak: f32,
 }
 
 /// Shared runtime context.
@@ -65,6 +68,7 @@ struct SongState {
     artwork_path: String,
     artwork_url: String,
     version: u64,
+    meter: MeterState,
 }
 
 impl Default for SongState {
@@ -81,9 +85,36 @@ impl Default for SongState {
             notes: "Listening for audio input".to_string(),
             artwork_path: String::new(),
             artwork_url: String::new(),
+            meter: MeterState::default(),
             version: 0,
         }
     }
+}
+
+fn compute_wav_rms_level(path: &str) -> Option<f32> {
+    let bytes = fs::read(path).ok()?;
+    if bytes.len() <= 44 {
+        return None;
+    }
+
+    let pcm = &bytes[44..];
+    let mut sum = 0.0f64;
+    let mut count = 0usize;
+
+    for chunk in pcm.chunks_exact(2) {
+        let sample = (i16::from_le_bytes([chunk[0], chunk[1]]) as f64) / (i16::MAX as f64);
+        sum += sample * sample;
+        count += 1;
+    }
+
+    if count == 0 {
+        return None;
+    }
+
+    let rms = (sum / (count as f64)).sqrt() as f32;
+
+    // Boost a bit for UI readability, then clamp.
+    Some((rms * 3.0).clamp(0.0, 1.0))
 }
 
 /// Converts a configured log level string into the enum used by the app.
@@ -123,10 +154,11 @@ fn log_message(ctx: &AppContext, level: LogLevel, message: &str) {
     let line = format!("[{}] [{:?}] {}", timestamp_string(), level, message);
     println!("{line}");
 
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&ctx.config.logging.file)
+    if
+        let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&ctx.config.logging.file)
     {
         let _ = writeln!(file, "{line}");
     }
@@ -151,10 +183,11 @@ fn log_blank(ctx: &AppContext) {
 
     println!();
 
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&ctx.config.logging.file)
+    if
+        let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&ctx.config.logging.file)
     {
         let _ = writeln!(file);
     }
@@ -206,17 +239,11 @@ fn extract_track_number(json: &Value) -> String {
 }
 
 fn extract_genre(json: &Value) -> String {
-    json["track"]["genres"]["primary"]
-        .as_str()
-        .unwrap_or("Unknown")
-        .to_string()
+    json["track"]["genres"]["primary"].as_str().unwrap_or("Unknown").to_string()
 }
 
 fn extract_isrc(json: &Value) -> String {
-    json["track"]["isrc"]
-        .as_str()
-        .unwrap_or("Unknown")
-        .to_string()
+    json["track"]["isrc"].as_str().unwrap_or("Unknown").to_string()
 }
 
 fn extract_notes(json: &Value) -> String {
@@ -311,7 +338,11 @@ fn pick_artwork_url(json: &Value) -> Option<String> {
 }
 
 /// Downloads the best available artwork and writes it atomically.
-fn download_best_artwork(ctx: &AppContext, json: &Value, output_path: &str) -> Result<String, String> {
+fn download_best_artwork(
+    ctx: &AppContext,
+    json: &Value,
+    output_path: &str
+) -> Result<String, String> {
     let mut base_urls = Vec::new();
 
     if let Some(url) = json["track"]["images"]["coverarthq"].as_str() {
@@ -336,7 +367,8 @@ fn download_best_artwork(ctx: &AppContext, json: &Value, output_path: &str) -> R
         return Err("No artwork URL found in JSON".to_string());
     }
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::blocking::Client
+        ::builder()
         .user_agent("songart/0.1")
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
@@ -373,19 +405,18 @@ fn download_best_artwork(ctx: &AppContext, json: &Value, output_path: &str) -> R
         };
 
         if bytes.len() < 10_000 {
-            log_debug(
-                ctx,
-                &format!("Rejected tiny image ({} bytes): {}", bytes.len(), candidate),
-            );
+            log_debug(ctx, &format!("Rejected tiny image ({} bytes): {}", bytes.len(), candidate));
             continue;
         }
 
         let tmp_path = format!("{output_path}.tmp");
 
-        fs::write(&tmp_path, &bytes)
+        fs
+            ::write(&tmp_path, &bytes)
             .map_err(|e| format!("Failed to save temp artwork to {}: {e}", tmp_path))?;
 
-        fs::rename(&tmp_path, output_path)
+        fs
+            ::rename(&tmp_path, output_path)
             .map_err(|e| format!("Failed to rename temp artwork to {}: {e}", output_path))?;
 
         return Ok(candidate);
@@ -434,7 +465,7 @@ fn draw_text_line(
     text: &str,
     color: Color,
     x: i32,
-    y: i32,
+    y: i32
 ) -> Result<(), String> {
     let safe_text = if text.trim().is_empty() { " " } else { text };
 
@@ -443,16 +474,18 @@ fn draw_text_line(
         .blended(color)
         .map_err(|e| e.to_string())?;
 
-    let texture = texture_creator
-        .create_texture_from_surface(&surface)
-        .map_err(|e| e.to_string())?;
+    let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
 
     let target = Rect::new(x, y, surface.width(), surface.height());
     canvas.copy(&texture, None, target)?;
     Ok(())
 }
 
-fn run_recognition_loop(ctx: Arc<AppContext>, running: Arc<AtomicBool>, shared_state: Arc<Mutex<SongState>>) {
+fn run_recognition_loop(
+    ctx: Arc<AppContext>,
+    running: Arc<AtomicBool>,
+    shared_state: Arc<Mutex<SongState>>
+) {
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
 
@@ -495,9 +528,34 @@ fn run_recognition_loop(ctx: Arc<AppContext>, running: Arc<AtomicBool>, shared_s
             break;
         }
 
-        let output = match Command::new(&ctx.config.paths.songrec_bin)
-            .args(["recognize", &ctx.config.audio.sample_wav, "--json"])
-            .output()
+        // Update the VU meter from the most recently recorded sample.
+        // This happens before SongRec so the UI still gets level updates
+        // even when track recognition returns no match.
+        
+        if ctx.config.visualizer.enabled && ctx.config.visualizer.mode == "vu" {
+            if let Some(raw_level) = compute_wav_rms_level(&ctx.config.audio.sample_wav) {
+                let mut state = shared_state.lock().unwrap();
+
+                let smoothing = ctx.config.visualizer.smoothing.clamp(0.0, 1.0);
+
+                state.meter.level = state.meter.level * smoothing + raw_level * (1.0 - smoothing);
+
+                if ctx.config.visualizer.peak_hold {
+                    if state.meter.level > state.meter.peak {
+                        state.meter.peak = state.meter.level;
+                    } else {
+                        state.meter.peak *= 0.96;
+                    }
+                } else {
+                    state.meter.peak = state.meter.level;
+                }
+            }
+        }
+
+        let output = match
+            Command::new(&ctx.config.paths.songrec_bin)
+                .args(["recognize", &ctx.config.audio.sample_wav, "--json"])
+                .output()
         {
             Ok(output) => output,
             Err(e) => {
@@ -624,20 +682,21 @@ fn run_recognition_loop(ctx: Arc<AppContext>, running: Arc<AtomicBool>, shared_s
 fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
-    shared_state: Arc<Mutex<SongState>>,
+    shared_state: Arc<Mutex<SongState>>
 ) -> Result<(), String> {
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
     let _image_ctx = sdl2::image::init(InitFlag::JPG | InitFlag::PNG)?;
     let ttf_ctx = sdl2::ttf::init().map_err(|e| e.to_string())?;
 
-    let preset = selected_display_preset(&ctx)
-        .ok_or_else(|| format!("Unknown display preset: {}", ctx.config.display.orientation))?;
+    let preset = selected_display_preset(&ctx).ok_or_else(||
+        format!("Unknown display preset: {}", ctx.config.display.orientation)
+    )?;
 
     let mut window_builder = video.window(
         &ctx.config.display.window_title,
         preset.width,
-        preset.height,
+        preset.height
     );
     window_builder.position_centered();
 
@@ -680,11 +739,7 @@ fn run_display_loop(
     while running.load(Ordering::SeqCst) {
         for event in event_pump.poll_iter() {
             match event {
-                Event::Quit { .. }
-                | Event::KeyDown {
-                    keycode: Some(Keycode::Escape),
-                    ..
-                } => {
+                Event::Quit { .. } | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
                     running.store(false, Ordering::SeqCst);
                 }
                 _ => {}
@@ -706,8 +761,9 @@ fn run_display_loop(
                             &ctx,
                             &format!(
                                 "Renderer loaded artwork version {} from {}",
-                                loaded_version, state.artwork_path
-                            ),
+                                loaded_version,
+                                state.artwork_path
+                            )
                         );
                     }
                     Err(e) => {
@@ -730,18 +786,18 @@ fn run_display_loop(
         let bottom_h = scene_h - top_h;
 
         // Fit the configured scene into the actual SDL canvas.
-        let scale_x = canvas_w as f32 / scene_w as f32;
-        let scale_y = canvas_h as f32 / scene_h as f32;
+        let scale_x = (canvas_w as f32) / (scene_w as f32);
+        let scale_y = (canvas_h as f32) / (scene_h as f32);
         let scene_scale = f32::min(scale_x, scale_y);
 
-        let render_w = (scene_w as f32 * scene_scale) as u32;
-        let render_h = (scene_h as f32 * scene_scale) as u32;
+        let render_w = ((scene_w as f32) * scene_scale) as u32;
+        let render_h = ((scene_h as f32) * scene_scale) as u32;
 
         let offset_x = ((canvas_w - render_w) / 2) as i32;
         let offset_y = ((canvas_h - render_h) / 2) as i32;
 
-        let sx = |x: i32| offset_x + ((x as f32) * scene_scale) as i32;
-        let sy = |y: i32| offset_y + ((y as f32) * scene_scale) as i32;
+        let sx = |x: i32| offset_x + (((x as f32) * scene_scale) as i32);
+        let sy = |y: i32| offset_y + (((y as f32) * scene_scale) as i32);
         let sw = |w: u32| ((w as f32) * scene_scale) as u32;
         let sh = |h: u32| ((h as f32) * scene_scale) as u32;
 
@@ -754,8 +810,8 @@ fn run_display_loop(
             let art_h = query.height as f32;
 
             let padding = 24.0;
-            let max_w = scene_w as f32 - (padding * 2.0);
-            let max_h = top_h as f32 - (padding * 2.0);
+            let max_w = (scene_w as f32) - padding * 2.0;
+            let max_h = (top_h as f32) - padding * 2.0;
 
             let scale = f32::min(max_w / art_w, max_h / art_h);
             let draw_w = (art_w * scale) as u32;
@@ -764,23 +820,14 @@ fn run_display_loop(
             let x = ((scene_w - draw_w) / 2) as i32;
             let y = ((top_h - draw_h) / 2) as i32;
 
-            canvas.copy(
-                texture,
-                None,
-                Rect::new(sx(x), sy(y), sw(draw_w), sh(draw_h)),
-            )?;
+            canvas.copy(texture, None, Rect::new(sx(x), sy(y), sw(draw_w), sh(draw_h)))?;
         }
 
         canvas.set_draw_color(Color::RGB(18, 18, 18));
-        canvas.fill_rect(Rect::new(
-            offset_x,
-            sy(top_h as i32),
-            render_w,
-            sh(bottom_h),
-        ))?;
+        canvas.fill_rect(Rect::new(offset_x, sy(top_h as i32), render_w, sh(bottom_h)))?;
 
         let panel_x = preset.panel_x;
-        let mut panel_y = top_h as i32 + preset.panel_y;
+        let mut panel_y = (top_h as i32) + preset.panel_y;
 
         let title_line = ellipsize(
             if state.title.trim().is_empty() {
@@ -788,7 +835,7 @@ fn run_display_loop(
             } else {
                 &state.title
             },
-            48,
+            48
         );
 
         let artist_line = ellipsize(
@@ -797,7 +844,7 @@ fn run_display_loop(
             } else {
                 &state.artist
             },
-            56,
+            56
         );
 
         let mut third_line = state.album.clone();
@@ -822,7 +869,7 @@ fn run_display_loop(
             &title_line,
             Color::RGB(255, 255, 255),
             sx(panel_x),
-            sy(panel_y),
+            sy(panel_y)
         )?;
         panel_y += preset.title_line_spacing;
 
@@ -833,7 +880,7 @@ fn run_display_loop(
             &artist_line,
             Color::RGB(210, 210, 210),
             sx(panel_x),
-            sy(panel_y),
+            sy(panel_y)
         )?;
         panel_y += preset.body_line_spacing;
 
@@ -844,7 +891,7 @@ fn run_display_loop(
             &third_line,
             Color::RGB(180, 180, 180),
             sx(panel_x),
-            sy(panel_y),
+            sy(panel_y)
         )?;
         panel_y += preset.detail_line_spacing;
 
@@ -861,7 +908,7 @@ fn run_display_loop(
             &detail_line,
             Color::RGB(140, 140, 140),
             sx(panel_x),
-            sy(panel_y),
+            sy(panel_y)
         )?;
 
         canvas.present();
@@ -874,8 +921,7 @@ fn run_display_loop(
 }
 
 fn main() {
-    let config = load_config("config/songart.toml")
-        .expect("failed to load config/songart.toml");
+    let config = load_config("config/songart.toml").expect("failed to load config/songart.toml");
 
     let ctx = Arc::new(AppContext {
         log_level: parse_log_level(&config.logging.level),
@@ -889,10 +935,11 @@ fn main() {
     let running = Arc::new(AtomicBool::new(true));
     let running_flag = Arc::clone(&running);
 
-    ctrlc::set_handler(move || {
-        running_flag.store(false, Ordering::SeqCst);
-    })
-    .expect("failed to set Ctrl-C handler");
+    ctrlc
+        ::set_handler(move || {
+            running_flag.store(false, Ordering::SeqCst);
+        })
+        .expect("failed to set Ctrl-C handler");
 
     let shared_state = Arc::new(Mutex::new(SongState::default()));
 
@@ -907,7 +954,7 @@ fn main() {
     let display_result = run_display_loop(
         Arc::clone(&ctx),
         Arc::clone(&running),
-        Arc::clone(&shared_state),
+        Arc::clone(&shared_state)
     );
 
     running.store(false, Ordering::SeqCst);

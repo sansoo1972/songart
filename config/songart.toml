@@ -39,6 +39,16 @@ title_line_spacing = 46
 body_line_spacing = 34
 detail_line_spacing = 40
 
+[visualizer]
+enabled = true
+mode = "vu"          # off | vu
+position = "bottom"  # bottom
+style = "digital"    # digital
+height = 80
+padding = 16
+peak_hold = true
+smoothing = 0.35
+
 [fonts]
 theme = "fantasy"
 
