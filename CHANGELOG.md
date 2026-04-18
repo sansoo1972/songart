@@ -2,26 +2,33 @@
 
 All notable changes to `songart` will be documented in this file.
 
-## [Unreleased]
+## [0.9.0] - 2026-04-17
 
 ### Added
+- Modular source layout:
+  - `main.rs`
+  - `config.rs`
+  - `logging.rs`
+  - `state.rs`
+  - `audio.rs`
+  - `recognition.rs`
+  - `display.rs`
 - External TOML-based runtime configuration
-- `config/songart.toml` for runtime behavior
-- `src/config.rs` for configuration structs and loader
-- SDL-based artwork and metadata renderer
-- Display presets for portrait and landscape scene definitions
+- Config-driven display presets for portrait and landscape
 - Theme-based font selection
 - Theme-based font sizing
 - Support for custom font assets under `assets/fonts`
+- Live digital VU meter
+- Visualizer configuration block in `songart.toml`
 - Timestamped logging with log levels
-- Graceful Ctrl+C shutdown handling
 - Structured now-playing debug output
-- Placeholder UI state before first track recognition
+- Graceful Ctrl+C shutdown handling
 - MIT license
 
 ### Changed
 - Replaced framebuffer `fbi`-based display approach with SDL rendering
-- Refactored the app around a shared runtime context
+- Refactored the application around shared app/song/meter state
+- Split a large single-file runtime into focused modules
 - Moved environment-specific settings out of `main.rs`
 - Moved display sizing and layout spacing into TOML display presets
 - Moved font sizing into TOML font theme definitions
@@ -29,7 +36,7 @@ All notable changes to `songart` will be documented in this file.
 - Improved artwork candidate selection to prioritize higher-resolution Apple-hosted variants
 - Improved duplicate suppression for repeated track/artwork states
 - Switched to temp-file + rename for safer artwork updates
-- Updated README to reflect config-driven operation and display/font presets
+- Updated project docs to reflect config-driven operation and modular architecture
 
 ### Fixed
 - Empty text rendering causing SDL_ttf “Text has zero width” errors
@@ -39,7 +46,7 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
-## [0.1.0] - Initial working prototype
+## [1.0.0]
 
 ### Added
 - Song recognition using SongRec
