@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio metering for Raspbe
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and a live digital VU meter.
 
-Version 2.0 introduces a modular codebase, config-driven display presets, theme-based typography, and a live visualizer.
+Version 0.9.0 introduces a modular codebase, config-driven display presets, theme-based typography, and a live visualizer.
 
 ---
 
@@ -291,28 +291,7 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **2.0.0**.
-
-Recommended version tracking on GitHub:
-
-1. Update the version in `Cargo.toml`
-2. Commit the release changes
-3. Create a Git tag such as `v2.0.0`
-4. Push the tag
-5. Create a GitHub Release from that tag
-
-Example:
-
-```bash
-git tag -a v2.0.0 -m "songart 2.0.0"
-git push origin main --tags
-```
-
-Suggested versioning approach:
-- `2.0.0` = major release with module split and VU meter
-- `2.0.1` = small fixes
-- `2.1.0` = backward-compatible feature additions
-- `3.0.0` = major architectural change
+This project is now at **0.9.0**.
 
 ---
 
@@ -354,4 +333,4 @@ Richard (`sansoo1972`)
 
 ## License
 
-MIT
+This project is licensed under the [MIT License](LICENSE).
