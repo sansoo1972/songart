@@ -68,9 +68,6 @@ pub struct FontsConfig {
 }
 
 /// A single named font theme.
-///
-/// This lets the app use one font for titles and another for body text,
-/// with sizes bundled into the theme itself.
 #[derive(Debug, Deserialize, Clone)]
 pub struct FontTheme {
     pub title: String,
@@ -80,15 +77,12 @@ pub struct FontTheme {
 }
 
 /// Visualizer configuration.
-///
-/// The first implementation is a simple digital mono VU meter driven from
-/// the recorded WAV sample.
 #[derive(Debug, Deserialize, Clone)]
 pub struct VisualizerConfig {
     pub enabled: bool,
-    pub mode: String,      // off | vu
-    pub position: String,  // bottom
-    pub style: String,     // digital
+    pub mode: String,
+    pub position: String,
+    pub style: String,
     pub height: u32,
     pub padding: u32,
     pub peak_hold: bool,
