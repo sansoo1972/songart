@@ -1,18 +1,16 @@
 use crate::config::DisplayPreset;
-use crate::logging::{log_debug, log_error, log_info};
-use crate::state::{AppContext, SongState};
+use crate::logging::{ log_debug, log_error, log_info };
+use crate::state::{ AppContext, SongState };
+use crate::visualizer::VisualizerMode;
 
 use sdl2::event::Event;
-use sdl2::image::{InitFlag, LoadTexture};
+use sdl2::image::{ InitFlag, LoadTexture };
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
-use sdl2::rect::Rect;
+use sdl2::rect::{ Point, Rect };
 
 use std::path::Path;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
 use std::time::Duration;
 
@@ -23,6 +21,7 @@ fn ellipsize(input: &str, max_chars: usize) -> String {
     }
 
     let trimmed: String = chars.into_iter().take(max_chars.saturating_sub(1)).collect();
+
     format!("{trimmed}…")
 }
 
@@ -55,7 +54,7 @@ fn draw_text_line(
     text: &str,
     color: Color,
     x: i32,
-    y: i32,
+    y: i32
 ) -> Result<(), String> {
     let safe_text = if text.trim().is_empty() { " " } else { text };
 
@@ -64,9 +63,7 @@ fn draw_text_line(
         .blended(color)
         .map_err(|e| e.to_string())?;
 
-    let texture = texture_creator
-        .create_texture_from_surface(&surface)
-        .map_err(|e| e.to_string())?;
+    let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
 
     let target = Rect::new(x, y, surface.width(), surface.height());
     canvas.copy(&texture, None, target)?;
@@ -81,7 +78,7 @@ fn draw_vu_meter(
     x: i32,
     y: i32,
     width: u32,
-    height: u32,
+    height: u32
 ) -> Result<(), String> {
     let level = level.clamp(0.0, 1.0);
     let peak = peak.clamp(0.0, 1.0);
@@ -93,11 +90,176 @@ fn draw_vu_meter(
     canvas.set_draw_color(Color::RGB(80, 220, 120));
     canvas.fill_rect(Rect::new(x, y, fill_w, height))?;
 
-    let peak_x = x + ((width as f32) * peak) as i32;
+    let peak_x = x + (((width as f32) * peak) as i32);
     canvas.set_draw_color(Color::RGB(255, 255, 255));
     canvas.fill_rect(Rect::new(peak_x.saturating_sub(1), y, 2, height))?;
 
     Ok(())
+}
+
+fn draw_polyline(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    points: &[(f32, f32)],
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    color: Color
+) -> Result<(), String> {
+    if points.len() < 2 {
+        return Ok(());
+    }
+
+    canvas.set_draw_color(color);
+
+    for pair in points.windows(2) {
+        let (x1n, y1n) = pair[0];
+        let (x2n, y2n) = pair[1];
+
+        let x1 = x + ((x1n.clamp(0.0, 1.0) * (width as f32)) as i32);
+        let y1 = y + ((y1n.clamp(0.0, 1.0) * (height as f32)) as i32);
+        let x2 = x + ((x2n.clamp(0.0, 1.0) * (width as f32)) as i32);
+        let y2 = y + ((y2n.clamp(0.0, 1.0) * (height as f32)) as i32);
+
+        canvas.draw_line(Point::new(x1, y1), Point::new(x2, y2))?;
+    }
+
+    Ok(())
+}
+
+fn draw_oscilloscope(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    left_points: &[(f32, f32)],
+    right_points: &[(f32, f32)],
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32
+) -> Result<(), String> {
+    canvas.set_draw_color(Color::RGB(10, 10, 10));
+    canvas.fill_rect(Rect::new(x, y, width, height))?;
+
+    // Simple guide lines for upper and lower channel centers.
+    canvas.set_draw_color(Color::RGB(40, 40, 40));
+    canvas.draw_line(
+        Point::new(x, y + (height as i32) / 4),
+        Point::new(x + (width as i32), y + (height as i32) / 4)
+    )?;
+    canvas.draw_line(
+        Point::new(x, y + ((height as i32) * 3) / 4),
+        Point::new(x + (width as i32), y + ((height as i32) * 3) / 4)
+    )?;
+
+    draw_polyline(canvas, left_points, x, y, width, height, Color::RGB(80, 220, 120))?;
+
+    draw_polyline(canvas, right_points, x, y, width, height, Color::RGB(80, 160, 255))?;
+
+    Ok(())
+}
+
+fn draw_analog_needle(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    points: &[(f32, f32)],
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    color: Color
+) -> Result<(), String> {
+    if points.len() < 2 {
+        return Ok(());
+    }
+
+    let (x1n, y1n) = points[0];
+    let (x2n, y2n) = points[1];
+
+    let x1 = x + ((x1n.clamp(0.0, 1.0) * (width as f32)) as i32);
+    let y1 = y + ((y1n.clamp(0.0, 1.0) * (height as f32)) as i32);
+    let x2 = x + ((x2n.clamp(0.0, 1.0) * (width as f32)) as i32);
+    let y2 = y + ((y2n.clamp(0.0, 1.0) * (height as f32)) as i32);
+
+    canvas.set_draw_color(color);
+    canvas.draw_line(Point::new(x1, y1), Point::new(x2, y2))?;
+    Ok(())
+}
+
+fn draw_analog_vu(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    left_points: &[(f32, f32)],
+    right_points: &[(f32, f32)],
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32
+) -> Result<(), String> {
+    canvas.set_draw_color(Color::RGB(18, 18, 18));
+    canvas.fill_rect(Rect::new(x, y, width, height))?;
+
+    let half_w = width / 2;
+
+    let left_rect = Rect::new(x, y, half_w.saturating_sub(4), height);
+    let right_rect = Rect::new(x + (half_w as i32) + 4, y, half_w.saturating_sub(4), height);
+
+    canvas.set_draw_color(Color::RGB(50, 50, 50));
+    canvas.draw_rect(left_rect)?;
+    canvas.draw_rect(right_rect)?;
+
+    draw_analog_needle(
+        canvas,
+        left_points,
+        left_rect.x(),
+        left_rect.y(),
+        left_rect.width(),
+        left_rect.height(),
+        Color::RGB(255, 220, 120)
+    )?;
+
+    draw_analog_needle(
+        canvas,
+        right_points,
+        right_rect.x(),
+        right_rect.y(),
+        right_rect.width(),
+        right_rect.height(),
+        Color::RGB(255, 220, 120)
+    )?;
+
+    Ok(())
+}
+
+fn draw_visualizer(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    state: &SongState,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32
+) -> Result<(), String> {
+    match state.visualizer.mode {
+        VisualizerMode::None => Ok(()),
+
+        VisualizerMode::Oscilloscope | VisualizerMode::Spectrum =>
+            draw_oscilloscope(
+                canvas,
+                &state.visualizer.frame.left_points,
+                &state.visualizer.frame.right_points,
+                x,
+                y,
+                width,
+                height
+            ),
+
+        VisualizerMode::AnalogVu =>
+            draw_analog_vu(
+                canvas,
+                &state.visualizer.frame.left_points,
+                &state.visualizer.frame.right_points,
+                x,
+                y,
+                width,
+                height
+            ),
+    }
 }
 
 /// SDL display loop.
@@ -107,20 +269,21 @@ fn draw_vu_meter(
 pub fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
-    shared_state: Arc<Mutex<SongState>>,
+    shared_state: Arc<Mutex<SongState>>
 ) -> Result<(), String> {
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
     let _image_ctx = sdl2::image::init(InitFlag::JPG | InitFlag::PNG)?;
     let ttf_ctx = sdl2::ttf::init().map_err(|e| e.to_string())?;
 
-    let preset = selected_display_preset(&ctx)
-        .ok_or_else(|| format!("Unknown display preset: {}", ctx.config.display.orientation))?;
+    let preset = selected_display_preset(&ctx).ok_or_else(||
+        format!("Unknown display preset: {}", ctx.config.display.orientation)
+    )?;
 
     let mut window_builder = video.window(
         &ctx.config.display.window_title,
         preset.width,
-        preset.height,
+        preset.height
     );
     window_builder.position_centered();
 
@@ -162,11 +325,7 @@ pub fn run_display_loop(
     while running.load(Ordering::SeqCst) {
         for event in event_pump.poll_iter() {
             match event {
-                Event::Quit { .. }
-                | Event::KeyDown {
-                    keycode: Some(Keycode::Escape),
-                    ..
-                } => {
+                Event::Quit { .. } | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
                     running.store(false, Ordering::SeqCst);
                 }
                 _ => {}
@@ -188,14 +347,18 @@ pub fn run_display_loop(
                             &ctx,
                             &format!(
                                 "Renderer loaded artwork version {} from {}",
-                                loaded_version, state.artwork_path
-                            ),
+                                loaded_version,
+                                state.artwork_path
+                            )
                         );
                     }
                     Err(e) => {
                         log_error(&ctx, &format!("Renderer failed to load artwork: {e}"));
                     }
                 }
+            } else {
+                artwork_texture = None;
+                loaded_version = state.version;
             }
         }
 
@@ -210,18 +373,18 @@ pub fn run_display_loop(
         let top_h = ((scene_h as f32) * preset.top_panel_ratio) as u32;
         let bottom_h = scene_h - top_h;
 
-        let scale_x = canvas_w as f32 / scene_w as f32;
-        let scale_y = canvas_h as f32 / scene_h as f32;
+        let scale_x = (canvas_w as f32) / (scene_w as f32);
+        let scale_y = (canvas_h as f32) / (scene_h as f32);
         let scene_scale = f32::min(scale_x, scale_y);
 
-        let render_w = (scene_w as f32 * scene_scale) as u32;
-        let render_h = (scene_h as f32 * scene_scale) as u32;
+        let render_w = ((scene_w as f32) * scene_scale) as u32;
+        let render_h = ((scene_h as f32) * scene_scale) as u32;
 
         let offset_x = ((canvas_w - render_w) / 2) as i32;
         let offset_y = ((canvas_h - render_h) / 2) as i32;
 
-        let sx = |x: i32| offset_x + ((x as f32) * scene_scale) as i32;
-        let sy = |y: i32| offset_y + ((y as f32) * scene_scale) as i32;
+        let sx = |x: i32| offset_x + (((x as f32) * scene_scale) as i32);
+        let sy = |y: i32| offset_y + (((y as f32) * scene_scale) as i32);
         let sw = |w: u32| ((w as f32) * scene_scale) as u32;
         let sh = |h: u32| ((h as f32) * scene_scale) as u32;
 
@@ -234,8 +397,8 @@ pub fn run_display_loop(
             let art_h = query.height as f32;
 
             let padding = 24.0;
-            let max_w = scene_w as f32 - (padding * 2.0);
-            let max_h = top_h as f32 - (padding * 2.0);
+            let max_w = (scene_w as f32) - padding * 2.0;
+            let max_h = (top_h as f32) - padding * 2.0;
 
             let scale = f32::min(max_w / art_w, max_h / art_h);
             let draw_w = (art_w * scale) as u32;
@@ -251,7 +414,7 @@ pub fn run_display_loop(
         canvas.fill_rect(Rect::new(offset_x, sy(top_h as i32), render_w, sh(bottom_h)))?;
 
         let panel_x = preset.panel_x;
-        let mut panel_y = top_h as i32 + preset.panel_y;
+        let mut panel_y = (top_h as i32) + preset.panel_y;
 
         let title_line = ellipsize(
             if state.title.trim().is_empty() {
@@ -259,7 +422,7 @@ pub fn run_display_loop(
             } else {
                 &state.title
             },
-            48,
+            48
         );
 
         let artist_line = ellipsize(
@@ -268,7 +431,7 @@ pub fn run_display_loop(
             } else {
                 &state.artist
             },
-            56,
+            56
         );
 
         let mut third_line = state.album.clone();
@@ -293,7 +456,7 @@ pub fn run_display_loop(
             &title_line,
             Color::RGB(255, 255, 255),
             sx(panel_x),
-            sy(panel_y),
+            sy(panel_y)
         )?;
         panel_y += preset.title_line_spacing;
 
@@ -304,7 +467,7 @@ pub fn run_display_loop(
             &artist_line,
             Color::RGB(210, 210, 210),
             sx(panel_x),
-            sy(panel_y),
+            sy(panel_y)
         )?;
         panel_y += preset.body_line_spacing;
 
@@ -315,7 +478,7 @@ pub fn run_display_loop(
             &third_line,
             Color::RGB(180, 180, 180),
             sx(panel_x),
-            sy(panel_y),
+            sy(panel_y)
         )?;
         panel_y += preset.detail_line_spacing;
 
@@ -332,21 +495,35 @@ pub fn run_display_loop(
             &detail_line,
             Color::RGB(140, 140, 140),
             sx(panel_x),
-            sy(panel_y),
+            sy(panel_y)
         )?;
 
-        if ctx.config.visualizer.enabled
-            && ctx.config.visualizer.mode == "vu"
-            && ctx.config.visualizer.position == "bottom"
+        if ctx.config.visualizer.enabled && state.visualizer.enabled {
+            let vis_h = ctx.config.visualizer.height.min(bottom_h.saturating_sub(8));
+
+            let vis_y_scene =
+                (scene_h as i32) - (vis_h as i32) - (ctx.config.visualizer.padding as i32);
+            let vis_x_scene = ctx.config.visualizer.padding as i32;
+            let vis_w_scene = scene_w.saturating_sub(ctx.config.visualizer.padding * 2);
+
+            draw_visualizer(
+                &mut canvas,
+                &state,
+                sx(vis_x_scene),
+                sy(vis_y_scene),
+                sw(vis_w_scene),
+                sh(vis_h)
+            )?;
+        } else if
+            ctx.config.visualizer.enabled &&
+            ctx.config.visualizer.mode == "vu" &&
+            ctx.config.visualizer.position == "bottom"
         {
-            let vu_h = ctx
-                .config
-                .visualizer
-                .height
-                .min(bottom_h.saturating_sub(8));
+            // Fallback for older config/state usage.
+            let vu_h = ctx.config.visualizer.height.min(bottom_h.saturating_sub(8));
 
             let vu_y_scene =
-                scene_h as i32 - vu_h as i32 - ctx.config.visualizer.padding as i32;
+                (scene_h as i32) - (vu_h as i32) - (ctx.config.visualizer.padding as i32);
             let vu_x_scene = ctx.config.visualizer.padding as i32;
             let vu_w_scene = scene_w.saturating_sub(ctx.config.visualizer.padding * 2);
 
@@ -357,12 +534,11 @@ pub fn run_display_loop(
                 sx(vu_x_scene),
                 sy(vu_y_scene),
                 sw(vu_w_scene),
-                sh(vu_h),
+                sh(vu_h)
             )?;
         }
 
         canvas.present();
-
         thread::sleep(Duration::from_millis(ctx.config.display.frame_delay_ms));
     }
 

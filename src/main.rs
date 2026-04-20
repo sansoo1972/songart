@@ -4,22 +4,19 @@ mod display;
 mod logging;
 mod recognition;
 mod state;
+mod visualizer;
 
 use crate::config::load_config;
 use crate::display::run_display_loop;
-use crate::logging::{parse_log_level, reset_log_file, should_log, LogLevel};
+use crate::logging::{ parse_log_level, reset_log_file, should_log, LogLevel };
 use crate::recognition::run_recognition_loop;
-use crate::state::{AppContext, SongState};
+use crate::state::{ AppContext, SongState };
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
 
 fn main() {
-    let config =
-        load_config("config/songart.toml").expect("failed to load config/songart.toml");
+    let config = load_config("config/songart.toml").expect("failed to load config/songart.toml");
 
     let ctx = Arc::new(AppContext {
         log_level: parse_log_level(&config.logging.level),
@@ -33,10 +30,11 @@ fn main() {
     let running = Arc::new(AtomicBool::new(true));
     let running_flag = Arc::clone(&running);
 
-    ctrlc::set_handler(move || {
-        running_flag.store(false, Ordering::SeqCst);
-    })
-    .expect("failed to set Ctrl-C handler");
+    ctrlc
+        ::set_handler(move || {
+            running_flag.store(false, Ordering::SeqCst);
+        })
+        .expect("failed to set Ctrl-C handler");
 
     let shared_state = Arc::new(Mutex::new(SongState::default()));
 
@@ -51,7 +49,7 @@ fn main() {
     let display_result = run_display_loop(
         Arc::clone(&ctx),
         Arc::clone(&running),
-        Arc::clone(&shared_state),
+        Arc::clone(&shared_state)
     );
 
     running.store(false, Ordering::SeqCst);

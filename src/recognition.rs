@@ -1,14 +1,11 @@
-use crate::audio::compute_wav_rms_level;
-use crate::logging::{log_blank, log_debug, log_error, log_info};
-use crate::state::{AppContext, SongState};
+use crate::audio::{ build_wav_oscilloscope_points, compute_wav_rms_level };
+use crate::logging::{ log_blank, log_debug, log_error, log_info };
+use crate::state::{ AppContext, SongState };
 
 use serde_json::Value;
 use std::fs;
 use std::process::Command;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
 use std::time::Duration;
 
@@ -58,17 +55,11 @@ fn extract_track_number(json: &Value) -> String {
 }
 
 fn extract_genre(json: &Value) -> String {
-    json["track"]["genres"]["primary"]
-        .as_str()
-        .unwrap_or("Unknown")
-        .to_string()
+    json["track"]["genres"]["primary"].as_str().unwrap_or("Unknown").to_string()
 }
 
 fn extract_isrc(json: &Value) -> String {
-    json["track"]["isrc"]
-        .as_str()
-        .unwrap_or("Unknown")
-        .to_string()
+    json["track"]["isrc"].as_str().unwrap_or("Unknown").to_string()
 }
 
 fn extract_notes(json: &Value) -> String {
@@ -166,7 +157,7 @@ fn pick_artwork_url(json: &Value) -> Option<String> {
 fn download_best_artwork(
     ctx: &AppContext,
     json: &Value,
-    output_path: &str,
+    output_path: &str
 ) -> Result<String, String> {
     let mut base_urls = Vec::new();
 
@@ -192,7 +183,8 @@ fn download_best_artwork(
         return Err("No artwork URL found in JSON".to_string());
     }
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::blocking::Client
+        ::builder()
         .user_agent("songart/0.1")
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
@@ -229,19 +221,18 @@ fn download_best_artwork(
         };
 
         if bytes.len() < 10_000 {
-            log_debug(
-                ctx,
-                &format!("Rejected tiny image ({} bytes): {}", bytes.len(), candidate),
-            );
+            log_debug(ctx, &format!("Rejected tiny image ({} bytes): {}", bytes.len(), candidate));
             continue;
         }
 
         let tmp_path = format!("{output_path}.tmp");
 
-        fs::write(&tmp_path, &bytes)
+        fs
+            ::write(&tmp_path, &bytes)
             .map_err(|e| format!("Failed to save temp artwork to {}: {e}", tmp_path))?;
 
-        fs::rename(&tmp_path, output_path)
+        fs
+            ::rename(&tmp_path, output_path)
             .map_err(|e| format!("Failed to rename temp artwork to {}: {e}", output_path))?;
 
         return Ok(candidate);
@@ -253,7 +244,7 @@ fn download_best_artwork(
 pub fn run_recognition_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
-    shared_state: Arc<Mutex<SongState>>,
+    shared_state: Arc<Mutex<SongState>>
 ) {
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
@@ -297,14 +288,60 @@ pub fn run_recognition_loop(
             break;
         }
 
-        // Update the visualizer from the most recently recorded audio sample.
-        if ctx.config.visualizer.enabled && ctx.config.visualizer.mode == "vu" {
-            if let Some(raw_level) = compute_wav_rms_level(&ctx.config.audio.sample_wav) {
-                let mut state = shared_state.lock().unwrap();
-                let smoothing = ctx.config.visualizer.smoothing.clamp(0.0, 1.0);
+        // Update visualizer state from the most recently recorded audio sample.
+        if ctx.config.visualizer.enabled {
+            let raw_level = compute_wav_rms_level(&ctx.config.audio.sample_wav);
+            let mode_name = ctx.config.visualizer.mode.to_ascii_lowercase();
 
-                state.meter.level =
-                    state.meter.level * smoothing + raw_level * (1.0 - smoothing);
+            let left_points = match mode_name.as_str() {
+                "oscilloscope" =>
+                    build_wav_oscilloscope_points(
+                        &ctx.config.audio.sample_wav,
+                        120,
+                        160,
+                        0.25,
+                        0.4,
+                        1.5
+                    ),
+                "analog_vu" =>
+                    build_wav_oscilloscope_points(
+                        &ctx.config.audio.sample_wav,
+                        120,
+                        2,
+                        0.8,
+                        0.22,
+                        1.0
+                    ),
+                _ => None,
+            };
+
+            let right_points = match mode_name.as_str() {
+                "oscilloscope" =>
+                    build_wav_oscilloscope_points(
+                        &ctx.config.audio.sample_wav,
+                        120,
+                        160,
+                        0.75,
+                        0.4,
+                        1.5
+                    ),
+                "analog_vu" =>
+                    build_wav_oscilloscope_points(
+                        &ctx.config.audio.sample_wav,
+                        120,
+                        2,
+                        0.8,
+                        0.22,
+                        1.0
+                    ),
+                _ => None,
+            };
+
+            let mut state = shared_state.lock().unwrap();
+            let smoothing = ctx.config.visualizer.smoothing.clamp(0.0, 1.0);
+
+            if let Some(raw_level) = raw_level {
+                state.meter.level = state.meter.level * smoothing + raw_level * (1.0 - smoothing);
 
                 if ctx.config.visualizer.peak_hold {
                     if state.meter.level > state.meter.peak {
@@ -316,11 +353,24 @@ pub fn run_recognition_loop(
                     state.meter.peak = state.meter.level;
                 }
             }
+
+            state.visualizer.enabled = true;
+
+            state.visualizer.mode = match mode_name.as_str() {
+                "oscilloscope" => crate::visualizer::VisualizerMode::Oscilloscope,
+                "spectrum" => crate::visualizer::VisualizerMode::Spectrum,
+                "analog_vu" => crate::visualizer::VisualizerMode::AnalogVu,
+                _ => crate::visualizer::VisualizerMode::None,
+            };
+
+            state.visualizer.frame.left_points = left_points.unwrap_or_default();
+            state.visualizer.frame.right_points = right_points.unwrap_or_default();
         }
 
-        let output = match Command::new(&ctx.config.paths.songrec_bin)
-            .args(["recognize", &ctx.config.audio.sample_wav, "--json"])
-            .output()
+        let output = match
+            Command::new(&ctx.config.paths.songrec_bin)
+                .args(["recognize", &ctx.config.audio.sample_wav, "--json"])
+                .output()
         {
             Ok(output) => output,
             Err(e) => {
