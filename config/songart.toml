@@ -87,8 +87,9 @@ body_size = 22
 [visualizer]
 enabled = true
 mode = "oscilloscope"
+style = "classic"
 position = "bottom"
-height = 90
+height = 120
 padding = 12
 smoothing = 0.80
 peak_hold = true
