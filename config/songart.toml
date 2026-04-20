@@ -86,10 +86,9 @@ body_size = 22
 
 [visualizer]
 enabled = true
-mode = "vu"          # off | vu
-position = "bottom"  # bottom
-style = "digital"    # digital
-height = 60
-padding = 16
+mode = "oscilloscope"
+position = "bottom"
+height = 90
+padding = 12
+smoothing = 0.80
 peak_hold = true
-smoothing = 0.35
