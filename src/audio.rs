@@ -93,8 +93,25 @@ pub fn build_wav_oscilloscope_points(
         *sample = (*sample * gain).clamp(-1.0, 1.0);
     }
 
+    /*
     let trigger_index = find_trigger_index(&samples);
     let visible = &samples[trigger_index..];
+    */
+
+    use std::time::{ SystemTime, UNIX_EPOCH };
+
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as usize;
+
+    let window_size = samples.len().min(800); // visible chunk
+    let max_offset = samples.len().saturating_sub(window_size);
+
+    let offset = if max_offset > 0 {
+        (now / 10) % max_offset // speed control here
+    } else {
+        0
+    };
+
+    let visible = &samples[offset..offset + window_size];
 
     if visible.len() < 2 {
         return None;

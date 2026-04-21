@@ -290,57 +290,72 @@ pub fn run_recognition_loop(
 
         // Update visualizer state from the most recently recorded audio sample.
         if ctx.config.visualizer.enabled {
-            let raw_level = compute_wav_rms_level(&ctx.config.audio.sample_wav);
             let mode_name = ctx.config.visualizer.mode.to_ascii_lowercase();
 
-            let left_points = match mode_name.as_str() {
-                "oscilloscope" =>
-                    build_wav_oscilloscope_points(
-                        &ctx.config.audio.sample_wav,
-                        120,
-                        160,
-                        0.25,
-                        0.4,
-                        1.5
-                    ),
-                "analog_vu" =>
-                    build_wav_oscilloscope_points(
-                        &ctx.config.audio.sample_wav,
-                        120,
-                        2,
-                        0.8,
-                        0.22,
-                        1.0
-                    ),
-                _ => None,
+            let raw_level = compute_wav_rms_level(&ctx.config.audio.sample_wav);
+
+            let left_points = if mode_name == "oscilloscope" {
+                build_wav_oscilloscope_points(
+                    &ctx.config.audio.sample_wav,
+                    120, // ms of tail audio to inspect
+                    160, // number of points across the display
+                    0.25, // upper channel center
+                    0.4, // waveform height
+                    1.5 // gain
+                )
+            } else {
+                None
             };
 
-            let right_points = match mode_name.as_str() {
-                "oscilloscope" =>
-                    build_wav_oscilloscope_points(
-                        &ctx.config.audio.sample_wav,
-                        120,
-                        160,
-                        0.75,
-                        0.4,
-                        1.5
-                    ),
-                "analog_vu" =>
-                    build_wav_oscilloscope_points(
-                        &ctx.config.audio.sample_wav,
-                        120,
-                        2,
-                        0.8,
-                        0.22,
-                        1.0
-                    ),
-                _ => None,
+            let right_points = if mode_name == "oscilloscope" {
+                build_wav_oscilloscope_points(
+                    &ctx.config.audio.sample_wav,
+                    120,
+                    160,
+                    0.75, // lower channel center
+                    0.4,
+                    1.5
+                )
+            } else {
+                None
             };
+
+            log_debug(
+                &ctx,
+                &format!(
+                    "oscilloscope points: left={}, right={}",
+                    left_points
+                        .as_ref()
+                        .map(|p| p.len())
+                        .unwrap_or(0),
+                    right_points
+                        .as_ref()
+                        .map(|p| p.len())
+                        .unwrap_or(0)
+                )
+            );
+
+            log_debug(
+                &ctx,
+                &format!(
+                    "visualizer mode={}, left_points={}, right_points={}",
+                    mode_name,
+                    left_points
+                        .as_ref()
+                        .map(|p| p.len())
+                        .unwrap_or(0),
+                    right_points
+                        .as_ref()
+                        .map(|p| p.len())
+                        .unwrap_or(0)
+                )
+            );
 
             let mut state = shared_state.lock().unwrap();
-            let smoothing = ctx.config.visualizer.smoothing.clamp(0.0, 1.0);
 
             if let Some(raw_level) = raw_level {
+                let smoothing = ctx.config.visualizer.smoothing.clamp(0.0, 1.0);
+
                 state.meter.level = state.meter.level * smoothing + raw_level * (1.0 - smoothing);
 
                 if ctx.config.visualizer.peak_hold {
@@ -355,7 +370,6 @@ pub fn run_recognition_loop(
             }
 
             state.visualizer.enabled = true;
-
             state.visualizer.mode = match mode_name.as_str() {
                 "oscilloscope" => crate::visualizer::VisualizerMode::Oscilloscope,
                 "spectrum" => crate::visualizer::VisualizerMode::Spectrum,
