@@ -93,10 +93,7 @@ pub fn build_wav_oscilloscope_points(
         *sample = (*sample * gain).clamp(-1.0, 1.0);
     }
 
-    /*
-    let trigger_index = find_trigger_index(&samples);
-    let visible = &samples[trigger_index..];
-    */
+    let visible = &samples;
 
     use std::time::{ SystemTime, UNIX_EPOCH };
 
@@ -172,4 +169,54 @@ fn resample_to_points(
 fn sample_to_y(sample: f32, y_offset: f32, y_scale: f32) -> f32 {
     let clamped = sample.clamp(-1.0, 1.0);
     (y_offset - clamped * 0.5 * y_scale).clamp(0.0, 1.0)
+}
+pub fn compute_pcm_rms_level(path: &str) -> Option<f32> {
+    let samples = read_pcm_samples(path)?;
+    if samples.is_empty() {
+        return None;
+    }
+
+    let mut sum = 0.0f64;
+    for sample in &samples {
+        let s = *sample as f64;
+        sum += s * s;
+    }
+
+    let rms = (sum / (samples.len() as f64)).sqrt() as f32;
+    Some((rms * 6.0).clamp(0.0, 1.0))
+}
+
+pub fn build_pcm_oscilloscope_points(
+    path: &str,
+    width_points: usize,
+    y_offset: f32,
+    y_scale: f32,
+    gain: f32
+) -> Option<Vec<(f32, f32)>> {
+    let mut samples = read_pcm_samples(path)?;
+    if samples.is_empty() || width_points < 2 {
+        return None;
+    }
+
+    for sample in &mut samples {
+        *sample = (*sample * gain).clamp(-1.0, 1.0);
+    }
+
+    Some(resample_to_points(&samples, width_points, y_offset, y_scale))
+}
+
+fn read_pcm_samples(path: &str) -> Option<Vec<f32>> {
+    let bytes = fs::read(path).ok()?;
+    if bytes.len() < 4 {
+        return None;
+    }
+
+    let mut samples = Vec::with_capacity(bytes.len() / 2);
+
+    for chunk in bytes.chunks_exact(2) {
+        let sample = (i16::from_le_bytes([chunk[0], chunk[1]]) as f32) / (i16::MAX as f32);
+        samples.push(sample);
+    }
+
+    Some(samples)
 }
