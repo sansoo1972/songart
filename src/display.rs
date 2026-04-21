@@ -478,62 +478,79 @@ pub fn run_display_loop(
             state_guard.clone()
         };
 
-        let (audio_len, sample_len, live_level, left_points, right_points, upper_bins, lower_bins) =
-            {
-                let audio = shared_audio.lock().unwrap();
-                let vis_samples = audio.recent_ms(ctx.config.visualizer.window_ms);
-                let audio_len = audio.len();
-                let sample_len = vis_samples.len();
+        let (
+            audio_len,
+            sample_len,
+            live_level,
+            left_points,
+            right_points,
+            raw_upper_bins,
+            raw_lower_bins,
+        ) = {
+            let audio = shared_audio.lock().unwrap();
+            let vis_samples = audio.recent_ms(ctx.config.visualizer.window_ms);
+            let audio_len = audio.len();
+            let sample_len = vis_samples.len();
 
-                let level = compute_rms(&vis_samples).unwrap_or(0.0);
+            let level = compute_rms(&vis_samples).unwrap_or(0.0);
 
-                let left = build_oscilloscope_points(
-                    &vis_samples,
-                    ctx.config.visualizer.point_count,
-                    ctx.config.visualizer.left_y_offset,
-                    ctx.config.visualizer.y_scale,
-                    ctx.config.visualizer.gain,
-                    ctx.config.visualizer.visible_sample_count,
-                    ctx.config.visualizer.max_gain
-                );
+            let left = build_oscilloscope_points(
+                &vis_samples,
+                ctx.config.visualizer.point_count,
+                ctx.config.visualizer.left_y_offset,
+                ctx.config.visualizer.y_scale,
+                ctx.config.visualizer.gain,
+                ctx.config.visualizer.visible_sample_count,
+                ctx.config.visualizer.max_gain
+            );
 
-                let right = build_oscilloscope_points(
-                    &vis_samples,
-                    ctx.config.visualizer.point_count,
-                    ctx.config.visualizer.right_y_offset,
-                    ctx.config.visualizer.y_scale,
-                    ctx.config.visualizer.gain,
-                    ctx.config.visualizer.visible_sample_count,
-                    ctx.config.visualizer.max_gain
-                );
+            let right = build_oscilloscope_points(
+                &vis_samples,
+                ctx.config.visualizer.point_count,
+                ctx.config.visualizer.right_y_offset,
+                ctx.config.visualizer.y_scale,
+                ctx.config.visualizer.gain,
+                ctx.config.visualizer.visible_sample_count,
+                ctx.config.visualizer.max_gain
+            );
 
-                let bins = compute_spectrum_bins(
-                    &vis_samples,
-                    ctx.config.audio.sample_rate,
-                    ctx.config.visualizer.spectrum_fft_size,
-                    ctx.config.visualizer.spectrum_bin_count,
-                    ctx.config.visualizer.spectrum_min_hz,
-                    ctx.config.visualizer.spectrum_max_hz,
-                    ctx.config.visualizer.gain,
-                    ctx.config.visualizer.max_gain
-                );
+            let bins = compute_spectrum_bins(
+                &vis_samples,
+                ctx.config.audio.sample_rate,
+                ctx.config.visualizer.spectrum_fft_size,
+                ctx.config.visualizer.spectrum_bin_count,
+                ctx.config.visualizer.spectrum_min_hz,
+                ctx.config.visualizer.spectrum_max_hz,
+                ctx.config.visualizer.gain,
+                ctx.config.visualizer.max_gain
+            );
 
-                (audio_len, sample_len, level, left, right, bins.clone(), bins)
-            };
+            (audio_len, sample_len, level, left, right, bins.clone(), bins)
+        };
 
-        let smoothing = ctx.config.visualizer.spectrum_smoothing.clamp(0.0, 0.98);
+        // Faster rise, slower fall makes the spectrum feel lively without looking jittery.
+        let rise = 0.1f32;
+        let fall = ctx.config.visualizer.spectrum_smoothing.clamp(0.0, 0.98);
 
-        for (i, value) in upper_bins.iter().enumerate() {
+        for (i, value) in raw_upper_bins.iter().enumerate() {
             if i < smoothed_upper_bins.len() {
-                smoothed_upper_bins[i] =
-                    smoothed_upper_bins[i] * smoothing + *value * (1.0 - smoothing);
+                let current = smoothed_upper_bins[i];
+                smoothed_upper_bins[i] = if *value > current {
+                    current * rise + *value * (1.0 - rise)
+                } else {
+                    current * fall + *value * (1.0 - fall)
+                };
             }
         }
 
-        for (i, value) in lower_bins.iter().enumerate() {
+        for (i, value) in raw_lower_bins.iter().enumerate() {
             if i < smoothed_lower_bins.len() {
-                smoothed_lower_bins[i] =
-                    smoothed_lower_bins[i] * smoothing + *value * (1.0 - smoothing);
+                let current = smoothed_lower_bins[i];
+                smoothed_lower_bins[i] = if *value > current {
+                    current * rise + *value * (1.0 - rise)
+                } else {
+                    current * fall + *value * (1.0 - fall)
+                };
             }
         }
 
@@ -555,31 +572,17 @@ pub fn run_display_loop(
             last_vis_debug.elapsed() >=
             Duration::from_millis(ctx.config.visualizer.debug_log_interval_ms)
         {
-            let left_head = state.visualizer.frame.left_points
-                .first()
-                .copied()
-                .unwrap_or((0.0, 0.0));
-
-            let left_mid = if state.visualizer.frame.left_points.is_empty() {
-                (0.0, 0.0)
-            } else {
-                state.visualizer.frame.left_points[state.visualizer.frame.left_points.len() / 2]
-            };
-
             log_debug(
                 &ctx,
                 &format!(
-                    "display vis: audio_len={} sample_len={} level={:.3} left_points={} head=({:.3},{:.3}) mid=({:.3},{:.3}) bins={} upper0={:.3}",
+                    "display vis: audio_len={} sample_len={} level={:.3} bins={} upper0={:.3} upper8={:.3} upper16={:.3}",
                     audio_len,
                     sample_len,
                     live_level,
-                    state.visualizer.frame.left_points.len(),
-                    left_head.0,
-                    left_head.1,
-                    left_mid.0,
-                    left_mid.1,
                     smoothed_upper_bins.len(),
-                    smoothed_upper_bins.first().copied().unwrap_or(0.0)
+                    smoothed_upper_bins.get(0).copied().unwrap_or(0.0),
+                    smoothed_upper_bins.get(8).copied().unwrap_or(0.0),
+                    smoothed_upper_bins.get(16).copied().unwrap_or(0.0)
                 )
             );
 
