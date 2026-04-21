@@ -104,26 +104,26 @@ enabled = true
 mode = "spectrum"
 style = "classic"
 position = "bottom"
-height = 140
+height = 120
 padding = 12
-smoothing = 0.80
-peak_hold = true
+smoothing = 0.15
+peak_hold = false
 
 # Shared live visualizer timing
-window_ms = 60
+window_ms = 40
 point_count = 96
-gain = 8.5
-y_scale = 0.95
+gain = 10.0
+y_scale = 1.0
 left_y_offset = 0.25
 right_y_offset = 0.75
 visible_sample_count = 160
-max_gain = 32.0
+max_gain = 40.0
 debug_log_interval_ms = 10000
 
 # Spectrum tuning
 spectrum_bin_count = 32
-spectrum_fft_size = 256
-spectrum_smoothing = 0.65
+spectrum_fft_size = 512
+spectrum_smoothing = 0.15
 spectrum_min_hz = 40.0
 spectrum_max_hz = 6000.0
 spectrum_bar_gap = 2
