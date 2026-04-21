@@ -1,3 +1,4 @@
+use std::time::{ Duration, Instant };
 use crate::audio::{ build_oscilloscope_points, compute_rms, SharedAudioBuffer };
 use crate::config::DisplayPreset;
 use crate::logging::{ log_debug, log_error, log_info };
@@ -13,7 +14,6 @@ use sdl2::rect::{ Point, Rect };
 use std::path::Path;
 use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
-use std::time::Duration;
 
 fn ellipsize(input: &str, max_chars: usize) -> String {
     let chars: Vec<char> = input.chars().collect();
@@ -207,6 +207,7 @@ pub fn run_display_loop(
     let mut artwork_texture: Option<sdl2::render::Texture<'_>> = None;
     let mut last_canvas_size: Option<(u32, u32)> = None;
     let mut display_peak = 0.0f32;
+    let mut last_vis_debug = Instant::now();
 
     log_info(&ctx, "Display loop started.");
 
@@ -226,16 +227,18 @@ pub fn run_display_loop(
         };
 
         // Build live oscilloscope directly from shared audio buffer.
-        let (live_level, left_points, right_points) = {
+        let (audio_len, sample_len, live_level, left_points, right_points) = {
             let audio = shared_audio.lock().unwrap();
+            let audio_len = audio.len();
             let vis_samples = audio.recent_ms(180);
+            let sample_len = vis_samples.len();
 
             let level = compute_rms(&vis_samples).unwrap_or(0.0);
 
             let left = build_oscilloscope_points(&vis_samples, 160, 0.25, 0.4, 1.8);
             let right = build_oscilloscope_points(&vis_samples, 160, 0.75, 0.4, 1.8);
 
-            (level, left, right)
+            (audio_len, sample_len, level, left, right)
         };
 
         // Update transient visualizer fields for rendering.
@@ -252,6 +255,36 @@ pub fn run_display_loop(
         };
         state.visualizer.frame.left_points = left_points;
         state.visualizer.frame.right_points = right_points;
+
+        if last_vis_debug.elapsed() >= Duration::from_secs(1) {
+            let left_head = state.visualizer.frame.left_points
+                .first()
+                .copied()
+                .unwrap_or((0.0, 0.0));
+
+            let left_mid = if state.visualizer.frame.left_points.is_empty() {
+                (0.0, 0.0)
+            } else {
+                state.visualizer.frame.left_points[state.visualizer.frame.left_points.len() / 2]
+            };
+
+            log_debug(
+                &ctx,
+                &format!(
+                    "display vis: audio_len={} sample_len={} level={:.3} left_points={} head=({:.3},{:.3}) mid=({:.3},{:.3})",
+                    audio_len,
+                    sample_len,
+                    live_level,
+                    state.visualizer.frame.left_points.len(),
+                    left_head.0,
+                    left_head.1,
+                    left_mid.0,
+                    left_mid.1
+                )
+            );
+
+            last_vis_debug = Instant::now();
+        }
 
         if state.version != loaded_version {
             if !state.artwork_path.is_empty() && Path::new(&state.artwork_path).exists() {
