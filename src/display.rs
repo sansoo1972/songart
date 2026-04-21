@@ -235,8 +235,8 @@ pub fn run_display_loop(
 
             let level = compute_rms(&vis_samples).unwrap_or(0.0);
 
-            let left = build_oscilloscope_points(&vis_samples, 160, 0.25, 0.4, 1.8);
-            let right = build_oscilloscope_points(&vis_samples, 160, 0.75, 0.4, 1.8);
+            let left = build_oscilloscope_points(&vis_samples, 160, 0.25, 0.75, 6.0);
+            let right = build_oscilloscope_points(&vis_samples, 160, 0.75, 0.75, 6.0);
 
             (audio_len, sample_len, level, left, right)
         };

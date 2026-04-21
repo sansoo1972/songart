@@ -164,9 +164,22 @@ pub fn build_oscilloscope_points(
         return Vec::new();
     }
 
-    let amplified: Vec<f32> = samples
+    // Use a much tighter recent slice so motion is more obvious.
+    let visible_len = samples.len().min(480).max(160);
+    let start = samples.len().saturating_sub(visible_len);
+    let visible = &samples[start..];
+
+    // Find local peak so we can normalize weak input.
+    let peak = visible
         .iter()
-        .map(|s| (*s * gain).clamp(-1.0, 1.0))
+        .fold(0.0f32, |acc, s| acc.max(s.abs()))
+        .max(0.01);
+
+    let normalized_gain = (gain / peak).clamp(1.0, 24.0);
+
+    let amplified: Vec<f32> = visible
+        .iter()
+        .map(|s| (*s * normalized_gain).clamp(-1.0, 1.0))
         .collect();
 
     resample_to_points(&amplified, width_points, y_offset, y_scale)
