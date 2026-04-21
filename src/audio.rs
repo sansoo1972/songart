@@ -93,8 +93,6 @@ pub fn build_wav_oscilloscope_points(
         *sample = (*sample * gain).clamp(-1.0, 1.0);
     }
 
-    let visible = &samples;
-
     use std::time::{ SystemTime, UNIX_EPOCH };
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as usize;

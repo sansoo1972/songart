@@ -64,17 +64,15 @@ pub fn run_visualizer_loop(
 
         let mode_name = ctx.config.visualizer.mode.to_ascii_lowercase();
 
-        let raw_level = compute_wav_rms_level(VIS_SAMPLE_PATH);
+        let raw_level = compute_pcm_rms_level(VIS_SAMPLE_PATH);
 
         let left_points = match mode_name.as_str() {
-            "oscilloscope" =>
-                build_wav_oscilloscope_points(VIS_SAMPLE_PATH, 120, 160, 0.25, 0.4, 1.8),
+            "oscilloscope" => build_pcm_oscilloscope_points(VIS_SAMPLE_PATH, 160, 0.25, 0.4, 1.8),
             _ => None,
         };
 
         let right_points = match mode_name.as_str() {
-            "oscilloscope" =>
-                build_wav_oscilloscope_points(VIS_SAMPLE_PATH, 120, 160, 0.75, 0.4, 1.8),
+            "oscilloscope" => build_pcm_oscilloscope_points(VIS_SAMPLE_PATH, 160, 0.75, 0.4, 1.8),
             _ => None,
         };
 
@@ -96,31 +94,25 @@ pub fn run_visualizer_loop(
                     state.meter.peak = state.meter.level;
                 }
             }
-            let left_len = left_points
-                .as_ref()
-                .map(|p| p.len())
-                .unwrap_or(0);
-            let right_len = right_points
-                .as_ref()
-                .map(|p| p.len())
-                .unwrap_or(0);
+            let left_len = left_points.as_ref().map_or(0, |p| p.len());
+            let right_len = right_points.as_ref().map_or(0, |p| p.len());
 
             let left_head = left_points
                 .as_ref()
-                .and_then(|p| p.get(0))
-                .copied()
+                .and_then(|p| p.first().copied())
                 .unwrap_or((0.0, 0.0));
 
             let left_mid = left_points
                 .as_ref()
-                .and_then(|p| p.get(left_len / 2))
-                .copied()
+                .and_then(|p| {
+                    if p.is_empty() { None } else { p.get(p.len() / 2).copied() }
+                })
                 .unwrap_or((0.0, 0.0));
 
             log_debug(
                 &ctx,
                 &format!(
-                    "vis update: level={:.3?} left_len={} right_len={} left_head=({:.3},{:.3}) left_mid=({:.3},{:.3})",
+                    "vis update: level={:?} left_len={} right_len={} left_head=({:.3},{:.3}) left_mid=({:.3},{:.3})",
                     raw_level,
                     left_len,
                     right_len,
