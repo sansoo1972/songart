@@ -338,6 +338,9 @@ pub fn run_display_loop(
 ) -> Result<(), String> {
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
+
+    log_info(&ctx, &format!("SDL video driver: {}", video.current_video_driver()));
+
     let _image_ctx = sdl2::image::init(InitFlag::JPG | InitFlag::PNG)?;
     let ttf_ctx = sdl2::ttf::init().map_err(|e| e.to_string())?;
 
@@ -366,6 +369,10 @@ pub fn run_display_loop(
         .accelerated()
         .build()
         .map_err(|e| e.to_string())?;
+
+    let info = canvas.info();
+
+    log_info(&ctx, &format!("SDL renderer: name='{}' flags={:?}", info.name, info.flags));
 
     let texture_creator = canvas.texture_creator();
 

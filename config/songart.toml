@@ -1,5 +1,5 @@
 [logging]
-level = "info"
+level = "debug"
 file = "/home/admin/projects/songart/songart.log"
 reset_on_start = true
 
@@ -11,7 +11,7 @@ device = "ps3eye_mono"
 sample_wav = "/home/admin/projects/songart/sample.wav"
 
 # Delay between recognition attempts.
-loop_delay_secs = 3
+loop_delay_secs = 10
 
 # Continuous capture settings.
 sample_rate = 16000
