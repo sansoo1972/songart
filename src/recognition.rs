@@ -1,4 +1,4 @@
-use crate::audio::{ write_wav_snapshot, SharedAudioBuffer, SAMPLE_RATE };
+use crate::audio::{ write_wav_snapshot, SharedAudioBuffer };
 use crate::logging::{ log_blank, log_debug, log_error, log_info };
 use crate::state::{ AppContext, SongState };
 
@@ -9,7 +9,7 @@ use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
 use std::time::Duration;
 
-/// Pulls a metadata value out of the nested SongRec/Shazam JSON sections by title.
+/// Looks up a metadata value by title in SongRec's nested JSON sections.
 fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
     let sections = json["track"]["sections"].as_array()?;
 
@@ -87,7 +87,8 @@ fn extract_notes(json: &Value) -> String {
     }
 }
 
-/// Builds an ordered list of artwork URL candidates.
+/// Builds an ordered list of possible artwork URLs, preferring higher sizes
+/// when the URL pattern supports it.
 fn artwork_candidates(url: &str) -> Vec<String> {
     let mut out = Vec::new();
 
@@ -118,7 +119,7 @@ fn artwork_candidates(url: &str) -> Vec<String> {
     out
 }
 
-/// Picks the first available seed artwork URL from the JSON response.
+/// Picks the first usable seed artwork URL from the JSON response.
 fn pick_artwork_url(json: &Value) -> Option<String> {
     let mut base_urls = Vec::new();
 
@@ -241,6 +242,11 @@ fn download_best_artwork(
     Err("No usable artwork URL succeeded".to_string())
 }
 
+/// Recognition loop.
+///
+/// This loop no longer records its own audio. Instead, it takes periodic WAV
+/// snapshots from the shared rolling audio buffer and sends those snapshots to
+/// SongRec for identification.
 pub fn run_recognition_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
@@ -256,19 +262,26 @@ pub fn run_recognition_loop(
     while running.load(Ordering::SeqCst) {
         log_info(&ctx, "Listening...");
 
-        // Pull the most recent 10 seconds from the shared rolling audio buffer.
         let snapshot = {
             let audio = shared_audio.lock().unwrap();
-            audio.recent_ms(10_000)
+            audio.recent_ms(ctx.config.audio.recognition_window_ms)
         };
 
-        if snapshot.len() < SAMPLE_RATE {
+        let min_required = ctx.config.audio.sample_rate;
+        if snapshot.len() < min_required {
             log_info(&ctx, "Not enough buffered audio yet for recognition.");
             thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
             continue;
         }
 
-        if let Err(e) = write_wav_snapshot(&ctx.config.audio.sample_wav, &snapshot) {
+        if
+            let Err(e) = write_wav_snapshot(
+                &ctx.config.audio.sample_wav,
+                &snapshot,
+                ctx.config.audio.sample_rate,
+                ctx.config.audio.channels
+            )
+        {
             log_error(&ctx, &format!("Failed to write WAV snapshot: {e}"));
             thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
             continue;

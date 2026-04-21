@@ -1,4 +1,3 @@
-use std::time::{ Duration, Instant };
 use crate::audio::{ build_oscilloscope_points, compute_rms, SharedAudioBuffer };
 use crate::config::DisplayPreset;
 use crate::logging::{ log_debug, log_error, log_info };
@@ -14,6 +13,7 @@ use sdl2::rect::{ Point, Rect };
 use std::path::Path;
 use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
+use std::time::{ Duration, Instant };
 
 fn ellipsize(input: &str, max_chars: usize) -> String {
     let chars: Vec<char> = input.chars().collect();
@@ -150,8 +150,8 @@ fn draw_visualizer(
 
 /// SDL display loop.
 ///
-/// Metadata/artwork comes from shared state.
-/// Live oscilloscope comes directly from shared audio.
+/// Metadata and artwork come from `shared_state`.
+/// Live oscilloscope data is built each frame from `shared_audio`.
 pub fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
@@ -226,26 +226,41 @@ pub fn run_display_loop(
             state_guard.clone()
         };
 
-        // Build live oscilloscope directly from shared audio buffer.
         let (audio_len, sample_len, live_level, left_points, right_points) = {
             let audio = shared_audio.lock().unwrap();
             let audio_len = audio.len();
-            let vis_samples = audio.recent_ms(180);
+            let vis_samples = audio.recent_ms(ctx.config.visualizer.window_ms);
             let sample_len = vis_samples.len();
 
             let level = compute_rms(&vis_samples).unwrap_or(0.0);
 
-            let left = build_oscilloscope_points(&vis_samples, 160, 0.25, 0.75, 6.0);
-            let right = build_oscilloscope_points(&vis_samples, 160, 0.75, 0.75, 6.0);
+            let left = build_oscilloscope_points(
+                &vis_samples,
+                ctx.config.visualizer.point_count,
+                ctx.config.visualizer.left_y_offset,
+                ctx.config.visualizer.y_scale,
+                ctx.config.visualizer.gain,
+                ctx.config.visualizer.visible_sample_count,
+                ctx.config.visualizer.max_gain
+            );
+
+            let right = build_oscilloscope_points(
+                &vis_samples,
+                ctx.config.visualizer.point_count,
+                ctx.config.visualizer.right_y_offset,
+                ctx.config.visualizer.y_scale,
+                ctx.config.visualizer.gain,
+                ctx.config.visualizer.visible_sample_count,
+                ctx.config.visualizer.max_gain
+            );
 
             (audio_len, sample_len, level, left, right)
         };
 
-        // Update transient visualizer fields for rendering.
         display_peak = if live_level > display_peak { live_level } else { display_peak * 0.96 };
 
         state.meter.level = live_level;
-        state.meter.peak = display_peak;
+        state.meter.peak = if ctx.config.visualizer.peak_hold { display_peak } else { live_level };
         state.visualizer.enabled = ctx.config.visualizer.enabled;
         state.visualizer.mode = match ctx.config.visualizer.mode.to_ascii_lowercase().as_str() {
             "oscilloscope" => VisualizerMode::Oscilloscope,
@@ -256,7 +271,10 @@ pub fn run_display_loop(
         state.visualizer.frame.left_points = left_points;
         state.visualizer.frame.right_points = right_points;
 
-        if last_vis_debug.elapsed() >= Duration::from_secs(1) {
+        if
+            last_vis_debug.elapsed() >=
+            Duration::from_millis(ctx.config.visualizer.debug_log_interval_ms)
+        {
             let left_head = state.visualizer.frame.left_points
                 .first()
                 .copied()

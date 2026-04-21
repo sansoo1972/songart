@@ -16,6 +16,12 @@ use crate::state::{ AppContext, SongState };
 use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
 
+/// Application entry point.
+///
+/// Thread layout:
+/// - audio capture thread: continuously fills the rolling live audio buffer
+/// - recognition thread: periodically snapshots buffered audio for SongRec
+/// - display loop: renders metadata/artwork and live oscilloscope
 fn main() {
     let config = load_config("config/songart.toml").expect("failed to load config/songart.toml");
 
@@ -24,7 +30,7 @@ fn main() {
         config,
     });
 
-    if ctx.config.logging.reset_on_start && should_log(&ctx, LogLevel::Debug) {
+    if ctx.config.logging.reset_on_start {
         reset_log_file(&ctx);
     }
 
@@ -38,7 +44,7 @@ fn main() {
         .expect("failed to set Ctrl-C handler");
 
     let shared_state = Arc::new(Mutex::new(SongState::default()));
-    let shared_audio = create_shared_audio_buffer();
+    let shared_audio = create_shared_audio_buffer(&ctx);
 
     let audio_running = Arc::clone(&running);
     let audio_ctx = Arc::clone(&ctx);
@@ -75,8 +81,8 @@ fn main() {
     let _ = audio_thread.join();
 
     if let Err(e) = display_result {
-        logging::log_error(&ctx, &format!("Display loop error: {e}"));
+        crate::logging::log_error(&ctx, &format!("Display loop error: {e}"));
     }
 
-    logging::log_info(&ctx, "songart stopped.");
+    crate::logging::log_info(&ctx, "songart stopped.");
 }

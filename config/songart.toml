@@ -4,10 +4,25 @@ file = "/home/admin/projects/songart/songart.log"
 reset_on_start = true
 
 [audio]
+# PulseAudio / PipeWire source or monitor name.
 device = "ps3eye_mono"
+
+# Path used for SongRec recognition snapshots.
 sample_wav = "/home/admin/projects/songart/sample.wav"
-record_seconds = 10
+
+# Delay between recognition attempts.
 loop_delay_secs = 2
+
+# Continuous capture settings.
+sample_rate = 16000
+channels = 1
+buffer_seconds = 20
+
+# Amount of recent buffered audio written to WAV for SongRec.
+recognition_window_ms = 10000
+
+# Size of read chunks from the live capture stream.
+read_chunk_bytes = 4096
 
 [paths]
 songrec_bin = "/home/admin/projects/vendor/songrec/target/release/songrec"
@@ -16,8 +31,8 @@ artwork_file = "/home/admin/projects/songart/current.jpg"
 [display]
 window_title = "songart"
 fullscreen = true
-orientation = "portrait"   # selects the preset below
-frame_delay_ms = 33
+orientation = "portrait"
+frame_delay_ms = 16
 
 [display_presets.portrait]
 width = 720
@@ -40,7 +55,7 @@ body_line_spacing = 34
 detail_line_spacing = 40
 
 [fonts]
-theme = "grunge"
+theme = "grungy"
 
 [font_themes.modern]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
@@ -93,3 +108,21 @@ height = 120
 padding = 12
 smoothing = 0.80
 peak_hold = true
+
+# Oscilloscope tuning
+window_ms = 120
+point_count = 160
+gain = 6.0
+y_scale = 0.75
+left_y_offset = 0.25
+right_y_offset = 0.75
+
+# Number of raw samples shown before resampling into point_count.
+# Smaller values look more lively; larger values look steadier.
+visible_sample_count = 480
+
+# Hard clamp for auto-normalized gain.
+max_gain = 24.0
+
+# Throttled debug logging for live display waveform stats.
+debug_log_interval_ms = 1000
