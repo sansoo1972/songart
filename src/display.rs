@@ -7,9 +7,9 @@ use crate::visualizer::VisualizerMode;
 use sdl2::event::Event;
 use sdl2::image::{ InitFlag, LoadTexture };
 use sdl2::keyboard::Keycode;
-use sdl2::pixels::Color;
+use sdl2::pixels::{ Color, PixelFormatEnum };
 use sdl2::rect::{ Point, Rect };
-use sdl2::render::{ Texture, TextureCreator };
+use sdl2::render::{ Texture, TextureCreator, TextureQuery };
 use sdl2::video::WindowContext;
 
 use std::path::Path;
@@ -50,7 +50,7 @@ fn selected_display_preset<'a>(ctx: &'a AppContext) -> Option<&'a DisplayPreset>
     ctx.config.display_presets.get(&key)
 }
 
-/// A cached text texture plus its native-size target rectangle in scene space.
+/// A cached text texture plus its target rectangle in scene coordinates.
 struct CachedText<'a> {
     texture: Texture<'a>,
     rect: Rect,
@@ -77,31 +77,16 @@ impl<'a> CachedText<'a> {
             .map_err(|e| e.to_string())?;
 
         let rect = Rect::new(x, y, surface.width(), surface.height());
-
         Ok(Self { texture, rect })
     }
 
-    fn draw(
-        &self,
-        canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-        sx: &dyn Fn(i32) -> i32,
-        sy: &dyn Fn(i32) -> i32,
-        sw: &dyn Fn(u32) -> u32,
-        sh: &dyn Fn(u32) -> u32
-    ) -> Result<(), String> {
-        let target = Rect::new(
-            sx(self.rect.x()),
-            sy(self.rect.y()),
-            sw(self.rect.width()),
-            sh(self.rect.height())
-        );
-        canvas.copy(&self.texture, None, target)?;
+    fn draw(&self, canvas: &mut sdl2::render::Canvas<sdl2::video::Window>) -> Result<(), String> {
+        canvas.copy(&self.texture, None, self.rect)?;
         Ok(())
     }
 }
 
-/// Cached text block for song metadata.
-/// Rebuilt only when the metadata version changes.
+/// Cached metadata text block, rebuilt only when metadata changes.
 struct TextCache<'a> {
     version: u64,
     title: CachedText<'a>,
@@ -285,11 +270,66 @@ fn draw_visualizer(
     }
 }
 
+fn compute_artwork_rect(query: TextureQuery, scene_w: u32, top_h: u32) -> Rect {
+    let art_w = query.width as f32;
+    let art_h = query.height as f32;
+
+    let padding = 24.0;
+    let max_w = (scene_w as f32) - padding * 2.0;
+    let max_h = (top_h as f32) - padding * 2.0;
+
+    let scale = f32::min(max_w / art_w, max_h / art_h);
+    let draw_w = (art_w * scale) as u32;
+    let draw_h = (art_h * scale) as u32;
+
+    let x = ((scene_w - draw_w) / 2) as i32;
+    let y = ((top_h - draw_h) / 2) as i32;
+
+    Rect::new(x, y, draw_w, draw_h)
+}
+
+/// Cached static scene pieces that only change when metadata/artwork changes.
+struct StaticSceneCache<'a> {
+    version: u64,
+    text: TextCache<'a>,
+    artwork_rect: Option<Rect>,
+}
+
+impl<'a> StaticSceneCache<'a> {
+    fn draw_static_scene(
+        &self,
+        canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+        artwork_texture: Option<&Texture<'a>>,
+        scene_w: u32,
+        scene_h: u32,
+        top_h: u32,
+        bottom_h: u32
+    ) -> Result<(), String> {
+        canvas.set_draw_color(Color::RGB(0, 0, 0));
+        canvas.clear();
+
+        if let (Some(texture), Some(target)) = (artwork_texture, self.artwork_rect) {
+            canvas.copy(texture, None, target)?;
+        }
+
+        canvas.set_draw_color(Color::RGB(18, 18, 18));
+        canvas.fill_rect(Rect::new(0, top_h as i32, scene_w, bottom_h))?;
+
+        self.text.title.draw(canvas)?;
+        self.text.artist.draw(canvas)?;
+        self.text.third.draw(canvas)?;
+        self.text.detail.draw(canvas)?;
+
+        let _ = scene_h;
+        Ok(())
+    }
+}
+
 /// SDL display loop.
 ///
-/// Performance note:
-/// - text textures are cached and only rebuilt when `SongState.version` changes
-/// - oscilloscope points are rebuilt every frame from the shared live audio buffer
+/// This version is optimized for the Pi:
+/// - static scene content is rendered once into a texture when metadata changes
+/// - only the oscilloscope is redrawn every frame
 pub fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
@@ -324,7 +364,6 @@ pub fn run_display_loop(
     let mut canvas = window
         .into_canvas()
         .accelerated()
-        .present_vsync()
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -340,13 +379,25 @@ pub fn run_display_loop(
         .load_font(body_font_path, body_font_size)
         .map_err(|e| format!("Failed to load body font from {}: {e}", body_font_path))?;
 
+    let scene_w = preset.width;
+    let scene_h = preset.height;
+    let top_h = ((scene_h as f32) * preset.top_panel_ratio) as u32;
+    let bottom_h = scene_h - top_h;
+
     let mut event_pump = sdl.event_pump()?;
     let mut loaded_version: u64 = u64::MAX;
-    let mut artwork_texture: Option<sdl2::render::Texture<'_>> = None;
+    let mut artwork_texture: Option<Texture<'_>> = None;
     let mut last_canvas_size: Option<(u32, u32)> = None;
     let mut display_peak = 0.0f32;
     let mut last_vis_debug = Instant::now();
-    let mut text_cache: Option<TextCache<'_>> = None;
+    let mut last_frame_log = Instant::now();
+    let mut frame_counter: u32 = 0;
+    let mut frame_timer = Instant::now();
+
+    let mut static_scene_cache: Option<StaticSceneCache<'_>> = None;
+    let mut static_scene_texture = texture_creator
+        .create_texture_target(PixelFormatEnum::RGBA8888, scene_w, scene_h)
+        .map_err(|e| e.to_string())?;
 
     log_info(&ctx, "Display loop started.");
 
@@ -367,9 +418,7 @@ pub fn run_display_loop(
 
         let (audio_len, sample_len, live_level, left_points, right_points) = {
             let audio = shared_audio.lock().unwrap();
-            let audio_len = audio.len();
             let vis_samples = audio.recent_ms(ctx.config.visualizer.window_ms);
-            let sample_len = vis_samples.len();
 
             let level = compute_rms(&vis_samples).unwrap_or(0.0);
 
@@ -393,7 +442,7 @@ pub fn run_display_loop(
                 ctx.config.visualizer.max_gain
             );
 
-            (audio_len, sample_len, level, left, right)
+            (audio.len(), vis_samples.len(), level, left, right)
         };
 
         display_peak = if live_level > display_peak { live_level } else { display_peak * 0.96 };
@@ -460,6 +509,7 @@ pub fn run_display_loop(
                     }
                     Err(e) => {
                         log_error(&ctx, &format!("Renderer failed to load artwork: {e}"));
+                        artwork_texture = None;
                     }
                 }
             } else {
@@ -474,22 +524,46 @@ pub fn run_display_loop(
             last_canvas_size = Some((canvas_w, canvas_h));
         }
 
-        let scene_w = preset.width;
-        let scene_h = preset.height;
-        let top_h = ((scene_h as f32) * preset.top_panel_ratio) as u32;
-        let bottom_h = scene_h - top_h;
-
-        // Rebuild cached text only when metadata changes.
-        let needs_text_rebuild = text_cache
+        let needs_static_rebuild = static_scene_cache
             .as_ref()
             .map(|c| c.version != state.version)
             .unwrap_or(true);
 
-        if needs_text_rebuild {
-            text_cache = Some(
-                build_text_cache(&texture_creator, &title_font, &body_font, &state, preset, top_h)?
-            );
-            log_debug(&ctx, &format!("Rebuilt text cache for version {}", state.version));
+        if needs_static_rebuild {
+            let text = build_text_cache(
+                &texture_creator,
+                &title_font,
+                &body_font,
+                &state,
+                preset,
+                top_h
+            )?;
+
+            let artwork_rect = artwork_texture
+                .as_ref()
+                .map(|texture| compute_artwork_rect(texture.query(), scene_w, top_h));
+
+            let cache = StaticSceneCache {
+                version: state.version,
+                text,
+                artwork_rect,
+            };
+
+            canvas
+                .with_texture_canvas(&mut static_scene_texture, |tex_canvas| {
+                    let _ = cache.draw_static_scene(
+                        tex_canvas,
+                        artwork_texture.as_ref(),
+                        scene_w,
+                        scene_h,
+                        top_h,
+                        bottom_h
+                    );
+                })
+                .map_err(|e| e.to_string())?;
+
+            static_scene_cache = Some(cache);
+            log_debug(&ctx, &format!("Rebuilt static scene for version {}", state.version));
         }
 
         let scale_x = (canvas_w as f32) / (scene_w as f32);
@@ -510,34 +584,8 @@ pub fn run_display_loop(
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
 
-        if let Some(texture) = artwork_texture.as_ref() {
-            let query = texture.query();
-            let art_w = query.width as f32;
-            let art_h = query.height as f32;
-
-            let padding = 24.0;
-            let max_w = (scene_w as f32) - padding * 2.0;
-            let max_h = (top_h as f32) - padding * 2.0;
-
-            let scale = f32::min(max_w / art_w, max_h / art_h);
-            let draw_w = (art_w * scale) as u32;
-            let draw_h = (art_h * scale) as u32;
-
-            let x = ((scene_w - draw_w) / 2) as i32;
-            let y = ((top_h - draw_h) / 2) as i32;
-
-            canvas.copy(texture, None, Rect::new(sx(x), sy(y), sw(draw_w), sh(draw_h)))?;
-        }
-
-        canvas.set_draw_color(Color::RGB(18, 18, 18));
-        canvas.fill_rect(Rect::new(offset_x, sy(top_h as i32), render_w, sh(bottom_h)))?;
-
-        if let Some(cache) = text_cache.as_ref() {
-            cache.title.draw(&mut canvas, &sx, &sy, &sw, &sh)?;
-            cache.artist.draw(&mut canvas, &sx, &sy, &sw, &sh)?;
-            cache.third.draw(&mut canvas, &sx, &sy, &sw, &sh)?;
-            cache.detail.draw(&mut canvas, &sx, &sy, &sw, &sh)?;
-        }
+        let static_target = Rect::new(offset_x, offset_y, render_w, render_h);
+        canvas.copy(&static_scene_texture, None, static_target)?;
 
         if ctx.config.visualizer.enabled && state.visualizer.enabled {
             let vis_h = ctx.config.visualizer.height.min(bottom_h.saturating_sub(8));
@@ -560,6 +608,16 @@ pub fn run_display_loop(
         }
 
         canvas.present();
+
+        frame_counter += 1;
+        if last_frame_log.elapsed() >= Duration::from_secs(5) {
+            let avg_ms = (frame_timer.elapsed().as_secs_f64() * 1000.0) / (frame_counter as f64);
+            log_info(&ctx, &format!("Display avg frame time: {:.1} ms", avg_ms));
+            last_frame_log = Instant::now();
+            frame_timer = Instant::now();
+            frame_counter = 0;
+        }
+
         thread::sleep(Duration::from_millis(ctx.config.display.frame_delay_ms));
     }
 

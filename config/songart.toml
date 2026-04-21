@@ -11,7 +11,7 @@ device = "ps3eye_mono"
 sample_wav = "/home/admin/projects/songart/sample.wav"
 
 # Delay between recognition attempts.
-loop_delay_secs = 2
+loop_delay_secs = 5
 
 # Continuous capture settings.
 sample_rate = 16000
@@ -30,7 +30,7 @@ artwork_file = "/home/admin/projects/songart/current.jpg"
 
 [display]
 window_title = "songart"
-fullscreen = true
+fullscreen = false
 orientation = "portrait"
 frame_delay_ms = 33
 
