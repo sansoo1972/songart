@@ -1,5 +1,5 @@
 [logging]
-level = "debug"
+level = "info"
 file = "/home/admin/projects/songart/songart.log"
 reset_on_start = true
 
@@ -32,7 +32,7 @@ artwork_file = "/home/admin/projects/songart/current.jpg"
 window_title = "songart"
 fullscreen = true
 orientation = "portrait"
-frame_delay_ms = 16
+frame_delay_ms = 33
 
 [display_presets.portrait]
 width = 720
