@@ -1,4 +1,3 @@
-use crate::audio::{ build_wav_oscilloscope_points, compute_wav_rms_level };
 use crate::logging::{ log_blank, log_debug, log_error, log_info };
 use crate::state::{ AppContext, SongState };
 
@@ -286,99 +285,6 @@ pub fn run_recognition_loop(
 
         if !running.load(Ordering::SeqCst) {
             break;
-        }
-
-        // Update visualizer state from the most recently recorded audio sample.
-        if ctx.config.visualizer.enabled {
-            let mode_name = ctx.config.visualizer.mode.to_ascii_lowercase();
-
-            let raw_level = compute_wav_rms_level(&ctx.config.audio.sample_wav);
-
-            let left_points = if mode_name == "oscilloscope" {
-                build_wav_oscilloscope_points(
-                    &ctx.config.audio.sample_wav,
-                    120, // ms of tail audio to inspect
-                    160, // number of points across the display
-                    0.25, // upper channel center
-                    0.4, // waveform height
-                    1.5 // gain
-                )
-            } else {
-                None
-            };
-
-            let right_points = if mode_name == "oscilloscope" {
-                build_wav_oscilloscope_points(
-                    &ctx.config.audio.sample_wav,
-                    120,
-                    160,
-                    0.75, // lower channel center
-                    0.4,
-                    1.5
-                )
-            } else {
-                None
-            };
-
-            log_debug(
-                &ctx,
-                &format!(
-                    "oscilloscope points: left={}, right={}",
-                    left_points
-                        .as_ref()
-                        .map(|p| p.len())
-                        .unwrap_or(0),
-                    right_points
-                        .as_ref()
-                        .map(|p| p.len())
-                        .unwrap_or(0)
-                )
-            );
-
-            log_debug(
-                &ctx,
-                &format!(
-                    "visualizer mode={}, left_points={}, right_points={}",
-                    mode_name,
-                    left_points
-                        .as_ref()
-                        .map(|p| p.len())
-                        .unwrap_or(0),
-                    right_points
-                        .as_ref()
-                        .map(|p| p.len())
-                        .unwrap_or(0)
-                )
-            );
-
-            let mut state = shared_state.lock().unwrap();
-
-            if let Some(raw_level) = raw_level {
-                let smoothing = ctx.config.visualizer.smoothing.clamp(0.0, 1.0);
-
-                state.meter.level = state.meter.level * smoothing + raw_level * (1.0 - smoothing);
-
-                if ctx.config.visualizer.peak_hold {
-                    if state.meter.level > state.meter.peak {
-                        state.meter.peak = state.meter.level;
-                    } else {
-                        state.meter.peak *= 0.96;
-                    }
-                } else {
-                    state.meter.peak = state.meter.level;
-                }
-            }
-
-            state.visualizer.enabled = true;
-            state.visualizer.mode = match mode_name.as_str() {
-                "oscilloscope" => crate::visualizer::VisualizerMode::Oscilloscope,
-                "spectrum" => crate::visualizer::VisualizerMode::Spectrum,
-                "analog_vu" => crate::visualizer::VisualizerMode::AnalogVu,
-                _ => crate::visualizer::VisualizerMode::None,
-            };
-
-            state.visualizer.frame.left_points = left_points.unwrap_or_default();
-            state.visualizer.frame.right_points = right_points.unwrap_or_default();
         }
 
         let output = match

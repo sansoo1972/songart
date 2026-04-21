@@ -5,12 +5,14 @@ mod logging;
 mod recognition;
 mod state;
 mod visualizer;
+mod visualizer_loop;
 
 use crate::config::load_config;
 use crate::display::run_display_loop;
 use crate::logging::{ parse_log_level, reset_log_file, should_log, LogLevel };
 use crate::recognition::run_recognition_loop;
 use crate::state::{ AppContext, SongState };
+use crate::visualizer_loop::run_visualizer_loop;
 
 use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
@@ -46,6 +48,14 @@ fn main() {
         run_recognition_loop(recognizer_ctx, recognizer_running, recognizer_state);
     });
 
+    let visualizer_running = Arc::clone(&running);
+    let visualizer_state = Arc::clone(&shared_state);
+    let visualizer_ctx = Arc::clone(&ctx);
+
+    let visualizer = thread::spawn(move || {
+        run_visualizer_loop(visualizer_ctx, visualizer_running, visualizer_state);
+    });
+
     let display_result = run_display_loop(
         Arc::clone(&ctx),
         Arc::clone(&running),
@@ -54,6 +64,7 @@ fn main() {
 
     running.store(false, Ordering::SeqCst);
     let _ = recognizer.join();
+    let _ = visualizer.join();
 
     if let Err(e) = display_result {
         logging::log_error(&ctx, &format!("Display loop error: {e}"));
