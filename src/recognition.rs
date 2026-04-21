@@ -1,3 +1,4 @@
+use crate::audio::{ write_wav_snapshot, SharedAudioBuffer, SAMPLE_RATE };
 use crate::logging::{ log_blank, log_debug, log_error, log_info };
 use crate::state::{ AppContext, SongState };
 
@@ -243,7 +244,8 @@ fn download_best_artwork(
 pub fn run_recognition_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
-    shared_state: Arc<Mutex<SongState>>
+    shared_state: Arc<Mutex<SongState>>,
+    shared_audio: Arc<Mutex<SharedAudioBuffer>>
 ) {
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
@@ -254,33 +256,22 @@ pub fn run_recognition_loop(
     while running.load(Ordering::SeqCst) {
         log_info(&ctx, "Listening...");
 
-        let record_duration = format!("{}s", ctx.config.audio.record_seconds);
+        // Pull the most recent 10 seconds from the shared rolling audio buffer.
+        let snapshot = {
+            let audio = shared_audio.lock().unwrap();
+            audio.recent_ms(10_000)
+        };
 
-        let record_status = Command::new("timeout")
-            .args([
-                record_duration.as_str(),
-                "parecord",
-                "--device",
-                &ctx.config.audio.device,
-                "--rate",
-                "16000",
-                "--channels",
-                "1",
-                "--format",
-                "s16le",
-                &ctx.config.audio.sample_wav,
-            ])
-            .status();
+        if snapshot.len() < SAMPLE_RATE {
+            log_info(&ctx, "Not enough buffered audio yet for recognition.");
+            thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
+            continue;
+        }
 
-        match record_status {
-            Ok(status) => {
-                log_debug(&ctx, &format!("Record command exit status: {status}"));
-            }
-            Err(e) => {
-                log_error(&ctx, &format!("Failed to record sample audio: {e}"));
-                thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
-                continue;
-            }
+        if let Err(e) = write_wav_snapshot(&ctx.config.audio.sample_wav, &snapshot) {
+            log_error(&ctx, &format!("Failed to write WAV snapshot: {e}"));
+            thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
+            continue;
         }
 
         if !running.load(Ordering::SeqCst) {

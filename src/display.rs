@@ -1,3 +1,4 @@
+use crate::audio::{ build_oscilloscope_points, compute_rms, SharedAudioBuffer };
 use crate::config::DisplayPreset;
 use crate::logging::{ log_debug, log_error, log_info };
 use crate::state::{ AppContext, SongState };
@@ -70,33 +71,6 @@ fn draw_text_line(
     Ok(())
 }
 
-/// Draws a simple digital horizontal VU meter with optional peak line.
-fn draw_vu_meter(
-    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-    level: f32,
-    peak: f32,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32
-) -> Result<(), String> {
-    let level = level.clamp(0.0, 1.0);
-    let peak = peak.clamp(0.0, 1.0);
-
-    canvas.set_draw_color(Color::RGB(35, 35, 35));
-    canvas.fill_rect(Rect::new(x, y, width, height))?;
-
-    let fill_w = ((width as f32) * level) as u32;
-    canvas.set_draw_color(Color::RGB(80, 220, 120));
-    canvas.fill_rect(Rect::new(x, y, fill_w, height))?;
-
-    let peak_x = x + (((width as f32) * peak) as i32);
-    canvas.set_draw_color(Color::RGB(255, 255, 255));
-    canvas.fill_rect(Rect::new(peak_x.saturating_sub(1), y, 2, height))?;
-
-    Ok(())
-}
-
 fn draw_polyline(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     points: &[(f32, f32)],
@@ -139,7 +113,6 @@ fn draw_oscilloscope(
     canvas.set_draw_color(Color::RGB(10, 10, 10));
     canvas.fill_rect(Rect::new(x, y, width, height))?;
 
-    // Simple guide lines for upper and lower channel centers.
     canvas.set_draw_color(Color::RGB(40, 40, 40));
     canvas.draw_line(
         Point::new(x, y + (height as i32) / 4),
@@ -157,34 +130,9 @@ fn draw_oscilloscope(
     Ok(())
 }
 
-fn draw_analog_needle(
+fn draw_visualizer(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-    points: &[(f32, f32)],
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    color: Color
-) -> Result<(), String> {
-    if points.len() < 2 {
-        return Ok(());
-    }
-
-    let (x1n, y1n) = points[0];
-    let (x2n, y2n) = points[1];
-
-    let x1 = x + ((x1n.clamp(0.0, 1.0) * (width as f32)) as i32);
-    let y1 = y + ((y1n.clamp(0.0, 1.0) * (height as f32)) as i32);
-    let x2 = x + ((x2n.clamp(0.0, 1.0) * (width as f32)) as i32);
-    let y2 = y + ((y2n.clamp(0.0, 1.0) * (height as f32)) as i32);
-
-    canvas.set_draw_color(color);
-    canvas.draw_line(Point::new(x1, y1), Point::new(x2, y2))?;
-    Ok(())
-}
-
-fn draw_analog_vu(
-    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    mode: VisualizerMode,
     left_points: &[(f32, f32)],
     right_points: &[(f32, f32)],
     x: i32,
@@ -192,84 +140,23 @@ fn draw_analog_vu(
     width: u32,
     height: u32
 ) -> Result<(), String> {
-    canvas.set_draw_color(Color::RGB(18, 18, 18));
-    canvas.fill_rect(Rect::new(x, y, width, height))?;
-
-    let half_w = width / 2;
-
-    let left_rect = Rect::new(x, y, half_w.saturating_sub(4), height);
-    let right_rect = Rect::new(x + (half_w as i32) + 4, y, half_w.saturating_sub(4), height);
-
-    canvas.set_draw_color(Color::RGB(50, 50, 50));
-    canvas.draw_rect(left_rect)?;
-    canvas.draw_rect(right_rect)?;
-
-    draw_analog_needle(
-        canvas,
-        left_points,
-        left_rect.x(),
-        left_rect.y(),
-        left_rect.width(),
-        left_rect.height(),
-        Color::RGB(255, 220, 120)
-    )?;
-
-    draw_analog_needle(
-        canvas,
-        right_points,
-        right_rect.x(),
-        right_rect.y(),
-        right_rect.width(),
-        right_rect.height(),
-        Color::RGB(255, 220, 120)
-    )?;
-
-    Ok(())
-}
-
-fn draw_visualizer(
-    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-    state: &SongState,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32
-) -> Result<(), String> {
-    match state.visualizer.mode {
+    match mode {
         VisualizerMode::None => Ok(()),
-
-        VisualizerMode::Oscilloscope | VisualizerMode::Spectrum =>
-            draw_oscilloscope(
-                canvas,
-                &state.visualizer.frame.left_points,
-                &state.visualizer.frame.right_points,
-                x,
-                y,
-                width,
-                height
-            ),
-
-        VisualizerMode::AnalogVu =>
-            draw_analog_vu(
-                canvas,
-                &state.visualizer.frame.left_points,
-                &state.visualizer.frame.right_points,
-                x,
-                y,
-                width,
-                height
-            ),
+        VisualizerMode::Oscilloscope | VisualizerMode::Spectrum | VisualizerMode::AnalogVu => {
+            draw_oscilloscope(canvas, left_points, right_points, x, y, width, height)
+        }
     }
 }
 
 /// SDL display loop.
 ///
-/// The selected display preset defines the intended scene size.
-/// The actual SDL canvas may be larger; the scene is scaled to fit.
+/// Metadata/artwork comes from shared state.
+/// Live oscilloscope comes directly from shared audio.
 pub fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
-    shared_state: Arc<Mutex<SongState>>
+    shared_state: Arc<Mutex<SongState>>,
+    shared_audio: Arc<Mutex<SharedAudioBuffer>>
 ) -> Result<(), String> {
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
@@ -319,6 +206,7 @@ pub fn run_display_loop(
     let mut loaded_version: u64 = u64::MAX;
     let mut artwork_texture: Option<sdl2::render::Texture<'_>> = None;
     let mut last_canvas_size: Option<(u32, u32)> = None;
+    let mut display_peak = 0.0f32;
 
     log_info(&ctx, "Display loop started.");
 
@@ -332,10 +220,38 @@ pub fn run_display_loop(
             }
         }
 
-        let state = {
+        let mut state = {
             let state_guard = shared_state.lock().unwrap();
             state_guard.clone()
         };
+
+        // Build live oscilloscope directly from shared audio buffer.
+        let (live_level, left_points, right_points) = {
+            let audio = shared_audio.lock().unwrap();
+            let vis_samples = audio.recent_ms(180);
+
+            let level = compute_rms(&vis_samples).unwrap_or(0.0);
+
+            let left = build_oscilloscope_points(&vis_samples, 160, 0.25, 0.4, 1.8);
+            let right = build_oscilloscope_points(&vis_samples, 160, 0.75, 0.4, 1.8);
+
+            (level, left, right)
+        };
+
+        // Update transient visualizer fields for rendering.
+        display_peak = if live_level > display_peak { live_level } else { display_peak * 0.96 };
+
+        state.meter.level = live_level;
+        state.meter.peak = display_peak;
+        state.visualizer.enabled = ctx.config.visualizer.enabled;
+        state.visualizer.mode = match ctx.config.visualizer.mode.to_ascii_lowercase().as_str() {
+            "oscilloscope" => VisualizerMode::Oscilloscope,
+            "spectrum" => VisualizerMode::Spectrum,
+            "analog_vu" => VisualizerMode::AnalogVu,
+            _ => VisualizerMode::None,
+        };
+        state.visualizer.frame.left_points = left_points;
+        state.visualizer.frame.right_points = right_points;
 
         if state.version != loaded_version {
             if !state.artwork_path.is_empty() && Path::new(&state.artwork_path).exists() {
@@ -508,33 +424,13 @@ pub fn run_display_loop(
 
             draw_visualizer(
                 &mut canvas,
-                &state,
+                state.visualizer.mode,
+                &state.visualizer.frame.left_points,
+                &state.visualizer.frame.right_points,
                 sx(vis_x_scene),
                 sy(vis_y_scene),
                 sw(vis_w_scene),
                 sh(vis_h)
-            )?;
-        } else if
-            ctx.config.visualizer.enabled &&
-            ctx.config.visualizer.mode == "vu" &&
-            ctx.config.visualizer.position == "bottom"
-        {
-            // Fallback for older config/state usage.
-            let vu_h = ctx.config.visualizer.height.min(bottom_h.saturating_sub(8));
-
-            let vu_y_scene =
-                (scene_h as i32) - (vu_h as i32) - (ctx.config.visualizer.padding as i32);
-            let vu_x_scene = ctx.config.visualizer.padding as i32;
-            let vu_w_scene = scene_w.saturating_sub(ctx.config.visualizer.padding * 2);
-
-            draw_vu_meter(
-                &mut canvas,
-                state.meter.level,
-                state.meter.peak,
-                sx(vu_x_scene),
-                sy(vu_y_scene),
-                sw(vu_w_scene),
-                sh(vu_h)
             )?;
         }
 
