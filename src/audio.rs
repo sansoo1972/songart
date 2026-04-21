@@ -2,6 +2,7 @@ use crate::logging::{ log_debug, log_error, log_info };
 use crate::state::AppContext;
 
 use std::collections::VecDeque;
+use std::f32::consts::TAU;
 use std::fs::File;
 use std::io::{ Read, Write };
 use std::process::{ Command, Stdio };
@@ -29,8 +30,7 @@ impl SharedAudioBuffer {
         }
     }
 
-    /// Appends newly decoded samples, trimming the oldest data when the buffer
-    /// reaches capacity.
+    /// Appends newly decoded samples, trimming the oldest data when full.
     pub fn push_samples(&mut self, new_samples: &[f32]) {
         for sample in new_samples {
             if self.samples.len() >= self.max_samples {
@@ -40,7 +40,7 @@ impl SharedAudioBuffer {
         }
     }
 
-    /// Returns the most recent `count` samples from the rolling buffer.
+    /// Returns the most recent `count` samples.
     pub fn recent_samples(&self, count: usize) -> Vec<f32> {
         let take = count.min(self.samples.len());
         self.samples.iter().skip(self.samples.len().saturating_sub(take)).copied().collect()
@@ -52,23 +52,23 @@ impl SharedAudioBuffer {
         self.recent_samples(count)
     }
 
-    /// Returns the number of currently buffered samples.
+    /// Returns the current number of buffered samples.
     pub fn len(&self) -> usize {
         self.samples.len()
     }
 
-    /// Returns true when no samples have been captured yet.
+    /// Returns true if the buffer is empty.
     pub fn is_empty(&self) -> bool {
         self.samples.is_empty()
     }
 
-    /// Returns the configured sample rate for this buffer.
+    /// Returns the configured sample rate.
     pub fn sample_rate(&self) -> usize {
         self.sample_rate
     }
 }
 
-/// Creates the shared live audio buffer using values from configuration.
+/// Creates the shared live audio buffer from config.
 pub fn create_shared_audio_buffer(ctx: &AppContext) -> Arc<Mutex<SharedAudioBuffer>> {
     Arc::new(
         Mutex::new(
@@ -79,9 +79,7 @@ pub fn create_shared_audio_buffer(ctx: &AppContext) -> Arc<Mutex<SharedAudioBuff
 
 /// Continuous audio capture loop using a single long-lived `parec` process.
 ///
-/// This is the single source of truth for live audio inside the application.
-/// Visualizer rendering and recognition snapshots both consume from the same
-/// rolling in-memory buffer to avoid competing parallel recorders.
+/// This is the single source of truth for live audio.
 pub fn run_audio_capture_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
@@ -126,7 +124,6 @@ pub fn run_audio_capture_loop(
     };
 
     let mut buf = vec![0u8; ctx.config.audio.read_chunk_bytes.max(512)];
-    let bytes_per_sample = 2usize;
 
     while running.load(Ordering::SeqCst) {
         match stdout.read(&mut buf) {
@@ -135,7 +132,7 @@ pub fn run_audio_capture_loop(
                 break;
             }
             Ok(n) => {
-                let mut decoded = Vec::with_capacity(n / bytes_per_sample);
+                let mut decoded = Vec::with_capacity(n / 2);
 
                 for chunk in buf[..n].chunks_exact(2) {
                     let sample =
@@ -161,9 +158,7 @@ pub fn run_audio_capture_loop(
     log_info(&ctx, "Audio capture loop stopped.");
 }
 
-/// Computes RMS loudness from a mono sample slice.
-///
-/// The result is normalized and lightly boosted for UI readability.
+/// Computes normalized RMS loudness from mono samples.
 pub fn compute_rms(samples: &[f32]) -> Option<f32> {
     if samples.is_empty() {
         return None;
@@ -176,18 +171,10 @@ pub fn compute_rms(samples: &[f32]) -> Option<f32> {
     }
 
     let rms = (sum / (samples.len() as f64)).sqrt() as f32;
-
     Some((rms * 6.0).clamp(0.0, 1.0))
 }
 
 /// Builds normalized oscilloscope points from a mono sample slice.
-///
-/// The function intentionally:
-/// - takes only the most recent `visible_sample_count` samples
-/// - applies local auto-normalization based on the visible peak
-/// - rescales into normalized screen-space points
-///
-/// This makes small signal changes easier to see on screen.
 pub fn build_oscilloscope_points(
     samples: &[f32],
     width_points: usize,
@@ -220,13 +207,75 @@ pub fn build_oscilloscope_points(
     resample_to_points(&amplified, width_points, y_offset, y_scale)
 }
 
-/// Writes a mono PCM WAV snapshot for SongRec from the latest buffered audio.
+/// Computes spectrum magnitudes using a lightweight DFT-style analysis.
 ///
-/// The WAV format is:
-/// - PCM
-/// - 16-bit
-/// - mono
-/// - configured sample rate
+/// This is intentionally simple and good enough for a fast live analyzer on
+/// the Pi without bringing in a full FFT dependency.
+pub fn compute_spectrum_bins(
+    samples: &[f32],
+    sample_rate: usize,
+    fft_size: usize,
+    bin_count: usize,
+    min_hz: f32,
+    max_hz: f32,
+    gain: f32,
+    max_gain: f32
+) -> Vec<f32> {
+    if samples.is_empty() || fft_size < 32 || bin_count == 0 {
+        return vec![0.0; bin_count];
+    }
+
+    let take = fft_size.min(samples.len());
+    let start = samples.len().saturating_sub(take);
+    let slice = &samples[start..];
+
+    let mut windowed = Vec::with_capacity(slice.len());
+    for (i, sample) in slice.iter().enumerate() {
+        let phase = (i as f32) / (slice.len().saturating_sub(1).max(1) as f32);
+        let hann = 0.5 - 0.5 * (TAU * phase).cos();
+        windowed.push(*sample * hann);
+    }
+
+    let nyquist = (sample_rate as f32) / 2.0;
+    let min_hz = min_hz.clamp(1.0, nyquist);
+    let max_hz = max_hz.clamp(min_hz + 1.0, nyquist);
+
+    let mut out = vec![0.0f32; bin_count];
+
+    for (band, out_bin) in out.iter_mut().enumerate() {
+        let t0 = (band as f32) / (bin_count as f32);
+        let t1 = ((band + 1) as f32) / (bin_count as f32);
+
+        let f0 = min_hz * (max_hz / min_hz).powf(t0);
+        let f1 = min_hz * (max_hz / min_hz).powf(t1);
+        let center_hz = (f0 + f1) * 0.5;
+
+        let omega = (TAU * center_hz) / (sample_rate as f32);
+
+        let mut re = 0.0f32;
+        let mut im = 0.0f32;
+
+        for (n, sample) in windowed.iter().enumerate() {
+            let angle = omega * (n as f32);
+            re += *sample * angle.cos();
+            im -= *sample * angle.sin();
+        }
+
+        let mag = (re * re + im * im).sqrt() / (windowed.len().max(1) as f32);
+        *out_bin = mag;
+    }
+
+    let peak = out.iter().copied().fold(0.0f32, f32::max).max(0.0001);
+    let normalize = (gain / peak).clamp(1.0, max_gain.max(1.0));
+
+    for value in &mut out {
+        *value = (*value * normalize).clamp(0.0, 1.0);
+    }
+
+    out
+}
+
+/// Writes a mono PCM WAV snapshot for SongRec.
 pub fn write_wav_snapshot(
     path: &str,
     samples: &[f32],
@@ -265,7 +314,6 @@ pub fn write_wav_snapshot(
     Ok(())
 }
 
-/// Resamples a slice into normalized X/Y points for line rendering.
 fn resample_to_points(
     samples: &[f32],
     width_points: usize,
@@ -285,14 +333,12 @@ fn resample_to_points(
 
         let sample = samples[i0] * (1.0 - frac) + samples[i1] * frac;
         let y = sample_to_y(sample, y_offset, y_scale);
-
         points.push((t, y));
     }
 
     points
 }
 
-/// Converts a normalized sample to normalized vertical screen position.
 fn sample_to_y(sample: f32, y_offset: f32, y_scale: f32) -> f32 {
     let clamped = sample.clamp(-1.0, 1.0);
     (y_offset - clamped * 0.5 * y_scale).clamp(0.0, 1.0)

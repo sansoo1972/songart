@@ -1,4 +1,9 @@
-use crate::audio::{ build_oscilloscope_points, compute_rms, SharedAudioBuffer };
+use crate::audio::{
+    build_oscilloscope_points,
+    compute_rms,
+    compute_spectrum_bins,
+    SharedAudioBuffer,
+};
 use crate::config::DisplayPreset;
 use crate::logging::{ log_debug, log_error, log_info };
 use crate::state::{ AppContext, SongState };
@@ -28,7 +33,6 @@ fn ellipsize(input: &str, max_chars: usize) -> String {
     format!("{trimmed}…")
 }
 
-/// Resolves the configured font theme into title/body font paths and sizes.
 fn selected_fonts<'a>(ctx: &'a AppContext) -> (&'a str, &'a str, u16, u16) {
     let theme_name = ctx.config.fonts.theme.to_ascii_lowercase();
 
@@ -44,13 +48,11 @@ fn selected_fonts<'a>(ctx: &'a AppContext) -> (&'a str, &'a str, u16, u16) {
     }
 }
 
-/// Resolves the selected display preset from config.
 fn selected_display_preset<'a>(ctx: &'a AppContext) -> Option<&'a DisplayPreset> {
     let key = ctx.config.display.orientation.to_ascii_lowercase();
     ctx.config.display_presets.get(&key)
 }
 
-/// A cached text texture plus its target rectangle in scene coordinates.
 struct CachedText<'a> {
     texture: Texture<'a>,
     rect: Rect,
@@ -86,7 +88,6 @@ impl<'a> CachedText<'a> {
     }
 }
 
-/// Cached metadata text block, rebuilt only when metadata changes.
 struct TextCache<'a> {
     version: u64,
     title: CachedText<'a>,
@@ -252,20 +253,81 @@ fn draw_oscilloscope(
     Ok(())
 }
 
+fn draw_spectrum(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    upper_bins: &[f32],
+    lower_bins: &[f32],
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    bar_gap: u32
+) -> Result<(), String> {
+    canvas.set_draw_color(Color::RGB(10, 10, 10));
+    canvas.fill_rect(Rect::new(x, y, width, height))?;
+
+    if upper_bins.is_empty() || lower_bins.is_empty() {
+        return Ok(());
+    }
+
+    let half_h = height / 2;
+    let count = upper_bins.len().min(lower_bins.len()) as u32;
+    if count == 0 {
+        return Ok(());
+    }
+
+    let total_gap = bar_gap.saturating_mul(count.saturating_sub(1));
+    let bar_w = (width.saturating_sub(total_gap) / count).max(1);
+
+    canvas.set_draw_color(Color::RGB(40, 40, 40));
+    canvas.draw_line(
+        Point::new(x, y + (half_h as i32)),
+        Point::new(x + (width as i32), y + (half_h as i32))
+    )?;
+
+    for (i, value) in upper_bins.iter().enumerate() {
+        let i = i as u32;
+        let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
+        let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
+
+        canvas.set_draw_color(Color::RGB(80, 220, 120));
+        let rect = Rect::new(bar_x, y + (half_h as i32) - (bar_h as i32), bar_w, bar_h);
+        canvas.fill_rect(rect)?;
+    }
+
+    for (i, value) in lower_bins.iter().enumerate() {
+        let i = i as u32;
+        let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
+        let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
+
+        canvas.set_draw_color(Color::RGB(80, 160, 255));
+        let rect = Rect::new(bar_x, y + (half_h as i32), bar_w, bar_h);
+        canvas.fill_rect(rect)?;
+    }
+
+    Ok(())
+}
+
 fn draw_visualizer(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     mode: VisualizerMode,
     left_points: &[(f32, f32)],
     right_points: &[(f32, f32)],
+    upper_bins: &[f32],
+    lower_bins: &[f32],
     x: i32,
     y: i32,
     width: u32,
-    height: u32
+    height: u32,
+    bar_gap: u32
 ) -> Result<(), String> {
     match mode {
         VisualizerMode::None => Ok(()),
-        VisualizerMode::Oscilloscope | VisualizerMode::Spectrum | VisualizerMode::AnalogVu => {
+        VisualizerMode::Oscilloscope | VisualizerMode::AnalogVu => {
             draw_oscilloscope(canvas, left_points, right_points, x, y, width, height)
+        }
+        VisualizerMode::Spectrum => {
+            draw_spectrum(canvas, upper_bins, lower_bins, x, y, width, height, bar_gap)
         }
     }
 }
@@ -288,7 +350,6 @@ fn compute_artwork_rect(query: TextureQuery, scene_w: u32, top_h: u32) -> Rect {
     Rect::new(x, y, draw_w, draw_h)
 }
 
-/// Cached static scene pieces that only change when metadata/artwork changes.
 struct StaticSceneCache<'a> {
     version: u64,
     text: TextCache<'a>,
@@ -301,7 +362,6 @@ impl<'a> StaticSceneCache<'a> {
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
         artwork_texture: Option<&Texture<'a>>,
         scene_w: u32,
-        scene_h: u32,
         top_h: u32,
         bottom_h: u32
     ) -> Result<(), String> {
@@ -320,16 +380,10 @@ impl<'a> StaticSceneCache<'a> {
         self.text.third.draw(canvas)?;
         self.text.detail.draw(canvas)?;
 
-        let _ = scene_h;
         Ok(())
     }
 }
 
-/// SDL display loop.
-///
-/// This version is optimized for the Pi:
-/// - static scene content is rendered once into a texture when metadata changes
-/// - only the oscilloscope is redrawn every frame
 pub fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
@@ -338,11 +392,10 @@ pub fn run_display_loop(
 ) -> Result<(), String> {
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
-
-    log_info(&ctx, &format!("SDL video driver: {}", video.current_video_driver()));
-
     let _image_ctx = sdl2::image::init(InitFlag::JPG | InitFlag::PNG)?;
     let ttf_ctx = sdl2::ttf::init().map_err(|e| e.to_string())?;
+
+    log_info(&ctx, &format!("SDL video driver: {}", video.current_video_driver()));
 
     let preset = selected_display_preset(&ctx).ok_or_else(||
         format!("Unknown display preset: {}", ctx.config.display.orientation)
@@ -371,7 +424,6 @@ pub fn run_display_loop(
         .map_err(|e| e.to_string())?;
 
     let info = canvas.info();
-
     log_info(&ctx, &format!("SDL renderer: name='{}' flags={:?}", info.name, info.flags));
 
     let texture_creator = canvas.texture_creator();
@@ -401,6 +453,9 @@ pub fn run_display_loop(
     let mut frame_counter: u32 = 0;
     let mut frame_timer = Instant::now();
 
+    let mut smoothed_upper_bins = vec![0.0f32; ctx.config.visualizer.spectrum_bin_count];
+    let mut smoothed_lower_bins = vec![0.0f32; ctx.config.visualizer.spectrum_bin_count];
+
     let mut static_scene_cache: Option<StaticSceneCache<'_>> = None;
     let mut static_scene_texture = texture_creator
         .create_texture_target(PixelFormatEnum::RGBA8888, scene_w, scene_h)
@@ -423,34 +478,64 @@ pub fn run_display_loop(
             state_guard.clone()
         };
 
-        let (audio_len, sample_len, live_level, left_points, right_points) = {
-            let audio = shared_audio.lock().unwrap();
-            let vis_samples = audio.recent_ms(ctx.config.visualizer.window_ms);
+        let (audio_len, sample_len, live_level, left_points, right_points, upper_bins, lower_bins) =
+            {
+                let audio = shared_audio.lock().unwrap();
+                let vis_samples = audio.recent_ms(ctx.config.visualizer.window_ms);
+                let audio_len = audio.len();
+                let sample_len = vis_samples.len();
 
-            let level = compute_rms(&vis_samples).unwrap_or(0.0);
+                let level = compute_rms(&vis_samples).unwrap_or(0.0);
 
-            let left = build_oscilloscope_points(
-                &vis_samples,
-                ctx.config.visualizer.point_count,
-                ctx.config.visualizer.left_y_offset,
-                ctx.config.visualizer.y_scale,
-                ctx.config.visualizer.gain,
-                ctx.config.visualizer.visible_sample_count,
-                ctx.config.visualizer.max_gain
-            );
+                let left = build_oscilloscope_points(
+                    &vis_samples,
+                    ctx.config.visualizer.point_count,
+                    ctx.config.visualizer.left_y_offset,
+                    ctx.config.visualizer.y_scale,
+                    ctx.config.visualizer.gain,
+                    ctx.config.visualizer.visible_sample_count,
+                    ctx.config.visualizer.max_gain
+                );
 
-            let right = build_oscilloscope_points(
-                &vis_samples,
-                ctx.config.visualizer.point_count,
-                ctx.config.visualizer.right_y_offset,
-                ctx.config.visualizer.y_scale,
-                ctx.config.visualizer.gain,
-                ctx.config.visualizer.visible_sample_count,
-                ctx.config.visualizer.max_gain
-            );
+                let right = build_oscilloscope_points(
+                    &vis_samples,
+                    ctx.config.visualizer.point_count,
+                    ctx.config.visualizer.right_y_offset,
+                    ctx.config.visualizer.y_scale,
+                    ctx.config.visualizer.gain,
+                    ctx.config.visualizer.visible_sample_count,
+                    ctx.config.visualizer.max_gain
+                );
 
-            (audio.len(), vis_samples.len(), level, left, right)
-        };
+                let bins = compute_spectrum_bins(
+                    &vis_samples,
+                    ctx.config.audio.sample_rate,
+                    ctx.config.visualizer.spectrum_fft_size,
+                    ctx.config.visualizer.spectrum_bin_count,
+                    ctx.config.visualizer.spectrum_min_hz,
+                    ctx.config.visualizer.spectrum_max_hz,
+                    ctx.config.visualizer.gain,
+                    ctx.config.visualizer.max_gain
+                );
+
+                (audio_len, sample_len, level, left, right, bins.clone(), bins)
+            };
+
+        let smoothing = ctx.config.visualizer.spectrum_smoothing.clamp(0.0, 0.98);
+
+        for (i, value) in upper_bins.iter().enumerate() {
+            if i < smoothed_upper_bins.len() {
+                smoothed_upper_bins[i] =
+                    smoothed_upper_bins[i] * smoothing + *value * (1.0 - smoothing);
+            }
+        }
+
+        for (i, value) in lower_bins.iter().enumerate() {
+            if i < smoothed_lower_bins.len() {
+                smoothed_lower_bins[i] =
+                    smoothed_lower_bins[i] * smoothing + *value * (1.0 - smoothing);
+            }
+        }
 
         display_peak = if live_level > display_peak { live_level } else { display_peak * 0.96 };
 
@@ -484,7 +569,7 @@ pub fn run_display_loop(
             log_debug(
                 &ctx,
                 &format!(
-                    "display vis: audio_len={} sample_len={} level={:.3} left_points={} head=({:.3},{:.3}) mid=({:.3},{:.3})",
+                    "display vis: audio_len={} sample_len={} level={:.3} left_points={} head=({:.3},{:.3}) mid=({:.3},{:.3}) bins={} upper0={:.3}",
                     audio_len,
                     sample_len,
                     live_level,
@@ -492,7 +577,9 @@ pub fn run_display_loop(
                     left_head.0,
                     left_head.1,
                     left_mid.0,
-                    left_mid.1
+                    left_mid.1,
+                    smoothed_upper_bins.len(),
+                    smoothed_upper_bins.first().copied().unwrap_or(0.0)
                 )
             );
 
@@ -562,7 +649,6 @@ pub fn run_display_loop(
                         tex_canvas,
                         artwork_texture.as_ref(),
                         scene_w,
-                        scene_h,
                         top_h,
                         bottom_h
                     );
@@ -607,10 +693,13 @@ pub fn run_display_loop(
                 state.visualizer.mode,
                 &state.visualizer.frame.left_points,
                 &state.visualizer.frame.right_points,
+                &smoothed_upper_bins,
+                &smoothed_lower_bins,
                 sx(vis_x_scene),
                 sy(vis_y_scene),
                 sw(vis_w_scene),
-                sh(vis_h)
+                sh(vis_h),
+                ctx.config.visualizer.spectrum_bar_gap
             )?;
         }
 

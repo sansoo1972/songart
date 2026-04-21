@@ -1,5 +1,5 @@
 [logging]
-level = "debug"
+level = "info"
 file = "/home/admin/projects/songart/songart.log"
 reset_on_start = true
 
@@ -11,7 +11,7 @@ device = "ps3eye_mono"
 sample_wav = "/home/admin/projects/songart/sample.wav"
 
 # Delay between recognition attempts.
-loop_delay_secs = 10
+loop_delay_secs = 3
 
 # Continuous capture settings.
 sample_rate = 16000
@@ -101,28 +101,29 @@ body_size = 22
 
 [visualizer]
 enabled = true
-mode = "oscilloscope"
+mode = "spectrum"
 style = "classic"
 position = "bottom"
-height = 120
+height = 140
 padding = 12
-smoothing = 0.20
-peak_hold = false
+smoothing = 0.80
+peak_hold = true
 
-# Oscilloscope tuning
-window_ms = 40
+# Shared live visualizer timing
+window_ms = 60
 point_count = 96
-gain = 10
-y_scale = 1.0
+gain = 8.5
+y_scale = 0.95
 left_y_offset = 0.25
 right_y_offset = 0.75
-
-# Number of raw samples shown before resampling into point_count.
-# Smaller values look more lively; larger values look steadier.
 visible_sample_count = 160
-
-# Hard clamp for auto-normalized gain.
-max_gain = 40.0
-
-# Throttled debug logging for live display waveform stats.
+max_gain = 32.0
 debug_log_interval_ms = 10000
+
+# Spectrum tuning
+spectrum_bin_count = 32
+spectrum_fft_size = 256
+spectrum_smoothing = 0.65
+spectrum_min_hz = 40.0
+spectrum_max_hz = 6000.0
+spectrum_bar_gap = 2

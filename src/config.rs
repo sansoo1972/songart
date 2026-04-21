@@ -24,10 +24,6 @@ pub struct LoggingConfig {
 }
 
 /// Audio capture and recognition settings.
-///
-/// This app now uses one continuous live audio capture stream and a shared
-/// rolling in-memory buffer. Recognition snapshots are written from that
-/// rolling buffer rather than recorded independently.
 #[derive(Debug, Deserialize, Clone)]
 pub struct AudioConfig {
     pub device: String,
@@ -66,7 +62,7 @@ pub struct DisplayConfig {
     pub frame_delay_ms: u64,
 }
 
-/// A full named layout preset selected by `display.orientation`.
+/// Named layout preset selected by `display.orientation`.
 #[derive(Debug, Deserialize, Clone)]
 pub struct DisplayPreset {
     pub width: u32,
@@ -94,9 +90,7 @@ pub struct FontTheme {
     pub body_size: u16,
 }
 
-/// Visualizer configuration.
-///
-/// These settings tune the live oscilloscope without requiring code changes.
+/// Live visualizer configuration.
 #[derive(Debug, Deserialize, Clone)]
 pub struct VisualizerConfig {
     pub enabled: bool,
@@ -139,6 +133,24 @@ pub struct VisualizerConfig {
 
     #[serde(default = "default_debug_log_interval_ms")]
     pub debug_log_interval_ms: u64,
+
+    #[serde(default = "default_spectrum_bin_count")]
+    pub spectrum_bin_count: usize,
+
+    #[serde(default = "default_spectrum_fft_size")]
+    pub spectrum_fft_size: usize,
+
+    #[serde(default = "default_spectrum_smoothing")]
+    pub spectrum_smoothing: f32,
+
+    #[serde(default = "default_spectrum_min_hz")]
+    pub spectrum_min_hz: f32,
+
+    #[serde(default = "default_spectrum_max_hz")]
+    pub spectrum_max_hz: f32,
+
+    #[serde(default = "default_spectrum_bar_gap")]
+    pub spectrum_bar_gap: u32,
 }
 
 fn default_sample_rate() -> usize {
@@ -162,19 +174,19 @@ fn default_read_chunk_bytes() -> usize {
 }
 
 fn default_window_ms() -> usize {
-    120
+    60
 }
 
 fn default_point_count() -> usize {
-    160
+    96
 }
 
 fn default_gain() -> f32 {
-    6.0
+    8.5
 }
 
 fn default_y_scale() -> f32 {
-    0.75
+    0.95
 }
 
 fn default_left_y_offset() -> f32 {
@@ -186,15 +198,39 @@ fn default_right_y_offset() -> f32 {
 }
 
 fn default_visible_sample_count() -> usize {
-    480
+    160
 }
 
 fn default_max_gain() -> f32 {
-    24.0
+    32.0
 }
 
 fn default_debug_log_interval_ms() -> u64 {
-    1000
+    10_000
+}
+
+fn default_spectrum_bin_count() -> usize {
+    32
+}
+
+fn default_spectrum_fft_size() -> usize {
+    256
+}
+
+fn default_spectrum_smoothing() -> f32 {
+    0.65
+}
+
+fn default_spectrum_min_hz() -> f32 {
+    40.0
+}
+
+fn default_spectrum_max_hz() -> f32 {
+    6000.0
+}
+
+fn default_spectrum_bar_gap() -> u32 {
+    2
 }
 
 /// Loads application configuration from a TOML file.
