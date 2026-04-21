@@ -110,19 +110,19 @@ smoothing = 0.80
 peak_hold = true
 
 # Oscilloscope tuning
-window_ms = 120
-point_count = 160
-gain = 6.0
-y_scale = 0.75
+window_ms = 100
+point_count = 120
+gain = 7.5
+y_scale = 0.85
 left_y_offset = 0.25
 right_y_offset = 0.75
 
 # Number of raw samples shown before resampling into point_count.
 # Smaller values look more lively; larger values look steadier.
-visible_sample_count = 480
+visible_sample_count = 360
 
 # Hard clamp for auto-normalized gain.
-max_gain = 24.0
+max_gain = 28.0
 
 # Throttled debug logging for live display waveform stats.
-debug_log_interval_ms = 1000
+debug_log_interval_ms = 5000

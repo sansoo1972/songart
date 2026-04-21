@@ -9,6 +9,8 @@ use sdl2::image::{ InitFlag, LoadTexture };
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 use sdl2::rect::{ Point, Rect };
+use sdl2::render::{ Texture, TextureCreator };
+use sdl2::video::WindowContext;
 
 use std::path::Path;
 use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
@@ -48,27 +50,162 @@ fn selected_display_preset<'a>(ctx: &'a AppContext) -> Option<&'a DisplayPreset>
     ctx.config.display_presets.get(&key)
 }
 
-fn draw_text_line(
-    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-    texture_creator: &sdl2::render::TextureCreator<sdl2::video::WindowContext>,
-    font: &sdl2::ttf::Font,
-    text: &str,
-    color: Color,
-    x: i32,
-    y: i32
-) -> Result<(), String> {
-    let safe_text = if text.trim().is_empty() { " " } else { text };
+/// A cached text texture plus its native-size target rectangle in scene space.
+struct CachedText<'a> {
+    texture: Texture<'a>,
+    rect: Rect,
+}
 
-    let surface = font
-        .render(safe_text)
-        .blended(color)
-        .map_err(|e| e.to_string())?;
+impl<'a> CachedText<'a> {
+    fn new(
+        texture_creator: &'a TextureCreator<WindowContext>,
+        font: &sdl2::ttf::Font,
+        text: &str,
+        color: Color,
+        x: i32,
+        y: i32
+    ) -> Result<Self, String> {
+        let safe_text = if text.trim().is_empty() { " " } else { text };
 
-    let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
+        let surface = font
+            .render(safe_text)
+            .blended(color)
+            .map_err(|e| e.to_string())?;
 
-    let target = Rect::new(x, y, surface.width(), surface.height());
-    canvas.copy(&texture, None, target)?;
-    Ok(())
+        let texture = texture_creator
+            .create_texture_from_surface(&surface)
+            .map_err(|e| e.to_string())?;
+
+        let rect = Rect::new(x, y, surface.width(), surface.height());
+
+        Ok(Self { texture, rect })
+    }
+
+    fn draw(
+        &self,
+        canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+        sx: &dyn Fn(i32) -> i32,
+        sy: &dyn Fn(i32) -> i32,
+        sw: &dyn Fn(u32) -> u32,
+        sh: &dyn Fn(u32) -> u32
+    ) -> Result<(), String> {
+        let target = Rect::new(
+            sx(self.rect.x()),
+            sy(self.rect.y()),
+            sw(self.rect.width()),
+            sh(self.rect.height())
+        );
+        canvas.copy(&self.texture, None, target)?;
+        Ok(())
+    }
+}
+
+/// Cached text block for song metadata.
+/// Rebuilt only when the metadata version changes.
+struct TextCache<'a> {
+    version: u64,
+    title: CachedText<'a>,
+    artist: CachedText<'a>,
+    third: CachedText<'a>,
+    detail: CachedText<'a>,
+}
+
+fn build_text_cache<'a>(
+    texture_creator: &'a TextureCreator<WindowContext>,
+    title_font: &sdl2::ttf::Font,
+    body_font: &sdl2::ttf::Font,
+    state: &SongState,
+    preset: &DisplayPreset,
+    top_h: u32
+) -> Result<TextCache<'a>, String> {
+    let panel_x = preset.panel_x;
+    let mut panel_y = (top_h as i32) + preset.panel_y;
+
+    let title_line = ellipsize(
+        if state.title.trim().is_empty() {
+            "Waiting for music..."
+        } else {
+            &state.title
+        },
+        48
+    );
+
+    let artist_line = ellipsize(
+        if state.artist.trim().is_empty() {
+            "No track identified yet"
+        } else {
+            &state.artist
+        },
+        56
+    );
+
+    let mut third_line = state.album.clone();
+    if !state.released.is_empty() && state.released != "Unknown" {
+        if third_line.is_empty() || third_line == "Unknown" {
+            third_line = state.released.clone();
+        } else {
+            third_line = format!("{} • {}", state.album, state.released);
+        }
+    }
+
+    let third_line = if third_line.trim().is_empty() {
+        "Album unknown".to_string()
+    } else {
+        ellipsize(&third_line, 56)
+    };
+
+    let detail_line = format!(
+        "Genre: {}    Composer: {}",
+        ellipsize(&state.genre, 20),
+        ellipsize(&state.composer, 28)
+    );
+
+    let title = CachedText::new(
+        texture_creator,
+        title_font,
+        &title_line,
+        Color::RGB(255, 255, 255),
+        panel_x,
+        panel_y
+    )?;
+    panel_y += preset.title_line_spacing;
+
+    let artist = CachedText::new(
+        texture_creator,
+        body_font,
+        &artist_line,
+        Color::RGB(210, 210, 210),
+        panel_x,
+        panel_y
+    )?;
+    panel_y += preset.body_line_spacing;
+
+    let third = CachedText::new(
+        texture_creator,
+        body_font,
+        &third_line,
+        Color::RGB(180, 180, 180),
+        panel_x,
+        panel_y
+    )?;
+    panel_y += preset.detail_line_spacing;
+
+    let detail = CachedText::new(
+        texture_creator,
+        body_font,
+        &detail_line,
+        Color::RGB(140, 140, 140),
+        panel_x,
+        panel_y
+    )?;
+
+    Ok(TextCache {
+        version: state.version,
+        title,
+        artist,
+        third,
+        detail,
+    })
 }
 
 fn draw_polyline(
@@ -150,8 +287,9 @@ fn draw_visualizer(
 
 /// SDL display loop.
 ///
-/// Metadata and artwork come from `shared_state`.
-/// Live oscilloscope data is built each frame from `shared_audio`.
+/// Performance note:
+/// - text textures are cached and only rebuilt when `SongState.version` changes
+/// - oscilloscope points are rebuilt every frame from the shared live audio buffer
 pub fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
@@ -208,6 +346,7 @@ pub fn run_display_loop(
     let mut last_canvas_size: Option<(u32, u32)> = None;
     let mut display_peak = 0.0f32;
     let mut last_vis_debug = Instant::now();
+    let mut text_cache: Option<TextCache<'_>> = None;
 
     log_info(&ctx, "Display loop started.");
 
@@ -340,6 +479,19 @@ pub fn run_display_loop(
         let top_h = ((scene_h as f32) * preset.top_panel_ratio) as u32;
         let bottom_h = scene_h - top_h;
 
+        // Rebuild cached text only when metadata changes.
+        let needs_text_rebuild = text_cache
+            .as_ref()
+            .map(|c| c.version != state.version)
+            .unwrap_or(true);
+
+        if needs_text_rebuild {
+            text_cache = Some(
+                build_text_cache(&texture_creator, &title_font, &body_font, &state, preset, top_h)?
+            );
+            log_debug(&ctx, &format!("Rebuilt text cache for version {}", state.version));
+        }
+
         let scale_x = (canvas_w as f32) / (scene_w as f32);
         let scale_y = (canvas_h as f32) / (scene_h as f32);
         let scene_scale = f32::min(scale_x, scale_y);
@@ -380,90 +532,12 @@ pub fn run_display_loop(
         canvas.set_draw_color(Color::RGB(18, 18, 18));
         canvas.fill_rect(Rect::new(offset_x, sy(top_h as i32), render_w, sh(bottom_h)))?;
 
-        let panel_x = preset.panel_x;
-        let mut panel_y = (top_h as i32) + preset.panel_y;
-
-        let title_line = ellipsize(
-            if state.title.trim().is_empty() {
-                "Waiting for music..."
-            } else {
-                &state.title
-            },
-            48
-        );
-
-        let artist_line = ellipsize(
-            if state.artist.trim().is_empty() {
-                "No track identified yet"
-            } else {
-                &state.artist
-            },
-            56
-        );
-
-        let mut third_line = state.album.clone();
-        if !state.released.is_empty() && state.released != "Unknown" {
-            if third_line.is_empty() || third_line == "Unknown" {
-                third_line = state.released.clone();
-            } else {
-                third_line = format!("{} • {}", state.album, state.released);
-            }
+        if let Some(cache) = text_cache.as_ref() {
+            cache.title.draw(&mut canvas, &sx, &sy, &sw, &sh)?;
+            cache.artist.draw(&mut canvas, &sx, &sy, &sw, &sh)?;
+            cache.third.draw(&mut canvas, &sx, &sy, &sw, &sh)?;
+            cache.detail.draw(&mut canvas, &sx, &sy, &sw, &sh)?;
         }
-
-        let third_line = if third_line.trim().is_empty() {
-            "Album unknown".to_string()
-        } else {
-            ellipsize(&third_line, 56)
-        };
-
-        draw_text_line(
-            &mut canvas,
-            &texture_creator,
-            &title_font,
-            &title_line,
-            Color::RGB(255, 255, 255),
-            sx(panel_x),
-            sy(panel_y)
-        )?;
-        panel_y += preset.title_line_spacing;
-
-        draw_text_line(
-            &mut canvas,
-            &texture_creator,
-            &body_font,
-            &artist_line,
-            Color::RGB(210, 210, 210),
-            sx(panel_x),
-            sy(panel_y)
-        )?;
-        panel_y += preset.body_line_spacing;
-
-        draw_text_line(
-            &mut canvas,
-            &texture_creator,
-            &body_font,
-            &third_line,
-            Color::RGB(180, 180, 180),
-            sx(panel_x),
-            sy(panel_y)
-        )?;
-        panel_y += preset.detail_line_spacing;
-
-        let detail_line = format!(
-            "Genre: {}    Composer: {}",
-            ellipsize(&state.genre, 20),
-            ellipsize(&state.composer, 28)
-        );
-
-        draw_text_line(
-            &mut canvas,
-            &texture_creator,
-            &body_font,
-            &detail_line,
-            Color::RGB(140, 140, 140),
-            sx(panel_x),
-            sy(panel_y)
-        )?;
 
         if ctx.config.visualizer.enabled && state.visualizer.enabled {
             let vis_h = ctx.config.visualizer.height.min(bottom_h.saturating_sub(8));
