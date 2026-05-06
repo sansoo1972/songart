@@ -379,7 +379,9 @@ pub fn run_recognition_loop(
 
                 let artwork_changed = final_url != last_artwork_url;
 
-                if artwork_changed {
+                let artwork_changed = final_url != last_artwork_url;
+
+                {
                     let mut state = shared_state.lock().unwrap();
                     state.title = title.to_string();
                     state.artist = artist.to_string();
@@ -393,9 +395,12 @@ pub fn run_recognition_loop(
                     state.artwork_path = ctx.config.paths.artwork_file.clone();
                     state.artwork_url = final_url.clone();
                     state.version = state.version.wrapping_add(1);
+                }
+
+                if artwork_changed {
                     log_info(&ctx, "Updated UI state with new artwork.");
                 } else {
-                    log_info(&ctx, "Artwork unchanged, skipping UI state refresh.");
+                    log_info(&ctx, "Updated UI metadata; artwork unchanged.");
                 }
 
                 last_track = current;
