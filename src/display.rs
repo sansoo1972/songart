@@ -1,8 +1,4 @@
-use crate::audio::{
-    build_oscilloscope_points,
-    compute_rms,
-    SharedAudioBuffer,
-};
+use crate::audio::{ build_oscilloscope_points, compute_rms, SharedAudioBuffer };
 use crate::fft::compute_spectrum_bins;
 use crate::config::DisplayPreset;
 use crate::logging::{ log_debug, log_error, log_info };
@@ -572,14 +568,24 @@ pub fn run_display_loop(
             last_vis_debug.elapsed() >=
             Duration::from_millis(ctx.config.visualizer.debug_log_interval_ms)
         {
+            let smooth_max_bin = smoothed_upper_bins.iter().copied().fold(0.0f32, f32::max);
+
+            let smooth_avg_bin = if smoothed_upper_bins.is_empty() {
+                0.0
+            } else {
+                smoothed_upper_bins.iter().sum::<f32>() / (smoothed_upper_bins.len() as f32)
+            };
+
             log_debug(
                 &ctx,
                 &format!(
-                    "display vis: audio_len={} sample_len={} level={:.3} bins={} upper0={:.3} upper8={:.3} upper16={:.3}",
+                    "Visualizer debug: audio_len={} sample_len={} level={:.3} bins={} smooth_max={:.3} smooth_avg={:.3} upper0={:.3} upper8={:.3} upper16={:.3}",
                     audio_len,
                     sample_len,
                     live_level,
                     smoothed_upper_bins.len(),
+                    smooth_max_bin,
+                    smooth_avg_bin,
                     smoothed_upper_bins.get(0).copied().unwrap_or(0.0),
                     smoothed_upper_bins.get(8).copied().unwrap_or(0.0),
                     smoothed_upper_bins.get(16).copied().unwrap_or(0.0)
