@@ -131,17 +131,28 @@ pub fn run_audio_capture_loop(
                 break;
             }
             Ok(n) => {
-                let mut decoded = Vec::with_capacity(n / 2);
+                let channels = ctx.config.audio.channels.max(1);
+                let mut decoded_raw = Vec::with_capacity(n / 2);
 
                 for chunk in buf[..n].chunks_exact(2) {
                     let sample =
                         (i16::from_le_bytes([chunk[0], chunk[1]]) as f32) / (i16::MAX as f32);
-                    decoded.push(sample);
+                    decoded_raw.push(sample);
                 }
 
-                if !decoded.is_empty() {
+                // Downmix interleaved multi-channel audio to mono.
+                // PS3 Eye is commonly 4ch @ 16kHz, so this prevents ch1/ch2/ch3/ch4
+                // from being treated as a fake high-speed mono stream.
+                let mut mono = Vec::with_capacity(decoded_raw.len() / channels);
+
+                for frame in decoded_raw.chunks_exact(channels) {
+                    let sum: f32 = frame.iter().copied().sum();
+                    mono.push(sum / (channels as f32));
+                }
+
+                if !mono.is_empty() {
                     let mut audio = shared_audio.lock().unwrap();
-                    audio.push_samples(&decoded);
+                    audio.push_samples(&mono);
                 }
             }
             Err(e) => {
