@@ -80,7 +80,7 @@ pub fn compute_spectrum_bins(
     let scale = gain.max(0.0);
 
     for value in &mut out {
-        let db_like = (*value + 1.0e-6).log10() * 0.25 + 1.0;
+        let db_like = (*value + 1.0e-6).log10() * 0.12 + 0.65;
         *value = (db_like * scale).clamp(0.0, 1.0);
     }
 
