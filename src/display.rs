@@ -1,9 +1,9 @@
 use crate::audio::{
     build_oscilloscope_points,
     compute_rms,
-    compute_spectrum_bins,
     SharedAudioBuffer,
 };
+use crate::fft::compute_spectrum_bins;
 use crate::config::DisplayPreset;
 use crate::logging::{ log_debug, log_error, log_info };
 use crate::state::{ AppContext, SongState };

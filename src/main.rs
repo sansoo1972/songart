@@ -5,6 +5,7 @@ mod logging;
 mod recognition;
 mod state;
 mod visualizer;
+mod fft;
 
 use crate::audio::{ create_shared_audio_buffer, run_audio_capture_loop };
 use crate::config::load_config;
