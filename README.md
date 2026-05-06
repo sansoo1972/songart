@@ -1,10 +1,10 @@
 # songart
 
-Real-time music recognition, artwork display, and live audio metering for Raspberry Pi.
+Real-time music recognition, artwork display, and live audio visualization for Raspberry Pi.
 
-`songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and a live digital VU meter.
+`songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.9.0 introduces a modular codebase, config-driven display presets, theme-based typography, and a live visualizer.
+Version 0.9.1 introduces a real-time FFT spectrum visualizer, shared rolling audio analysis, renderer scene caching, and improved metadata refresh behavior.
 
 ---
 
@@ -13,7 +13,9 @@ Version 0.9.0 introduces a modular codebase, config-driven display presets, them
 - Real-time music recognition via SongRec
 - Automatic high-resolution album artwork retrieval
 - SDL-based artwork and metadata display
-- Live digital VU meter driven from captured audio
+- Real-time FFT spectrum analyzer
+- Oscilloscope audio visualizer
+- Shared rolling audio buffer for live visualization
 - Configurable display presets for portrait and landscape layouts
 - Theme-based typography with separate title and body fonts
 - Theme-based font sizes
@@ -26,7 +28,7 @@ Version 0.9.0 introduces a modular codebase, config-driven display presets, them
 
 ## Architecture
 
-Microphone → audio capture → SongRec JSON → Rust app → artwork download → SDL display + VU meter
+Microphone → rolling audio buffer → SongRec recognition + FFT analysis → Rust app → artwork download → SDL display + visualizers
 
 ---
 
@@ -43,9 +45,12 @@ songart/
 │   ├── config.rs           # Config structs and loader
 │   ├── logging.rs          # Logging helpers and log levels
 │   ├── state.rs            # Shared app/song/meter state
-│   ├── audio.rs            # Audio meter helpers
+│   ├── audio.rs            # Audio capture and rolling audio buffer
+│   ├── fft.rs              # FFT spectrum processing
+│   ├── visualizer.rs       # Visualizer mode definitions
 │   ├── recognition.rs      # SongRec recognition loop
-│   └── display.rs          # SDL rendering loop
+│   ├── display.rs          # SDL rendering loop
+│   └── renderer/           # Future rendering separation scaffold
 ├── Cargo.toml              # Rust dependencies
 ├── README.md
 ├── CHANGELOG.md
@@ -101,7 +106,7 @@ config/songart.toml
 - `display_presets` define scene geometry and spacing
 - `fonts` selects the active theme
 - `font_themes` define title/body font paths and font sizes
-- `visualizer` controls the live VU meter
+- `visualizer` controls FFT and oscilloscope rendering behavior
 
 ### Example
 
@@ -148,13 +153,24 @@ body_size = 22
 
 [visualizer]
 enabled = true
-mode = "vu"
-position = "bottom"
-style = "digital"
-height = 60
+mode = "spectrum"
+
+height = 160
 padding = 16
-peak_hold = true
-smoothing = 0.10
+
+window_ms = 30
+
+spectrum_fft_size = 2048
+spectrum_bin_count = 32
+
+spectrum_min_hz = 40
+spectrum_max_hz = 12000
+
+spectrum_bar_gap = 6
+spectrum_smoothing = 0.92
+
+gain = 1.2
+max_gain = 4.0
 ```
 
 ### Change layout with one line
@@ -208,20 +224,33 @@ Each theme controls:
 ```toml
 [visualizer]
 enabled = true
-mode = "vu"
-position = "bottom"
-style = "digital"
-height = 60
+mode = "spectrum"
+
+height = 160
 padding = 16
-peak_hold = true
-smoothing = 0.10
+
+window_ms = 30
+
+spectrum_fft_size = 2048
+spectrum_bin_count = 32
+
+spectrum_min_hz = 40
+spectrum_max_hz = 12000
+
+spectrum_bar_gap = 6
+spectrum_smoothing = 0.92
+
+gain = 1.2
+max_gain = 4.0
 ```
 
 Current implementation:
-- mono digital VU meter
-- bottom strip placement
-- RMS from recent audio tail
-- peak hold support
+- FFT spectrum analyzer
+- Oscilloscope rendering
+- Log-spaced frequency bins
+- Spectrum smoothing
+- Shared rolling audio analysis buffer
+- Configurable gain and FFT sizing
 
 ---
 
@@ -268,6 +297,7 @@ Important notes:
 - The actual OS / SDL canvas may still differ depending on the active desktop or display backend.
 - Portrait mode behaves best when the Pi desktop session itself is already rotated to portrait.
 - Running from the Pi GUI session is currently the most reliable path.
+- Layout balancing for portrait visualizers is still evolving.
 
 ---
 
@@ -291,7 +321,7 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.9.0**.
+This project is now at **0.9.1**.
 
 ---
 
@@ -306,7 +336,11 @@ This project is now at **0.9.0**.
 - Theme-based font sizing working
 - Display presets for portrait and landscape working
 - Scene scaling to real SDL canvas working
-- Digital VU meter working
+- FFT spectrum analyzer working
+- Oscilloscope visualizer working
+- Shared rolling audio analysis working
+- Renderer scene caching working
+- Metadata refresh improvements working
 - Timestamped logging with configurable log levels working
 - Graceful Ctrl+C shutdown working
 
@@ -314,20 +348,22 @@ This project is now at **0.9.0**.
 
 ## Future Improvements
 
-- Stereo VU meter
-- Spectrum / EQ visualizer
+- Improved spectrum scaling and dynamics
+- Better portrait layout balancing
+- Artwork caching and reload optimization
+- Human-readable logging timestamps
 - More display presets and layout themes
-- Artwork caching and reuse
 - Metadata enrichment from additional sources
 - Boot-time auto start / service mode
 - Transition effects between tracks
 - Theme-based color palettes
+- GPU-rendered visual effects
 
 ---
 
 ## Author
 
-Richard (`sansoo1972`)
+sansoo1972 (`sansoo1972`)
 
 ---
 

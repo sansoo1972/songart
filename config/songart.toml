@@ -4,10 +4,25 @@ file = "/home/admin/projects/songart/songart.log"
 reset_on_start = true
 
 [audio]
+# PulseAudio / PipeWire source or monitor name.
 device = "ps3eye_mono"
+
+# Path used for SongRec recognition snapshots.
 sample_wav = "/home/admin/projects/songart/sample.wav"
-record_seconds = 10
-loop_delay_secs = 2
+
+# Delay between recognition attempts.
+loop_delay_secs = 3
+
+# Continuous capture settings.
+sample_rate = 16000
+channels = 1
+buffer_seconds = 20
+
+# Amount of recent buffered audio written to WAV for SongRec.
+recognition_window_ms = 10000
+
+# Size of read chunks from the live capture stream.
+read_chunk_bytes = 4096
 
 [paths]
 songrec_bin = "/home/admin/projects/vendor/songrec/target/release/songrec"
@@ -15,9 +30,9 @@ artwork_file = "/home/admin/projects/songart/current.jpg"
 
 [display]
 window_title = "songart"
-fullscreen = true
-orientation = "portrait"   # selects the preset below
-frame_delay_ms = 33
+fullscreen = false
+orientation = "portrait"
+frame_delay_ms = 16
 
 [display_presets.portrait]
 width = 720
@@ -40,7 +55,7 @@ body_line_spacing = 34
 detail_line_spacing = 40
 
 [fonts]
-theme = "grunge"
+theme = "scripted"
 
 [font_themes.modern]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
@@ -86,10 +101,29 @@ body_size = 22
 
 [visualizer]
 enabled = true
-mode = "vu"          # off | vu
-position = "bottom"  # bottom
-style = "digital"    # digital
-height = 60
-padding = 16
-peak_hold = true
-smoothing = 0.35
+mode = "spectrum"
+style = "classic"
+position = "bottom"
+height = 160
+padding = 12
+smoothing = 0.05
+peak_hold = false
+
+# Shared live visualizer timing
+window_ms = 30
+point_count = 96
+gain = 0.65
+y_scale = 1.0
+left_y_offset = 0.25
+right_y_offset = 0.75
+visible_sample_count = 160
+max_gain = 2.5
+debug_log_interval_ms = 10000
+
+# Spectrum tuning
+spectrum_bin_count = 32
+spectrum_fft_size = 512
+spectrum_smoothing = 0.18
+spectrum_min_hz = 40.0
+spectrum_max_hz = 6000.0
+spectrum_bar_gap = 2

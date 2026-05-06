@@ -1,18 +1,15 @@
-use crate::audio::compute_wav_rms_level;
-use crate::logging::{log_blank, log_debug, log_error, log_info};
-use crate::state::{AppContext, SongState};
+use crate::audio::{ write_wav_snapshot, SharedAudioBuffer };
+use crate::logging::{ log_blank, log_debug, log_error, log_info };
+use crate::state::{ AppContext, SongState };
 
 use serde_json::Value;
 use std::fs;
 use std::process::Command;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
 use std::time::Duration;
 
-/// Pulls a metadata value out of the nested SongRec/Shazam JSON sections by title.
+/// Looks up a metadata value by title in SongRec's nested JSON sections.
 fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
     let sections = json["track"]["sections"].as_array()?;
 
@@ -58,17 +55,11 @@ fn extract_track_number(json: &Value) -> String {
 }
 
 fn extract_genre(json: &Value) -> String {
-    json["track"]["genres"]["primary"]
-        .as_str()
-        .unwrap_or("Unknown")
-        .to_string()
+    json["track"]["genres"]["primary"].as_str().unwrap_or("Unknown").to_string()
 }
 
 fn extract_isrc(json: &Value) -> String {
-    json["track"]["isrc"]
-        .as_str()
-        .unwrap_or("Unknown")
-        .to_string()
+    json["track"]["isrc"].as_str().unwrap_or("Unknown").to_string()
 }
 
 fn extract_notes(json: &Value) -> String {
@@ -96,7 +87,8 @@ fn extract_notes(json: &Value) -> String {
     }
 }
 
-/// Builds an ordered list of artwork URL candidates.
+/// Builds an ordered list of possible artwork URLs, preferring higher sizes
+/// when the URL pattern supports it.
 fn artwork_candidates(url: &str) -> Vec<String> {
     let mut out = Vec::new();
 
@@ -127,7 +119,7 @@ fn artwork_candidates(url: &str) -> Vec<String> {
     out
 }
 
-/// Picks the first available seed artwork URL from the JSON response.
+/// Picks the first usable seed artwork URL from the JSON response.
 fn pick_artwork_url(json: &Value) -> Option<String> {
     let mut base_urls = Vec::new();
 
@@ -166,7 +158,7 @@ fn pick_artwork_url(json: &Value) -> Option<String> {
 fn download_best_artwork(
     ctx: &AppContext,
     json: &Value,
-    output_path: &str,
+    output_path: &str
 ) -> Result<String, String> {
     let mut base_urls = Vec::new();
 
@@ -192,7 +184,8 @@ fn download_best_artwork(
         return Err("No artwork URL found in JSON".to_string());
     }
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::blocking::Client
+        ::builder()
         .user_agent("songart/0.1")
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
@@ -229,19 +222,18 @@ fn download_best_artwork(
         };
 
         if bytes.len() < 10_000 {
-            log_debug(
-                ctx,
-                &format!("Rejected tiny image ({} bytes): {}", bytes.len(), candidate),
-            );
+            log_debug(ctx, &format!("Rejected tiny image ({} bytes): {}", bytes.len(), candidate));
             continue;
         }
 
         let tmp_path = format!("{output_path}.tmp");
 
-        fs::write(&tmp_path, &bytes)
+        fs
+            ::write(&tmp_path, &bytes)
             .map_err(|e| format!("Failed to save temp artwork to {}: {e}", tmp_path))?;
 
-        fs::rename(&tmp_path, output_path)
+        fs
+            ::rename(&tmp_path, output_path)
             .map_err(|e| format!("Failed to rename temp artwork to {}: {e}", output_path))?;
 
         return Ok(candidate);
@@ -250,10 +242,16 @@ fn download_best_artwork(
     Err("No usable artwork URL succeeded".to_string())
 }
 
+/// Recognition loop.
+///
+/// This loop no longer records its own audio. Instead, it takes periodic WAV
+/// snapshots from the shared rolling audio buffer and sends those snapshots to
+/// SongRec for identification.
 pub fn run_recognition_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
     shared_state: Arc<Mutex<SongState>>,
+    shared_audio: Arc<Mutex<SharedAudioBuffer>>
 ) {
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
@@ -264,63 +262,39 @@ pub fn run_recognition_loop(
     while running.load(Ordering::SeqCst) {
         log_info(&ctx, "Listening...");
 
-        let record_duration = format!("{}s", ctx.config.audio.record_seconds);
+        let snapshot = {
+            let audio = shared_audio.lock().unwrap();
+            audio.recent_ms(ctx.config.audio.recognition_window_ms)
+        };
 
-        let record_status = Command::new("timeout")
-            .args([
-                record_duration.as_str(),
-                "parecord",
-                "--device",
-                &ctx.config.audio.device,
-                "--rate",
-                "16000",
-                "--channels",
-                "1",
-                "--format",
-                "s16le",
+        let min_required = ctx.config.audio.sample_rate;
+        if snapshot.len() < min_required {
+            log_info(&ctx, "Not enough buffered audio yet for recognition.");
+            thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
+            continue;
+        }
+
+        if
+            let Err(e) = write_wav_snapshot(
                 &ctx.config.audio.sample_wav,
-            ])
-            .status();
-
-        match record_status {
-            Ok(status) => {
-                log_debug(&ctx, &format!("Record command exit status: {status}"));
-            }
-            Err(e) => {
-                log_error(&ctx, &format!("Failed to record sample audio: {e}"));
-                thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
-                continue;
-            }
+                &snapshot,
+                ctx.config.audio.sample_rate,
+                ctx.config.audio.channels
+            )
+        {
+            log_error(&ctx, &format!("Failed to write WAV snapshot: {e}"));
+            thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
+            continue;
         }
 
         if !running.load(Ordering::SeqCst) {
             break;
         }
 
-        // Update the visualizer from the most recently recorded audio sample.
-        if ctx.config.visualizer.enabled && ctx.config.visualizer.mode == "vu" {
-            if let Some(raw_level) = compute_wav_rms_level(&ctx.config.audio.sample_wav) {
-                let mut state = shared_state.lock().unwrap();
-                let smoothing = ctx.config.visualizer.smoothing.clamp(0.0, 1.0);
-
-                state.meter.level =
-                    state.meter.level * smoothing + raw_level * (1.0 - smoothing);
-
-                if ctx.config.visualizer.peak_hold {
-                    if state.meter.level > state.meter.peak {
-                        state.meter.peak = state.meter.level;
-                    } else {
-                        state.meter.peak *= 0.96;
-                    }
-                } else {
-                    state.meter.peak = state.meter.level;
-                }
-            }
-        }
-
-        let output = match Command::new(&ctx.config.paths.songrec_bin)
-            .args(["recognize", &ctx.config.audio.sample_wav, "--json"])
-            .output()
+        let output = match
+            Command::new(&ctx.config.paths.songrec_bin)
+                .args(["recognize", &ctx.config.audio.sample_wav, "--json"])
+                .output()
         {
             Ok(output) => output,
             Err(e) => {
@@ -405,7 +379,9 @@ pub fn run_recognition_loop(
 
                 let artwork_changed = final_url != last_artwork_url;
 
-                if artwork_changed {
+                let artwork_changed = final_url != last_artwork_url;
+
+                {
                     let mut state = shared_state.lock().unwrap();
                     state.title = title.to_string();
                     state.artist = artist.to_string();
@@ -419,9 +395,12 @@ pub fn run_recognition_loop(
                     state.artwork_path = ctx.config.paths.artwork_file.clone();
                     state.artwork_url = final_url.clone();
                     state.version = state.version.wrapping_add(1);
+                }
+
+                if artwork_changed {
                     log_info(&ctx, "Updated UI state with new artwork.");
                 } else {
-                    log_info(&ctx, "Artwork unchanged, skipping UI state refresh.");
+                    log_info(&ctx, "Updated UI metadata; artwork unchanged.");
                 }
 
                 last_track = current;

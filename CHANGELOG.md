@@ -2,6 +2,50 @@
 
 All notable changes to `songart` will be documented in this file.
 
+---
+
+## [0.9.1] - 2026-05-06
+
+### Added
+- Real-time FFT spectrum visualizer
+- Log-spaced spectrum band processing
+- Hann-windowed FFT analysis pipeline
+- Shared rolling audio buffer for recognition and visualization
+- Spectrum smoothing controls
+- Configurable FFT sizing and frequency range
+- Renderer scene caching for improved display efficiency
+- Visualizer diagnostic logging:
+  - max spectrum bin
+  - average spectrum energy
+  - live RMS level
+- Scaffolded `renderer/` module structure for future rendering separation
+
+### Changed
+- Replaced the original digital VU meter with a spectrum analyzer mode
+- Moved visualizer processing to true real-time shared audio analysis
+- Reduced spectrum saturation by switching away from auto-peak normalization
+- Tuned spectrum density and spacing for portrait displays
+- Improved metadata refresh behavior when tracks change on the same album artwork
+- Improved renderer update flow using scene versioning
+- Reduced excessive renderer rebuilds
+- Expanded visualizer configuration in `songart.toml`
+
+### Fixed
+- Same-artwork track changes not updating metadata
+- Excessive UI refresh skips during album-based playback
+- [#1](https://github.com/sansoo1972/songart/issues/1) Replace polling visualizer with real-time FFT audio pipeline
+    - Visualizer responsiveness and sluggishness
+    - Spectrum over-amplification caused by aggressive normalization
+
+### Known Issues
+- [#4](https://github.com/sansoo1972/songart/issues/4) Improve portrait layout and vertical real estate usage
+    - Portrait layout real-estate usage still needs refinement
+    - Metadata text can become crowded with larger visualizer heights
+- [#2](https://github.com/sansoo1972/songart/issues/2) Artwork reload pipeline still performs unnecessary reloads when artwork is unchanged
+- [#3](https://github.com/sansoo1972/songart/issues/3) Logging timestamps are currently epoch-based and not human-friendly
+
+---
+
 ## [0.9.0] - 2026-04-17
 
 ### Added
@@ -43,18 +87,3 @@ All notable changes to `songart` will be documented in this file.
 - Runtime artifact tracking issues by ignoring generated files
 - Excessive render-loop canvas size log spam
 - Logging noise control through log levels instead of a simple verbose toggle
-
----
-
-## [1.0.0]
-
-### Added
-- Song recognition using SongRec
-- JSON parsing of recognized track metadata
-- Artwork download pipeline
-- Fullscreen display of artwork using framebuffer tools
-- Basic Rust runtime loop for recognition and display
-
-### Notes
-- Initial implementation focused on proving end-to-end functionality
-- Later versions replaced framebuffer-only display with SDL-based layout rendering

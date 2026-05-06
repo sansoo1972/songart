@@ -1,39 +1,287 @@
-use std::fs;
+use crate::logging::{ log_debug, log_error, log_info };
+use crate::state::AppContext;
 
-/// Computes a simple RMS level from the tail end of the recorded WAV file.
+use std::collections::VecDeque;
+use std::fs::File;
+use std::io::{ Read, Write };
+use std::process::{ Command, Stdio };
+use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
+
+/// Shared rolling mono audio buffer used by both the live visualizer and the
+/// slower recognition pipeline.
 ///
-/// This makes the VU meter more responsive than averaging the entire clip.
-/// Assumes:
-/// - 16-bit little-endian PCM
-/// - standard 44-byte WAV header
-pub fn compute_wav_rms_level(path: &str) -> Option<f32> {
-    let bytes = fs::read(path).ok()?;
-    if bytes.len() <= 44 {
-        return None;
+/// The buffer stores normalized mono samples in the range -1.0..1.0.
+#[derive(Debug)]
+pub struct SharedAudioBuffer {
+    samples: VecDeque<f32>,
+    max_samples: usize,
+    sample_rate: usize,
+}
+
+impl SharedAudioBuffer {
+    /// Creates a new rolling buffer sized for `max_seconds` worth of samples.
+    pub fn new(max_seconds: usize, sample_rate: usize) -> Self {
+        let max_samples = sample_rate * max_seconds;
+        Self {
+            samples: VecDeque::with_capacity(max_samples),
+            max_samples,
+            sample_rate,
+        }
     }
 
-    let pcm = &bytes[44..];
+    /// Appends newly decoded samples, trimming the oldest data when full.
+    pub fn push_samples(&mut self, new_samples: &[f32]) {
+        for sample in new_samples {
+            if self.samples.len() >= self.max_samples {
+                let _ = self.samples.pop_front();
+            }
+            self.samples.push_back(*sample);
+        }
+    }
 
-    // Last ~200 ms for 16kHz mono 16-bit PCM:
-    // 16000 samples/sec * 2 bytes/sample * 0.20 sec ≈ 6400 bytes
-    let tail_len = 6400usize.min(pcm.len());
-    let pcm_tail = &pcm[pcm.len() - tail_len..];
+    /// Returns the most recent `count` samples.
+    pub fn recent_samples(&self, count: usize) -> Vec<f32> {
+        let take = count.min(self.samples.len());
+        self.samples.iter().skip(self.samples.len().saturating_sub(take)).copied().collect()
+    }
+
+    /// Returns the most recent `ms` milliseconds of audio.
+    pub fn recent_ms(&self, ms: usize) -> Vec<f32> {
+        let count = (self.sample_rate * ms) / 1000;
+        self.recent_samples(count)
+    }
+
+    /// Returns the current number of buffered samples.
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    /// Returns true if the buffer is empty.
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
+    /// Returns the configured sample rate.
+    pub fn sample_rate(&self) -> usize {
+        self.sample_rate
+    }
+}
+
+/// Creates the shared live audio buffer from config.
+pub fn create_shared_audio_buffer(ctx: &AppContext) -> Arc<Mutex<SharedAudioBuffer>> {
+    Arc::new(
+        Mutex::new(
+            SharedAudioBuffer::new(ctx.config.audio.buffer_seconds, ctx.config.audio.sample_rate)
+        )
+    )
+}
+
+/// Continuous audio capture loop using a single long-lived `parec` process.
+///
+/// This is the single source of truth for live audio.
+pub fn run_audio_capture_loop(
+    ctx: Arc<AppContext>,
+    running: Arc<AtomicBool>,
+    shared_audio: Arc<Mutex<SharedAudioBuffer>>
+) {
+    log_info(&ctx, "Audio capture loop started.");
+
+    let sample_rate_arg = ctx.config.audio.sample_rate.to_string();
+    let channels_arg = ctx.config.audio.channels.to_string();
+
+    let mut child = match
+        Command::new("parec")
+            .args([
+                "--device",
+                &ctx.config.audio.device,
+                "--rate",
+                &sample_rate_arg,
+                "--channels",
+                &channels_arg,
+                "--format",
+                "s16le",
+                "--raw",
+            ])
+            .stdout(Stdio::piped())
+            .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            log_error(&ctx, &format!("Failed to start parec: {e}"));
+            return;
+        }
+    };
+
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            log_error(&ctx, "parec stdout was not available.");
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+    };
+
+    let mut buf = vec![0u8; ctx.config.audio.read_chunk_bytes.max(512)];
+
+    while running.load(Ordering::SeqCst) {
+        match stdout.read(&mut buf) {
+            Ok(0) => {
+                log_debug(&ctx, "parec returned EOF.");
+                break;
+            }
+            Ok(n) => {
+                let channels = ctx.config.audio.channels.max(1);
+                let mut decoded_raw = Vec::with_capacity(n / 2);
+
+                for chunk in buf[..n].chunks_exact(2) {
+                    let sample =
+                        (i16::from_le_bytes([chunk[0], chunk[1]]) as f32) / (i16::MAX as f32);
+                    decoded_raw.push(sample);
+                }
+
+                // Downmix interleaved multi-channel audio to mono.
+                // PS3 Eye is commonly 4ch @ 16kHz, so this prevents ch1/ch2/ch3/ch4
+                // from being treated as a fake high-speed mono stream.
+                let mut mono = Vec::with_capacity(decoded_raw.len() / channels);
+
+                for frame in decoded_raw.chunks_exact(channels) {
+                    let sum: f32 = frame.iter().copied().sum();
+                    mono.push(sum / (channels as f32));
+                }
+
+                if !mono.is_empty() {
+                    let mut audio = shared_audio.lock().unwrap();
+                    audio.push_samples(&mono);
+                }
+            }
+            Err(e) => {
+                log_error(&ctx, &format!("Error reading from parec: {e}"));
+                break;
+            }
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    log_info(&ctx, "Audio capture loop stopped.");
+}
+
+/// Computes normalized RMS loudness from mono samples.
+pub fn compute_rms(samples: &[f32]) -> Option<f32> {
+    if samples.is_empty() {
+        return None;
+    }
 
     let mut sum = 0.0f64;
-    let mut count = 0usize;
-
-    for chunk in pcm_tail.chunks_exact(2) {
-        let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f64 / i16::MAX as f64;
-        sum += sample * sample;
-        count += 1;
+    for sample in samples {
+        let s = *sample as f64;
+        sum += s * s;
     }
 
-    if count == 0 {
-        return None;
-    }
-
-    let rms = (sum / count as f64).sqrt() as f32;
-
-    // Boost for UI readability.
+    let rms = (sum / (samples.len() as f64)).sqrt() as f32;
     Some((rms * 6.0).clamp(0.0, 1.0))
+}
+
+/// Builds normalized oscilloscope points from a mono sample slice.
+pub fn build_oscilloscope_points(
+    samples: &[f32],
+    width_points: usize,
+    y_offset: f32,
+    y_scale: f32,
+    gain: f32,
+    visible_sample_count: usize,
+    max_gain: f32
+) -> Vec<(f32, f32)> {
+    if samples.is_empty() || width_points < 2 {
+        return Vec::new();
+    }
+
+    let visible_len = samples.len().min(visible_sample_count.max(32)).max(32);
+    let start = samples.len().saturating_sub(visible_len);
+    let visible = &samples[start..];
+
+    let peak = visible
+        .iter()
+        .fold(0.0f32, |acc, s| acc.max(s.abs()))
+        .max(0.01);
+
+    let normalized_gain = (gain / peak).clamp(1.0, max_gain.max(1.0));
+
+    let amplified: Vec<f32> = visible
+        .iter()
+        .map(|s| (*s * normalized_gain).clamp(-1.0, 1.0))
+        .collect();
+
+    resample_to_points(&amplified, width_points, y_offset, y_scale)
+}
+
+/// Writes a mono PCM WAV snapshot for SongRec.
+pub fn write_wav_snapshot(
+    path: &str,
+    samples: &[f32],
+    sample_rate: usize,
+    channels: usize
+) -> std::io::Result<()> {
+    let mut file = File::create(path)?;
+
+    let bytes_per_sample = 2usize;
+    let data_len = (samples.len() * bytes_per_sample) as u32;
+    let riff_len = 36 + data_len;
+    let byte_rate = (sample_rate * channels * bytes_per_sample) as u32;
+    let block_align = (channels * bytes_per_sample) as u16;
+
+    file.write_all(b"RIFF")?;
+    file.write_all(&riff_len.to_le_bytes())?;
+    file.write_all(b"WAVE")?;
+
+    file.write_all(b"fmt ")?;
+    file.write_all(&(16u32).to_le_bytes())?;
+    file.write_all(&(1u16).to_le_bytes())?;
+    file.write_all(&(channels as u16).to_le_bytes())?;
+    file.write_all(&(sample_rate as u32).to_le_bytes())?;
+    file.write_all(&byte_rate.to_le_bytes())?;
+    file.write_all(&block_align.to_le_bytes())?;
+    file.write_all(&(16u16).to_le_bytes())?;
+
+    file.write_all(b"data")?;
+    file.write_all(&data_len.to_le_bytes())?;
+
+    for sample in samples {
+        let s = (sample.clamp(-1.0, 1.0) * (i16::MAX as f32)) as i16;
+        file.write_all(&s.to_le_bytes())?;
+    }
+
+    Ok(())
+}
+
+fn resample_to_points(
+    samples: &[f32],
+    width_points: usize,
+    y_offset: f32,
+    y_scale: f32
+) -> Vec<(f32, f32)> {
+    let last_index = samples.len().saturating_sub(1) as f32;
+    let denom = (width_points - 1) as f32;
+    let mut points = Vec::with_capacity(width_points);
+
+    for x in 0..width_points {
+        let t = (x as f32) / denom;
+        let src_pos = t * last_index;
+        let i0 = src_pos.floor() as usize;
+        let i1 = (i0 + 1).min(samples.len() - 1);
+        let frac = src_pos - (i0 as f32);
+
+        let sample = samples[i0] * (1.0 - frac) + samples[i1] * frac;
+        let y = sample_to_y(sample, y_offset, y_scale);
+        points.push((t, y));
+    }
+
+    points
+}
+
+fn sample_to_y(sample: f32, y_offset: f32, y_scale: f32) -> f32 {
+    let clamped = sample.clamp(-1.0, 1.0);
+    (y_offset - clamped * 0.5 * y_scale).clamp(0.0, 1.0)
 }
