@@ -16,7 +16,7 @@ pub fn compute_spectrum_bins(
     min_hz: f32,
     max_hz: f32,
     gain: f32,
-    max_gain: f32
+    _max_gain: f32
 ) -> Vec<f32> {
     if samples.is_empty() || fft_size < 64 || bin_count == 0 {
         return vec![0.0; bin_count];
@@ -73,11 +73,15 @@ pub fn compute_spectrum_bins(
         }
     }
 
+    /*
     let peak = out.iter().copied().fold(0.0f32, f32::max).max(0.0001);
     let normalize = (gain / peak).clamp(1.0, max_gain.max(1.0));
+    */
+    let scale = gain.max(0.0);
 
     for value in &mut out {
-        *value = (*value * normalize).clamp(0.0, 1.0);
+        let db_like = (*value + 1.0e-6).log10() * 0.25 + 1.0;
+        *value = (db_like * scale).clamp(0.0, 1.0);
     }
 
     out
