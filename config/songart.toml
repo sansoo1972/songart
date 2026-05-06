@@ -104,7 +104,7 @@ enabled = true
 mode = "spectrum"
 style = "classic"
 position = "bottom"
-height = 120
+height = 320
 padding = 12
 smoothing = 0.05
 peak_hold = false
@@ -121,9 +121,9 @@ max_gain = 2.5
 debug_log_interval_ms = 10000
 
 # Spectrum tuning
-spectrum_bin_count = 48
+spectrum_bin_count = 32
 spectrum_fft_size = 512
 spectrum_smoothing = 0.30
 spectrum_min_hz = 40.0
 spectrum_max_hz = 6000.0
-spectrum_bar_gap = 2
+spectrum_bar_gap = 3
