@@ -379,8 +379,6 @@ pub fn run_recognition_loop(
 
                 let artwork_changed = final_url != last_artwork_url;
 
-                let artwork_changed = final_url != last_artwork_url;
-
                 {
                     let mut state = shared_state.lock().unwrap();
                     state.title = title.to_string();

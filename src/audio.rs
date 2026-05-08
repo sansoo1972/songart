@@ -56,15 +56,6 @@ impl SharedAudioBuffer {
         self.samples.len()
     }
 
-    /// Returns true if the buffer is empty.
-    pub fn is_empty(&self) -> bool {
-        self.samples.is_empty()
-    }
-
-    /// Returns the configured sample rate.
-    pub fn sample_rate(&self) -> usize {
-        self.sample_rate
-    }
 }
 
 /// Creates the shared live audio buffer from config.
@@ -100,6 +91,8 @@ pub fn run_audio_capture_loop(
                 &channels_arg,
                 "--format",
                 "s16le",
+                "--latency-msec",
+                "20",
                 "--raw",
             ])
             .stdout(Stdio::piped())
@@ -123,6 +116,10 @@ pub fn run_audio_capture_loop(
     };
 
     let mut buf = vec![0u8; ctx.config.audio.read_chunk_bytes.max(512)];
+    let mut last_audio_debug = std::time::Instant::now();
+    let mut pushed_chunks: u32 = 0;
+    let mut pushed_samples: usize = 0;
+    let mut last_read_at = std::time::Instant::now();
 
     while running.load(Ordering::SeqCst) {
         match stdout.read(&mut buf) {
@@ -151,8 +148,39 @@ pub fn run_audio_capture_loop(
                 }
 
                 if !mono.is_empty() {
-                    let mut audio = shared_audio.lock().unwrap();
-                    audio.push_samples(&mono);
+                    let read_gap_ms = last_read_at.elapsed().as_millis();
+                    last_read_at = std::time::Instant::now();
+
+                    {
+                        let mut audio = shared_audio.lock().unwrap();
+                        audio.push_samples(&mono);
+                    }
+
+                    pushed_chunks += 1;
+                    pushed_samples += mono.len();
+
+                    if last_audio_debug.elapsed() >= std::time::Duration::from_secs(5) {
+                        let avg_chunk_samples = if pushed_chunks == 0 {
+                            0
+                        } else {
+                            pushed_samples / (pushed_chunks as usize)
+                        };
+
+                        log_info(
+                            &ctx,
+                            &format!(
+                                "Audio capture debug: chunks={} samples={} avg_chunk_samples={} last_read_gap_ms={}",
+                                pushed_chunks,
+                                pushed_samples,
+                                avg_chunk_samples,
+                                read_gap_ms
+                            )
+                        );
+
+                        pushed_chunks = 0;
+                        pushed_samples = 0;
+                        last_audio_debug = std::time::Instant::now();
+                    }
                 }
             }
             Err(e) => {

@@ -96,16 +96,9 @@ pub struct VisualizerConfig {
     pub enabled: bool,
     pub mode: String,
 
-    #[serde(default)]
-    pub position: String,
-
-    #[serde(default)]
-    pub style: String,
-
     pub height: u32,
     pub padding: u32,
     pub peak_hold: bool,
-    pub smoothing: f32,
 
     #[serde(default = "default_window_ms")]
     pub window_ms: usize,
@@ -151,6 +144,24 @@ pub struct VisualizerConfig {
 
     #[serde(default = "default_spectrum_bar_gap")]
     pub spectrum_bar_gap: u32,
+
+    #[serde(default = "default_spectrum_log_epsilon")]
+    pub spectrum_log_epsilon: f32,
+
+    #[serde(default = "default_spectrum_log_scale")]
+    pub spectrum_log_scale: f32,
+
+    #[serde(default = "default_spectrum_log_offset")]
+    pub spectrum_log_offset: f32,
+
+    #[serde(default = "default_spectrum_noise_floor")]
+    pub spectrum_noise_floor: f32,
+
+    #[serde(default = "default_spectrum_contrast")]
+    pub spectrum_contrast: f32,
+
+    #[serde(default = "default_spectrum_attack")]
+    pub spectrum_attack: f32,
 }
 
 fn default_sample_rate() -> usize {
@@ -231,6 +242,30 @@ fn default_spectrum_max_hz() -> f32 {
 
 fn default_spectrum_bar_gap() -> u32 {
     2
+}
+
+fn default_spectrum_log_epsilon() -> f32 {
+    1.0e-6
+}
+
+fn default_spectrum_log_scale() -> f32 {
+    0.12
+}
+
+fn default_spectrum_log_offset() -> f32 {
+    0.65
+}
+
+fn default_spectrum_noise_floor() -> f32 {
+    0.0
+}
+
+fn default_spectrum_contrast() -> f32 {
+    1.0
+}
+
+fn default_spectrum_attack() -> f32 {
+    0.1
 }
 
 /// Loads application configuration from a TOML file.

@@ -85,7 +85,6 @@ impl<'a> CachedText<'a> {
 }
 
 struct TextCache<'a> {
-    version: u64,
     title: CachedText<'a>,
     artist: CachedText<'a>,
     third: CachedText<'a>,
@@ -182,7 +181,6 @@ fn build_text_cache<'a>(
     )?;
 
     Ok(TextCache {
-        version: state.version,
         title,
         artist,
         third,
@@ -518,14 +516,19 @@ pub fn run_display_loop(
                 ctx.config.visualizer.spectrum_min_hz,
                 ctx.config.visualizer.spectrum_max_hz,
                 ctx.config.visualizer.gain,
-                ctx.config.visualizer.max_gain
+                ctx.config.visualizer.max_gain,
+                ctx.config.visualizer.spectrum_log_epsilon,
+                ctx.config.visualizer.spectrum_log_scale,
+                ctx.config.visualizer.spectrum_log_offset,
+                ctx.config.visualizer.spectrum_noise_floor,
+                ctx.config.visualizer.spectrum_contrast
             );
 
             (audio_len, sample_len, level, left, right, bins.clone(), bins)
         };
 
         // Faster rise, slower fall makes the spectrum feel lively without looking jittery.
-        let rise = 0.1f32;
+        let rise = ctx.config.visualizer.spectrum_attack.clamp(0.0, 1.0);
         let fall = ctx.config.visualizer.spectrum_smoothing.clamp(0.0, 0.98);
 
         for (i, value) in raw_upper_bins.iter().enumerate() {
