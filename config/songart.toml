@@ -112,18 +112,18 @@ peak_hold = false
 # Shared live visualizer timing
 window_ms = 120
 point_count = 96
-gain = 0.65
+gain = 16.0
 y_scale = 1.0
 left_y_offset = 0.25
 right_y_offset = 0.75
 visible_sample_count = 160
-max_gain = 2.5
+max_gain = 32.0
 debug_log_interval_ms = 10000
 
 # Spectrum tuning
 spectrum_bin_count = 32
-spectrum_fft_size = 512
-spectrum_smoothing = 0.45
-spectrum_min_hz = 40.0
-spectrum_max_hz = 6000.0
+spectrum_fft_size = 1024
+spectrum_smoothing = 0.35
+spectrum_min_hz = 60.0
+spectrum_max_hz = 5000.0
 spectrum_bar_gap = 2
