@@ -102,11 +102,8 @@ body_size = 22
 [visualizer]
 enabled = true
 mode = "spectrum"
-style = "classic"
-position = "bottom"
 height = 160
 padding = 12
-smoothing = 0.05
 peak_hold = false
 
 # Shared live visualizer timing

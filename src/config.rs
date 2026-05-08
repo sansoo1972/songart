@@ -96,16 +96,9 @@ pub struct VisualizerConfig {
     pub enabled: bool,
     pub mode: String,
 
-    #[serde(default)]
-    pub position: String,
-
-    #[serde(default)]
-    pub style: String,
-
     pub height: u32,
     pub padding: u32,
     pub peak_hold: bool,
-    pub smoothing: f32,
 
     #[serde(default = "default_window_ms")]
     pub window_ms: usize,
