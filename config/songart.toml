@@ -121,7 +121,7 @@ max_gain = 8.0
 debug_log_interval_ms = 10000
 
 # Spectrum tuning
-spectrum_bin_count = 32
+spectrum_bin_count = 48
 spectrum_fft_size = 1024
 spectrum_smoothing = 0.35
 spectrum_min_hz = 60.0
@@ -135,7 +135,7 @@ spectrum_log_scale = 0.12
 spectrum_log_offset = 0.65
 
 # Raise this to suppress room noise / ambient floor.
-spectrum_noise_floor = 0.20
+spectrum_noise_floor = 0.30
 
 # Higher values increase contrast and keep quiet bars lower.
 spectrum_contrast = 1.35
