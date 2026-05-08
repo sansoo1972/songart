@@ -22,7 +22,7 @@ buffer_seconds = 20
 recognition_window_ms = 10000
 
 # Size of read chunks from the live capture stream.
-read_chunk_bytes = 4096
+read_chunk_bytes = 1024
 
 [paths]
 songrec_bin = "/home/admin/projects/vendor/songrec/target/release/songrec"
