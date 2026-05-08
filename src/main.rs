@@ -10,7 +10,7 @@ mod fft;
 use crate::audio::{ create_shared_audio_buffer, run_audio_capture_loop };
 use crate::config::load_config;
 use crate::display::run_display_loop;
-use crate::logging::{ parse_log_level, reset_log_file, should_log, LogLevel };
+use crate::logging::{ parse_log_level, reset_log_file };
 use crate::recognition::run_recognition_loop;
 use crate::state::{ AppContext, SongState };
 

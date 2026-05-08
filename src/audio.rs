@@ -56,15 +56,6 @@ impl SharedAudioBuffer {
         self.samples.len()
     }
 
-    /// Returns true if the buffer is empty.
-    pub fn is_empty(&self) -> bool {
-        self.samples.is_empty()
-    }
-
-    /// Returns the configured sample rate.
-    pub fn sample_rate(&self) -> usize {
-        self.sample_rate
-    }
 }
 
 /// Creates the shared live audio buffer from config.
