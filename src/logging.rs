@@ -25,12 +25,9 @@ pub fn should_log(ctx: &AppContext, level: LogLevel) -> bool {
     level <= ctx.log_level
 }
 
-/// Builds a simple timestamp string using epoch seconds.
+/// Builds a human-readable local timestamp string for log messages.
 fn timestamp_string() -> String {
-    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        Ok(dur) => dur.as_secs().to_string(),
-        Err(_) => "0".to_string(),
-    }
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 /// Truncates the log file on startup in debug mode so test runs start fresh.

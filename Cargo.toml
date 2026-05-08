@@ -11,3 +11,4 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 rustfft = "6"
 ctrlc = "3.4"
 toml = "0.8"
+chrono = { version = "0.4.44", features = ["clock"] }
