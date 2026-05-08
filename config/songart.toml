@@ -30,7 +30,7 @@ artwork_file = "/home/admin/projects/songart/current.jpg"
 
 [display]
 window_title = "songart"
-fullscreen = false
+fullscreen = true
 orientation = "portrait"
 frame_delay_ms = 16
 
