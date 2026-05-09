@@ -4,6 +4,52 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
+## [0.9.2] - 2026-05-08
+
+### Added
+- Human-readable local log timestamps for easier troubleshooting.
+- Metadata-driven font theme selection using song genre and release year.
+- Font mode configuration:
+  - `fixed` for a manually selected theme
+  - `metadata` for automatic theme selection based on track metadata
+- Fallback font theme support when metadata does not match a known rule.
+- Configurable display region background colors:
+  - overall canvas background
+  - artwork/top-region background
+  - metadata-region background
+  - visualizer/analyzer background
+- Cleaner `songart.toml` organization with grouped sections and clearer comments.
+- Cleaner `config.rs` organization with dedicated display color configuration.
+- Cleaner `display.rs` organization with separated helpers for colors, metadata text, font selection, visualizer drawing, static scene rendering, and runtime display loop behavior.
+
+### Changed
+- Improved portrait layout defaults for native 1080x1920 displays.
+- Increased visualizer height in portrait mode for stronger visual presence.
+- Increased spectrum analyzer bin count for more detail.
+- Tuned spectrum analyzer responsiveness:
+  - faster attack
+  - smoother falloff
+  - improved contrast
+  - adjusted noise floor
+  - updated log scaling values
+- Updated portrait layout spacing to better use vertical real estate.
+- Updated landscape preset to use standard 1920x1080 dimensions.
+- Updated default configuration to use metadata-driven typography.
+- Updated rendering so artwork, metadata, and visualizer regions can share a seamless flat black background while remaining independently configurable.
+
+### Fixed
+- [#3](https://github.com/sansoo1972/songart/issues/3) Logging timestamps are now human-readable instead of epoch-based.
+- [#4](https://github.com/sansoo1972/songart/issues/4) Portrait layout now makes better use of vertical real estate.
+- [#7](https://github.com/sansoo1972/songart/issues/7) Font selection can now be metadata-driven instead of only manually selected.
+- [#9](https://github.com/sansoo1972/songart/issues/9) Spectrum analyzer size and responsiveness have been improved.
+- Fullscreen pixelation caused by a 720x1280 portrait preset on a 1080x1920 display was resolved by updating the portrait preset to native resolution.
+
+### Notes
+- Current metadata-driven font choices are functional and intentionally configurable; individual font-theme mappings may be refined stylistically in later releases.
+- Display background colors are now configurable per major region, enabling both seamless all-black layouts and future themed region styling.
+
+---
+
 ## [0.9.1] - 2026-05-06
 
 ### Added
@@ -38,11 +84,7 @@ All notable changes to `songart` will be documented in this file.
     - Spectrum over-amplification caused by aggressive normalization
 
 ### Known Issues
-- [#4](https://github.com/sansoo1972/songart/issues/4) Improve portrait layout and vertical real estate usage
-    - Portrait layout real-estate usage still needs refinement
-    - Metadata text can become crowded with larger visualizer heights
 - [#2](https://github.com/sansoo1972/songart/issues/2) Artwork reload pipeline still performs unnecessary reloads when artwork is unchanged
-- [#3](https://github.com/sansoo1972/songart/issues/3) Logging timestamps are currently epoch-based and not human-friendly
 
 ---
 

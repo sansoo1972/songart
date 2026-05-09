@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.9.1 introduces a real-time FFT spectrum visualizer, shared rolling audio analysis, renderer scene caching, and improved metadata refresh behavior.
+Version 0.9.2 adds human-readable logging timestamps, metadata-driven font themes, improved portrait layout defaults for 1080x1920 displays, a larger and more responsive spectrum analyzer, and configurable display-region background colors.
 
 ---
 
@@ -17,9 +17,17 @@ Version 0.9.1 introduces a real-time FFT spectrum visualizer, shared rolling aud
 - Oscilloscope audio visualizer
 - Shared rolling audio buffer for live visualization
 - Configurable display presets for portrait and landscape layouts
+- Improved portrait layout defaults for 1080x1920 displays
 - Theme-based typography with separate title and body fonts
-- Theme-based font sizes
-- Timestamped logging with configurable log levels
+- Metadata-driven font theme selection by genre and release year
+- Configurable font fallback behavior
+- Configurable display-region backgrounds:
+  - canvas background
+  - artwork background
+  - metadata background
+  - visualizer background
+- Configurable spectrum analyzer responsiveness and scaling
+- Human-readable timestamped logging with configurable log levels
 - Externalized runtime configuration via TOML
 - Graceful Ctrl+C shutdown handling
 - Runtime artifacts ignored by Git
@@ -28,7 +36,14 @@ Version 0.9.1 introduces a real-time FFT spectrum visualizer, shared rolling aud
 
 ## Architecture
 
-Microphone → rolling audio buffer → SongRec recognition + FFT analysis → Rust app → artwork download → SDL display + visualizers
+```text
+Microphone
+  → rolling audio buffer
+  → SongRec recognition + FFT analysis
+  → Rust app state
+  → artwork download
+  → SDL display + metadata + visualizers
+```
 
 ---
 
@@ -47,11 +62,11 @@ songart/
 │   ├── state.rs            # Shared app/song/meter state
 │   ├── audio.rs            # Audio capture and rolling audio buffer
 │   ├── fft.rs              # FFT spectrum processing
-│   ├── visualizer.rs       # Visualizer mode definitions
+│   ├── visualizer/         # Visualizer mode definitions and shared primitives
 │   ├── recognition.rs      # SongRec recognition loop
 │   ├── display.rs          # SDL rendering loop
 │   └── renderer/           # Future rendering separation scaffold
-├── Cargo.toml              # Rust dependencies
+├── Cargo.toml              # Rust dependencies and package version
 ├── README.md
 ├── CHANGELOG.md
 └── LICENSE
@@ -100,15 +115,18 @@ config/songart.toml
 ### Configuration model
 
 - `logging` controls log level and log file behavior
-- `audio` controls capture device and cadence
+- `audio` controls capture device, rolling buffer, and recognition cadence
 - `paths` defines SongRec and artwork paths
-- `display` selects the active display preset
+- `display` selects the active display preset and frame timing
+- `display.colors` controls the major display-region backgrounds
 - `display_presets` define scene geometry and spacing
-- `fonts` selects the active theme
+- `fonts` selects fixed or metadata-driven font behavior
 - `font_themes` define title/body font paths and font sizes
-- `visualizer` controls FFT and oscilloscope rendering behavior
+- `visualizer` controls FFT, spectrum, oscilloscope, and responsiveness behavior
 
-### Example
+---
+
+## Example Configuration
 
 ```toml
 [logging]
@@ -119,8 +137,12 @@ reset_on_start = true
 [audio]
 device = "ps3eye_mono"
 sample_wav = "/home/admin/projects/songart/sample.wav"
-record_seconds = 2
-loop_delay_secs = 2
+loop_delay_secs = 3
+sample_rate = 16000
+channels = 1
+buffer_seconds = 20
+recognition_window_ms = 10000
+read_chunk_bytes = 1024
 
 [paths]
 songrec_bin = "/home/admin/projects/vendor/songrec/target/release/songrec"
@@ -130,11 +152,27 @@ artwork_file = "/home/admin/projects/songart/current.jpg"
 window_title = "songart"
 fullscreen = true
 orientation = "portrait"
-frame_delay_ms = 33
+frame_delay_ms = 16
+
+[display.colors]
+background = "#000000"
+artwork_background = "#000000"
+metadata_background = "#000000"
+visualizer_background = "#000000"
 
 [display_presets.portrait]
-width = 720
-height = 1280
+width = 1080
+height = 1920
+top_panel_ratio = 0.66
+panel_x = 48
+panel_y = 36
+title_line_spacing = 52
+body_line_spacing = 38
+detail_line_spacing = 44
+
+[display_presets.landscape]
+width = 1920
+height = 1080
 top_panel_ratio = 0.72
 panel_x = 40
 panel_y = 28
@@ -143,35 +181,63 @@ body_line_spacing = 34
 detail_line_spacing = 40
 
 [fonts]
-theme = "fantasy"
+theme = "scripted"
+mode = "metadata"
+fallback_theme = "simple"
 
-[font_themes.fantasy]
-title = "/home/admin/projects/songart/assets/fonts/Elvencommonspeak-0WXz.ttf"
+[font_themes.techy]
+title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
 body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
-title_size = 38
+title_size = 36
+body_size = 24
+
+[font_themes.scripted]
+title = "/home/admin/projects/songart/assets/fonts/GloriaHallelujah-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/GloriaHallelujah-Regular.ttf"
+title_size = 34
+body_size = 22
+
+[font_themes.simple]
+title = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+title_size = 32
 body_size = 22
 
 [visualizer]
 enabled = true
 mode = "spectrum"
-
-height = 160
+height = 300
 padding = 16
+peak_hold = false
 
-window_ms = 30
+window_ms = 120
+point_count = 96
+gain = 1.0
+y_scale = 1.0
+left_y_offset = 0.25
+right_y_offset = 0.75
+visible_sample_count = 160
+max_gain = 8.0
+debug_log_interval_ms = 10000
 
-spectrum_fft_size = 2048
-spectrum_bin_count = 32
+spectrum_bin_count = 64
+spectrum_fft_size = 1024
+spectrum_smoothing = 0.28
+spectrum_min_hz = 60.0
+spectrum_max_hz = 5000.0
+spectrum_bar_gap = 2
 
-spectrum_min_hz = 40
-spectrum_max_hz = 12000
-
-spectrum_bar_gap = 6
-spectrum_smoothing = 0.92
-
-gain = 1.2
-max_gain = 4.0
+spectrum_log_epsilon = 0.000001
+spectrum_log_scale = 0.14
+spectrum_log_offset = 0.62
+spectrum_noise_floor = 0.26
+spectrum_contrast = 1.45
+spectrum_attack = 0.18
 ```
+
+---
+
+## Display Configuration
 
 ### Change layout with one line
 
@@ -180,7 +246,7 @@ max_gain = 4.0
 orientation = "portrait"
 ```
 
-or
+or:
 
 ```toml
 [display]
@@ -193,14 +259,59 @@ The selected preset controls:
 - height
 - top panel ratio
 - metadata panel origin
-- line spacing
+- title/body/detail line spacing
 
-### Change typography with one line
+For best fullscreen quality, the selected preset should match the native display resolution. For example, a portrait 1080x1920 display should use:
+
+```toml
+[display_presets.portrait]
+width = 1080
+height = 1920
+```
+
+### Configure region backgrounds
+
+```toml
+[display.colors]
+background = "#000000"
+artwork_background = "#000000"
+metadata_background = "#000000"
+visualizer_background = "#000000"
+```
+
+Using the same color for all four values creates a seamless display. Different values can be used later for themed panel layouts.
+
+---
+
+## Font Themes
+
+### Fixed font theme
 
 ```toml
 [fonts]
 theme = "retro"
+mode = "fixed"
+fallback_theme = "simple"
 ```
+
+### Metadata-driven font theme
+
+```toml
+[fonts]
+theme = "scripted"
+mode = "metadata"
+fallback_theme = "simple"
+```
+
+In metadata mode, `songart` chooses a font theme based on song genre and release year. Current built-in behavior includes:
+
+- 1980s, electronic, synth, synth-pop, new wave, dance → `techy`
+- 1990s rock, alternative, grunge, punk → `grungy`
+- pre-1980 releases → `retro`
+- classical, soundtrack, score, orchestral → `fantasy`
+- folk, acoustic, country, singer-songwriter, latin → `scripted`
+- pop, R&B, hip-hop, rap, 2000+ releases → `modern`
+- unknown or unmatched metadata → `fallback_theme`
 
 Available theme names can include:
 
@@ -219,36 +330,39 @@ Each theme controls:
 - title font size
 - body font size
 
-### Visualizer settings
+---
+
+## Visualizer Settings
 
 ```toml
 [visualizer]
 enabled = true
 mode = "spectrum"
-
-height = 160
+height = 300
 padding = 16
 
-window_ms = 30
-
-spectrum_fft_size = 2048
-spectrum_bin_count = 32
-
-spectrum_min_hz = 40
-spectrum_max_hz = 12000
-
-spectrum_bar_gap = 6
-spectrum_smoothing = 0.92
-
-gain = 1.2
-max_gain = 4.0
+window_ms = 120
+spectrum_fft_size = 1024
+spectrum_bin_count = 64
+spectrum_min_hz = 60.0
+spectrum_max_hz = 5000.0
+spectrum_bar_gap = 2
+spectrum_attack = 0.18
+spectrum_smoothing = 0.28
+spectrum_noise_floor = 0.26
+spectrum_contrast = 1.45
+gain = 1.0
+max_gain = 8.0
 ```
 
 Current implementation:
+
 - FFT spectrum analyzer
 - Oscilloscope rendering
 - Log-spaced frequency bins
 - Spectrum smoothing
+- Spectrum attack tuning
+- Noise floor and contrast controls
 - Shared rolling audio analysis buffer
 - Configurable gain and FFT sizing
 
@@ -287,7 +401,7 @@ cargo run --release
 
 ---
 
-## Display behavior
+## Display Behavior
 
 `songart` renders a configured scene and scales it to fit the actual SDL canvas.
 
@@ -297,7 +411,7 @@ Important notes:
 - The actual OS / SDL canvas may still differ depending on the active desktop or display backend.
 - Portrait mode behaves best when the Pi desktop session itself is already rotated to portrait.
 - Running from the Pi GUI session is currently the most reliable path.
-- Layout balancing for portrait visualizers is still evolving.
+- Matching the preset resolution to the actual display resolution prevents fullscreen scaling artifacts.
 
 ---
 
@@ -311,6 +425,12 @@ Supported levels:
 - `info`
 - `debug`
 
+Logs use human-readable local timestamps, for example:
+
+```text
+[2026-05-08 17:12:15] [Info] Listening...
+```
+
 View logs live:
 
 ```bash
@@ -321,7 +441,16 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.9.1**.
+This project is now at **0.9.2**.
+
+Recommended release flow:
+
+```bash
+git checkout main
+git pull origin main
+git tag -a v0.9.2 -m "songart 0.9.2"
+git push origin v0.9.2
+```
 
 ---
 
@@ -333,25 +462,29 @@ This project is now at **0.9.1**.
 - TOML-based runtime configuration working
 - Modular source layout working
 - Theme-based font selection working
-- Theme-based font sizing working
+- Metadata-driven font theme selection working
+- Configurable display backgrounds working
 - Display presets for portrait and landscape working
 - Scene scaling to real SDL canvas working
+- Native 1080x1920 portrait layout working
 - FFT spectrum analyzer working
+- Larger and more responsive spectrum visualizer working
 - Oscilloscope visualizer working
 - Shared rolling audio analysis working
 - Renderer scene caching working
 - Metadata refresh improvements working
-- Timestamped logging with configurable log levels working
+- Human-readable timestamped logging with configurable log levels working
 - Graceful Ctrl+C shutdown working
 
 ---
 
 ## Future Improvements
 
-- Improved spectrum scaling and dynamics
-- Better portrait layout balancing
+- Artwork-derived visualizer color palettes
+- Optional turntable-style album artwork mode
+- Kiosk-selectable display and artwork modes
+- Further font-theme refinement
 - Artwork caching and reload optimization
-- Human-readable logging timestamps
 - More display presets and layout themes
 - Metadata enrichment from additional sources
 - Boot-time auto start / service mode
