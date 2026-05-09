@@ -21,6 +21,10 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
+// ==============================================================================
+// Text + Metadata Helpers
+// ==============================================================================
+
 fn ellipsize(input: &str, max_chars: usize) -> String {
     let chars: Vec<char> = input.chars().collect();
     if chars.len() <= max_chars {
@@ -34,6 +38,74 @@ fn ellipsize(input: &str, max_chars: usize) -> String {
 
     format!("{trimmed}…")
 }
+
+fn album_or_release_line(state: &SongState) -> String {
+    let mut third_line = state.album.clone();
+
+    if !state.released.is_empty() && state.released != "Unknown" {
+        if third_line.is_empty() || third_line == "Unknown" {
+            third_line = state.released.clone();
+        } else {
+            third_line = format!("{} • {}", state.album, state.released);
+        }
+    }
+
+    if third_line.trim().is_empty() {
+        "Album unknown".to_string()
+    } else {
+        ellipsize(&third_line, 56)
+    }
+}
+
+// ==============================================================================
+// Color Helpers
+// ==============================================================================
+
+fn parse_hex_color(value: &str, fallback: Color) -> Color {
+    let hex = value.trim().trim_start_matches('#');
+
+    if hex.len() != 6 {
+        return fallback;
+    }
+
+    let r = u8::from_str_radix(&hex[0..2], 16);
+    let g = u8::from_str_radix(&hex[2..4], 16);
+    let b = u8::from_str_radix(&hex[4..6], 16);
+
+    match (r, g, b) {
+        (Ok(r), Ok(g), Ok(b)) => Color::RGB(r, g, b),
+        _ => fallback,
+    }
+}
+
+fn canvas_background_color(ctx: &AppContext) -> Color {
+    parse_hex_color(&ctx.config.display.colors.background, Color::RGB(0, 0, 0))
+}
+
+fn artwork_background_color(ctx: &AppContext) -> Color {
+    parse_hex_color(
+        &ctx.config.display.colors.artwork_background,
+        canvas_background_color(ctx),
+    )
+}
+
+fn metadata_background_color(ctx: &AppContext) -> Color {
+    parse_hex_color(
+        &ctx.config.display.colors.metadata_background,
+        canvas_background_color(ctx),
+    )
+}
+
+fn visualizer_background_color(ctx: &AppContext) -> Color {
+    parse_hex_color(
+        &ctx.config.display.colors.visualizer_background,
+        canvas_background_color(ctx),
+    )
+}
+
+// ==============================================================================
+// Font Theme Selection
+// ==============================================================================
 
 fn parse_release_year(released: &str) -> Option<i32> {
     let digits: String = released
@@ -144,10 +216,18 @@ fn selected_fonts<'a>(
     }
 }
 
+// ==============================================================================
+// Display Preset Selection
+// ==============================================================================
+
 fn selected_display_preset<'a>(ctx: &'a AppContext) -> Option<&'a DisplayPreset> {
     let key = ctx.config.display.orientation.to_ascii_lowercase();
     ctx.config.display_presets.get(&key)
 }
+
+// ==============================================================================
+// Cached Text
+// ==============================================================================
 
 struct CachedText<'a> {
     texture: Texture<'a>,
@@ -175,6 +255,7 @@ impl<'a> CachedText<'a> {
             .map_err(|e| e.to_string())?;
 
         let rect = Rect::new(x, y, surface.width(), surface.height());
+
         Ok(Self { texture, rect })
     }
 
@@ -220,20 +301,7 @@ fn build_text_cache<'a>(
         56,
     );
 
-    let mut third_line = state.album.clone();
-    if !state.released.is_empty() && state.released != "Unknown" {
-        if third_line.is_empty() || third_line == "Unknown" {
-            third_line = state.released.clone();
-        } else {
-            third_line = format!("{} • {}", state.album, state.released);
-        }
-    }
-
-    let third_line = if third_line.trim().is_empty() {
-        "Album unknown".to_string()
-    } else {
-        ellipsize(&third_line, 56)
-    };
+    let third_line = album_or_release_line(state);
 
     let detail_line = format!(
         "Genre: {}    Composer: {}",
@@ -288,6 +356,10 @@ fn build_text_cache<'a>(
     })
 }
 
+// ==============================================================================
+// Visualizer Drawing
+// ==============================================================================
+
 fn draw_polyline(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     points: &[(f32, f32)],
@@ -320,6 +392,7 @@ fn draw_polyline(
 
 fn draw_oscilloscope(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    ctx: &AppContext,
     left_points: &[(f32, f32)],
     right_points: &[(f32, f32)],
     x: i32,
@@ -327,7 +400,7 @@ fn draw_oscilloscope(
     width: u32,
     height: u32,
 ) -> Result<(), String> {
-    canvas.set_draw_color(Color::RGB(10, 10, 10));
+    canvas.set_draw_color(visualizer_background_color(ctx));
     canvas.fill_rect(Rect::new(x, y, width, height))?;
 
     canvas.set_draw_color(Color::RGB(40, 40, 40));
@@ -365,6 +438,7 @@ fn draw_oscilloscope(
 
 fn draw_spectrum(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    ctx: &AppContext,
     upper_bins: &[f32],
     lower_bins: &[f32],
     x: i32,
@@ -373,7 +447,7 @@ fn draw_spectrum(
     height: u32,
     bar_gap: u32,
 ) -> Result<(), String> {
-    canvas.set_draw_color(Color::RGB(10, 10, 10));
+    canvas.set_draw_color(visualizer_background_color(ctx));
     canvas.fill_rect(Rect::new(x, y, width, height))?;
 
     if upper_bins.is_empty() || lower_bins.is_empty() {
@@ -399,9 +473,9 @@ fn draw_spectrum(
         let i = i as u32;
         let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
         let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
+        let rect = Rect::new(bar_x, y + (half_h as i32) - (bar_h as i32), bar_w, bar_h);
 
         canvas.set_draw_color(Color::RGB(80, 220, 120));
-        let rect = Rect::new(bar_x, y + (half_h as i32) - (bar_h as i32), bar_w, bar_h);
         canvas.fill_rect(rect)?;
     }
 
@@ -409,9 +483,9 @@ fn draw_spectrum(
         let i = i as u32;
         let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
         let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
+        let rect = Rect::new(bar_x, y + (half_h as i32), bar_w, bar_h);
 
         canvas.set_draw_color(Color::RGB(80, 160, 255));
-        let rect = Rect::new(bar_x, y + (half_h as i32), bar_w, bar_h);
         canvas.fill_rect(rect)?;
     }
 
@@ -420,6 +494,7 @@ fn draw_spectrum(
 
 fn draw_visualizer(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    ctx: &AppContext,
     mode: VisualizerMode,
     left_points: &[(f32, f32)],
     right_points: &[(f32, f32)],
@@ -434,13 +509,17 @@ fn draw_visualizer(
     match mode {
         VisualizerMode::None => Ok(()),
         VisualizerMode::Oscilloscope | VisualizerMode::AnalogVu => {
-            draw_oscilloscope(canvas, left_points, right_points, x, y, width, height)
+            draw_oscilloscope(canvas, ctx, left_points, right_points, x, y, width, height)
         }
-        VisualizerMode::Spectrum => {
-            draw_spectrum(canvas, upper_bins, lower_bins, x, y, width, height, bar_gap)
-        }
+        VisualizerMode::Spectrum => draw_spectrum(
+            canvas, ctx, upper_bins, lower_bins, x, y, width, height, bar_gap,
+        ),
     }
 }
+
+// ==============================================================================
+// Static Scene Drawing
+// ==============================================================================
 
 fn compute_artwork_rect(query: TextureQuery, scene_w: u32, top_h: u32) -> Rect {
     let art_w = query.width as f32;
@@ -470,20 +549,24 @@ impl<'a> StaticSceneCache<'a> {
     fn draw_static_scene(
         &self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+        ctx: &AppContext,
         artwork_texture: Option<&Texture<'a>>,
         scene_w: u32,
         top_h: u32,
         bottom_h: u32,
     ) -> Result<(), String> {
-        canvas.set_draw_color(Color::RGB(0, 0, 0));
+        canvas.set_draw_color(canvas_background_color(ctx));
         canvas.clear();
+
+        canvas.set_draw_color(artwork_background_color(ctx));
+        canvas.fill_rect(Rect::new(0, 0, scene_w, top_h))?;
+
+        canvas.set_draw_color(metadata_background_color(ctx));
+        canvas.fill_rect(Rect::new(0, top_h as i32, scene_w, bottom_h))?;
 
         if let (Some(texture), Some(target)) = (artwork_texture, self.artwork_rect) {
             canvas.copy(texture, None, target)?;
         }
-
-        canvas.set_draw_color(Color::RGB(18, 18, 18));
-        canvas.fill_rect(Rect::new(0, top_h as i32, scene_w, bottom_h))?;
 
         self.text.title.draw(canvas)?;
         self.text.artist.draw(canvas)?;
@@ -493,6 +576,68 @@ impl<'a> StaticSceneCache<'a> {
         Ok(())
     }
 }
+
+// ==============================================================================
+// Runtime Helpers
+// ==============================================================================
+
+fn visualizer_mode_from_config(mode: &str) -> VisualizerMode {
+    match mode.to_ascii_lowercase().as_str() {
+        "oscilloscope" => VisualizerMode::Oscilloscope,
+        "spectrum" => VisualizerMode::Spectrum,
+        "analog_vu" => VisualizerMode::AnalogVu,
+        _ => VisualizerMode::None,
+    }
+}
+
+fn update_smoothed_bins(smoothed: &mut [f32], raw: &[f32], rise: f32, fall: f32) {
+    for (i, value) in raw.iter().enumerate() {
+        if i < smoothed.len() {
+            let current = smoothed[i];
+            smoothed[i] = if *value > current {
+                current * rise + *value * (1.0 - rise)
+            } else {
+                current * fall + *value * (1.0 - fall)
+            };
+        }
+    }
+}
+
+fn log_visualizer_debug(
+    ctx: &AppContext,
+    audio_len: usize,
+    sample_len: usize,
+    live_level: f32,
+    smoothed_upper_bins: &[f32],
+) {
+    let smooth_max_bin = smoothed_upper_bins.iter().copied().fold(0.0f32, f32::max);
+
+    let smooth_avg_bin = if smoothed_upper_bins.is_empty() {
+        0.0
+    } else {
+        smoothed_upper_bins.iter().sum::<f32>() / (smoothed_upper_bins.len() as f32)
+    };
+
+    log_debug(
+        ctx,
+        &format!(
+            "Visualizer debug: audio_len={} sample_len={} level={:.3} bins={} smooth_max={:.3} smooth_avg={:.3} upper0={:.3} upper8={:.3} upper16={:.3}",
+            audio_len,
+            sample_len,
+            live_level,
+            smoothed_upper_bins.len(),
+            smooth_max_bin,
+            smooth_avg_bin,
+            smoothed_upper_bins.get(0).copied().unwrap_or(0.0),
+            smoothed_upper_bins.get(8).copied().unwrap_or(0.0),
+            smoothed_upper_bins.get(16).copied().unwrap_or(0.0)
+        ),
+    );
+}
+
+// ==============================================================================
+// Display Loop
+// ==============================================================================
 
 pub fn run_display_loop(
     ctx: Arc<AppContext>,
@@ -591,9 +736,7 @@ pub fn run_display_loop(
                 | Event::KeyDown {
                     keycode: Some(Keycode::Escape),
                     ..
-                } => {
-                    running.store(false, Ordering::SeqCst);
-                }
+                } => running.store(false, Ordering::SeqCst),
                 _ => {}
             }
         }
@@ -614,8 +757,6 @@ pub fn run_display_loop(
         ) = {
             let audio = shared_audio.lock().unwrap();
             let vis_samples = audio.recent_ms(ctx.config.visualizer.window_ms);
-            let audio_len = audio.len();
-            let sample_len = vis_samples.len();
 
             let level = compute_rms(&vis_samples).unwrap_or(0.0);
 
@@ -656,8 +797,8 @@ pub fn run_display_loop(
             );
 
             (
-                audio_len,
-                sample_len,
+                audio.len(),
+                vis_samples.len(),
                 level,
                 left,
                 right,
@@ -670,27 +811,8 @@ pub fn run_display_loop(
         let rise = ctx.config.visualizer.spectrum_attack.clamp(0.0, 1.0);
         let fall = ctx.config.visualizer.spectrum_smoothing.clamp(0.0, 0.98);
 
-        for (i, value) in raw_upper_bins.iter().enumerate() {
-            if i < smoothed_upper_bins.len() {
-                let current = smoothed_upper_bins[i];
-                smoothed_upper_bins[i] = if *value > current {
-                    current * rise + *value * (1.0 - rise)
-                } else {
-                    current * fall + *value * (1.0 - fall)
-                };
-            }
-        }
-
-        for (i, value) in raw_lower_bins.iter().enumerate() {
-            if i < smoothed_lower_bins.len() {
-                let current = smoothed_lower_bins[i];
-                smoothed_lower_bins[i] = if *value > current {
-                    current * rise + *value * (1.0 - rise)
-                } else {
-                    current * fall + *value * (1.0 - fall)
-                };
-            }
-        }
+        update_smoothed_bins(&mut smoothed_upper_bins, &raw_upper_bins, rise, fall);
+        update_smoothed_bins(&mut smoothed_lower_bins, &raw_lower_bins, rise, fall);
 
         display_peak = if live_level > display_peak {
             live_level
@@ -704,43 +826,22 @@ pub fn run_display_loop(
         } else {
             live_level
         };
+
         state.visualizer.enabled = ctx.config.visualizer.enabled;
-        state.visualizer.mode = match ctx.config.visualizer.mode.to_ascii_lowercase().as_str() {
-            "oscilloscope" => VisualizerMode::Oscilloscope,
-            "spectrum" => VisualizerMode::Spectrum,
-            "analog_vu" => VisualizerMode::AnalogVu,
-            _ => VisualizerMode::None,
-        };
+        state.visualizer.mode = visualizer_mode_from_config(&ctx.config.visualizer.mode);
         state.visualizer.frame.left_points = left_points;
         state.visualizer.frame.right_points = right_points;
 
         if last_vis_debug.elapsed()
             >= Duration::from_millis(ctx.config.visualizer.debug_log_interval_ms)
         {
-            let smooth_max_bin = smoothed_upper_bins.iter().copied().fold(0.0f32, f32::max);
-
-            let smooth_avg_bin = if smoothed_upper_bins.is_empty() {
-                0.0
-            } else {
-                smoothed_upper_bins.iter().sum::<f32>() / (smoothed_upper_bins.len() as f32)
-            };
-
-            log_debug(
+            log_visualizer_debug(
                 &ctx,
-                &format!(
-                    "Visualizer debug: audio_len={} sample_len={} level={:.3} bins={} smooth_max={:.3} smooth_avg={:.3} upper0={:.3} upper8={:.3} upper16={:.3}",
-                    audio_len,
-                    sample_len,
-                    live_level,
-                    smoothed_upper_bins.len(),
-                    smooth_max_bin,
-                    smooth_avg_bin,
-                    smoothed_upper_bins.get(0).copied().unwrap_or(0.0),
-                    smoothed_upper_bins.get(8).copied().unwrap_or(0.0),
-                    smoothed_upper_bins.get(16).copied().unwrap_or(0.0)
-                ),
+                audio_len,
+                sample_len,
+                live_level,
+                &smoothed_upper_bins,
             );
-
             last_vis_debug = Instant::now();
         }
 
@@ -834,6 +935,7 @@ pub fn run_display_loop(
                 .with_texture_canvas(&mut static_scene_texture, |tex_canvas| {
                     let _ = cache.draw_static_scene(
                         tex_canvas,
+                        &ctx,
                         artwork_texture.as_ref(),
                         scene_w,
                         top_h,
@@ -864,7 +966,7 @@ pub fn run_display_loop(
         let sw = |w: u32| ((w as f32) * scene_scale) as u32;
         let sh = |h: u32| ((h as f32) * scene_scale) as u32;
 
-        canvas.set_draw_color(Color::RGB(0, 0, 0));
+        canvas.set_draw_color(canvas_background_color(&ctx));
         canvas.clear();
 
         let static_target = Rect::new(offset_x, offset_y, render_w, render_h);
@@ -880,6 +982,7 @@ pub fn run_display_loop(
 
             draw_visualizer(
                 &mut canvas,
+                &ctx,
                 state.visualizer.mode,
                 &state.visualizer.frame.left_points,
                 &state.visualizer.frame.right_points,

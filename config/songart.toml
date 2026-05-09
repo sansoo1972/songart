@@ -1,7 +1,27 @@
+# ==============================================================================
+# songart Configuration
+# Raspberry Pi music recognition + album art + live visualizer display
+# ==============================================================================
+
+
+# ------------------------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------------------------
+
 [logging]
+# Options: "error", "info", "debug"
 level = "debug"
+
+# Main log output file.
 file = "/home/admin/projects/songart/songart.log"
+
+# Clear the log file each time songart starts.
 reset_on_start = true
+
+
+# ------------------------------------------------------------------------------
+# Audio Capture + Recognition
+# ------------------------------------------------------------------------------
 
 [audio]
 # PulseAudio / PipeWire source or monitor name.
@@ -24,40 +44,114 @@ recognition_window_ms = 10000
 # Size of read chunks from the live capture stream.
 read_chunk_bytes = 1024
 
+
+# ------------------------------------------------------------------------------
+# External Paths
+# ------------------------------------------------------------------------------
+
 [paths]
+# Local SongRec binary used for recognition.
 songrec_bin = "/home/admin/projects/vendor/songrec/target/release/songrec"
+
+# Current artwork image written by the recognition loop and read by the renderer.
 artwork_file = "/home/admin/projects/songart/current.jpg"
+
+
+# ------------------------------------------------------------------------------
+# Display
+# ------------------------------------------------------------------------------
 
 [display]
 window_title = "songart"
 fullscreen = true
+
+# Options should match one of the [display_presets.*] sections below.
 orientation = "portrait"
+
+# ~16 ms targets roughly 60 FPS.
 frame_delay_ms = 16
 
+
+# ------------------------------------------------------------------------------
+# Display Colors
+# ------------------------------------------------------------------------------
+
+[display.colors]
+# Overall canvas background.
+background = "#000000"
+
+# Background behind the artwork/top region.
+artwork_background = "#000000"
+
+# Background behind song title / artist / album metadata.
+metadata_background = "#000000"
+
+# Background behind the analyzer / visualizer.
+visualizer_background = "#000000"
+
+
+# ------------------------------------------------------------------------------
+# Portrait Layout
+# ------------------------------------------------------------------------------
+
 [display_presets.portrait]
+# Native portrait resolution for the current display.
 width = 1080
 height = 1920
+
+# Portion of the screen used by the top/artwork area.
+# Lower values give more vertical room to metadata + visualizer.
 top_panel_ratio = 0.66
+
+# Text panel positioning.
 panel_x = 48
 panel_y = 36
+
+# Text spacing.
 title_line_spacing = 52
 body_line_spacing = 38
 detail_line_spacing = 44
 
+
+# ------------------------------------------------------------------------------
+# Landscape Layout
+# ------------------------------------------------------------------------------
+
 [display_presets.landscape]
-width = 1980
+width = 1920
 height = 1080
+
 top_panel_ratio = 0.72
+
 panel_x = 40
 panel_y = 28
+
 title_line_spacing = 46
 body_line_spacing = 34
 detail_line_spacing = 40
 
+
+# ------------------------------------------------------------------------------
+# Font Selection
+# ------------------------------------------------------------------------------
+
 [fonts]
+# Default/manual font theme.
 theme = "scripted"
+
+# Options:
+# fixed     = always use [fonts].theme
+# metadata  = choose based on genre/year/song metadata
+# random    = planned/future option
 mode = "metadata"
+
+# Used when metadata does not match a known rule.
 fallback_theme = "simple"
+
+
+# ------------------------------------------------------------------------------
+# Font Themes
+# ------------------------------------------------------------------------------
 
 [font_themes.modern]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
@@ -101,34 +195,85 @@ body = "/home/admin/projects/songart/assets/fonts/GloriaHallelujah-Regular.ttf"
 title_size = 34
 body_size = 22
 
+
+# ------------------------------------------------------------------------------
+# Visualizer
+# ------------------------------------------------------------------------------
+
 [visualizer]
 enabled = true
+
+# Options currently include: "spectrum", "oscilloscope", "analog_vu"
 mode = "spectrum"
+
+# Visualizer size and padding.
 height = 300
 padding = 16
+
+# Peak hold is more useful for VU/oscilloscope modes.
 peak_hold = false
 
-# Shared live visualizer timing
+
+# ------------------------------------------------------------------------------
+# Visualizer Timing + Level Controls
+# ------------------------------------------------------------------------------
+
+# Amount of recent audio used for each visualizer frame.
 window_ms = 120
+
+# Number of points used by oscilloscope-style modes.
 point_count = 96
+
+# General visualizer gain controls.
 gain = 1.0
+max_gain = 8.0
 y_scale = 1.0
+
+# Oscilloscope channel placement.
 left_y_offset = 0.25
 right_y_offset = 0.75
 visible_sample_count = 160
-max_gain = 8.0
+
+# Interval for visualizer debug logging.
 debug_log_interval_ms = 10000
 
-# Spectrum tuning
+
+# ------------------------------------------------------------------------------
+# Spectrum Analyzer Shape
+# ------------------------------------------------------------------------------
+
+# Number of displayed spectrum bars.
 spectrum_bin_count = 64
+
+# FFT size used to calculate spectrum bins.
 spectrum_fft_size = 1024
-spectrum_smoothing = 0.28
+
+# Frequency range displayed by the analyzer.
 spectrum_min_hz = 60.0
 spectrum_max_hz = 5000.0
+
+# Gap between spectrum bars.
 spectrum_bar_gap = 2
 
-# Spectrum scaling/tuning controls.
-# These replace hard-coded FFT display shaping values.
+
+# ------------------------------------------------------------------------------
+# Spectrum Analyzer Responsiveness
+# ------------------------------------------------------------------------------
+
+# Higher = faster bar rise.
+# Lower = softer/slower movement.
+spectrum_attack = 0.18
+
+# Lower = more responsive/faster fall.
+# Higher = smoother/slower fall.
+spectrum_smoothing = 0.28
+
+
+# ------------------------------------------------------------------------------
+# Spectrum Analyzer Scaling
+# ------------------------------------------------------------------------------
+
+# These control how FFT magnitudes are shaped into visible bar heights.
 spectrum_log_epsilon = 0.000001
 spectrum_log_scale = 0.14
 spectrum_log_offset = 0.62
@@ -138,6 +283,3 @@ spectrum_noise_floor = 0.26
 
 # Higher values increase contrast and keep quiet bars lower.
 spectrum_contrast = 1.45
-
-# Higher = faster bar rise. Lower = softer movement.
-spectrum_attack = 0.18
