@@ -35,8 +35,8 @@ orientation = "portrait"
 frame_delay_ms = 16
 
 [display_presets.portrait]
-width = 720
-height = 1280
+width = 1080
+height = 1920
 top_panel_ratio = 0.72
 panel_x = 40
 panel_y = 28
@@ -45,8 +45,8 @@ body_line_spacing = 34
 detail_line_spacing = 40
 
 [display_presets.landscape]
-width = 1280
-height = 720
+width = 1980
+height = 1080
 top_panel_ratio = 0.72
 panel_x = 40
 panel_y = 28
@@ -55,11 +55,9 @@ body_line_spacing = 34
 detail_line_spacing = 40
 
 [fonts]
+theme = "scripted"
 mode = "metadata"
 fallback_theme = "simple"
-# mode = "fixed"     # always use [fonts].theme
-# mode = "metadata"  # choose based on genre/year/song metadata
-# mode = "random"    # choose a random theme per detected track
 
 [font_themes.modern]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
