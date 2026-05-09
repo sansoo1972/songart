@@ -1,22 +1,25 @@
-use crate::audio::{ build_oscilloscope_points, compute_rms, SharedAudioBuffer };
-use crate::fft::compute_spectrum_bins;
+use crate::audio::{SharedAudioBuffer, build_oscilloscope_points, compute_rms};
 use crate::config::DisplayPreset;
-use crate::logging::{ log_debug, log_error, log_info };
-use crate::state::{ AppContext, SongState };
+use crate::fft::compute_spectrum_bins;
+use crate::logging::{log_debug, log_error, log_info};
+use crate::state::{AppContext, SongState};
 use crate::visualizer::VisualizerMode;
 
 use sdl2::event::Event;
-use sdl2::image::{ InitFlag, LoadTexture };
+use sdl2::image::{InitFlag, LoadTexture};
 use sdl2::keyboard::Keycode;
-use sdl2::pixels::{ Color, PixelFormatEnum };
-use sdl2::rect::{ Point, Rect };
-use sdl2::render::{ Texture, TextureCreator, TextureQuery };
+use sdl2::pixels::{Color, PixelFormatEnum};
+use sdl2::rect::{Point, Rect};
+use sdl2::render::{Texture, TextureCreator, TextureQuery};
 use sdl2::video::WindowContext;
 
 use std::path::Path;
-use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
-use std::time::{ Duration, Instant };
+use std::time::{Duration, Instant};
 
 fn ellipsize(input: &str, max_chars: usize) -> String {
     let chars: Vec<char> = input.chars().collect();
@@ -24,22 +27,119 @@ fn ellipsize(input: &str, max_chars: usize) -> String {
         return input.to_string();
     }
 
-    let trimmed: String = chars.into_iter().take(max_chars.saturating_sub(1)).collect();
+    let trimmed: String = chars
+        .into_iter()
+        .take(max_chars.saturating_sub(1))
+        .collect();
 
     format!("{trimmed}…")
 }
 
-fn selected_fonts<'a>(ctx: &'a AppContext) -> (&'a str, &'a str, u16, u16) {
-    let theme_name = ctx.config.fonts.theme.to_ascii_lowercase();
+fn parse_release_year(released: &str) -> Option<i32> {
+    let digits: String = released
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .take(4)
+        .collect();
+
+    if digits.len() == 4 {
+        digits.parse::<i32>().ok()
+    } else {
+        None
+    }
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
+}
+
+fn metadata_font_theme(ctx: &AppContext, state: &SongState) -> String {
+    let genre = state.genre.to_ascii_lowercase();
+    let year = parse_release_year(&state.released);
+
+    // Strong era/vibe override for synth-heavy 80s music.
+    if contains_any(
+        &genre,
+        &["electronic", "synth", "synth-pop", "new wave", "dance"],
+    ) || matches!(year, Some(1980..=1989))
+    {
+        return "techy".to_string();
+    }
+
+    // 90s rock/alternative/grunge gets a rougher style.
+    if contains_any(&genre, &["rock", "alternative", "grunge", "punk"])
+        && matches!(year, Some(1990..=1999))
+    {
+        return "grungy".to_string();
+    }
+
+    // Older music gets a retro display treatment.
+    if matches!(year, Some(0..=1979)) {
+        return "retro".to_string();
+    }
+
+    // Soundtracks, scores, classical, and orchestral music.
+    if contains_any(&genre, &["classical", "soundtrack", "score", "orchestral"]) {
+        return "fantasy".to_string();
+    }
+
+    // Acoustic / folk / singer-songwriter / country / latin.
+    if contains_any(
+        &genre,
+        &["folk", "acoustic", "country", "singer-songwriter", "latin"],
+    ) {
+        return "scripted".to_string();
+    }
+
+    // Modern mainstream genres.
+    if contains_any(&genre, &["pop", "r&b", "hip-hop", "rap"]) || matches!(year, Some(2000..=9999))
+    {
+        return "modern".to_string();
+    }
+
+    ctx.config.fonts.fallback_theme.to_ascii_lowercase()
+}
+
+fn selected_font_theme(ctx: &AppContext, state: &SongState) -> String {
+    match ctx.config.fonts.mode.to_ascii_lowercase().as_str() {
+        "metadata" => metadata_font_theme(ctx, state),
+        _ => ctx.config.fonts.theme.to_ascii_lowercase(),
+    }
+}
+
+fn selected_fonts<'a>(
+    ctx: &'a AppContext,
+    state: &SongState,
+) -> (&'a str, &'a str, u16, u16, String) {
+    let mut theme_name = selected_font_theme(ctx, state);
+
+    if !ctx.config.font_themes.contains_key(&theme_name) {
+        log_error(
+            ctx,
+            &format!(
+                "Configured font theme '{}' was not found; falling back to '{}'",
+                theme_name, ctx.config.fonts.fallback_theme
+            ),
+        );
+
+        theme_name = ctx.config.fonts.fallback_theme.to_ascii_lowercase();
+    }
 
     if let Some(theme) = ctx.config.font_themes.get(&theme_name) {
-        (&theme.title, &theme.body, theme.title_size, theme.body_size)
+        (
+            &theme.title,
+            &theme.body,
+            theme.title_size,
+            theme.body_size,
+            theme_name,
+        )
     } else {
         (
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             34,
             24,
+            "system-fallback".to_string(),
         )
     }
 }
@@ -61,7 +161,7 @@ impl<'a> CachedText<'a> {
         text: &str,
         color: Color,
         x: i32,
-        y: i32
+        y: i32,
     ) -> Result<Self, String> {
         let safe_text = if text.trim().is_empty() { " " } else { text };
 
@@ -97,7 +197,7 @@ fn build_text_cache<'a>(
     body_font: &sdl2::ttf::Font,
     state: &SongState,
     preset: &DisplayPreset,
-    top_h: u32
+    top_h: u32,
 ) -> Result<TextCache<'a>, String> {
     let panel_x = preset.panel_x;
     let mut panel_y = (top_h as i32) + preset.panel_y;
@@ -108,7 +208,7 @@ fn build_text_cache<'a>(
         } else {
             &state.title
         },
-        48
+        48,
     );
 
     let artist_line = ellipsize(
@@ -117,7 +217,7 @@ fn build_text_cache<'a>(
         } else {
             &state.artist
         },
-        56
+        56,
     );
 
     let mut third_line = state.album.clone();
@@ -147,7 +247,7 @@ fn build_text_cache<'a>(
         &title_line,
         Color::RGB(255, 255, 255),
         panel_x,
-        panel_y
+        panel_y,
     )?;
     panel_y += preset.title_line_spacing;
 
@@ -157,7 +257,7 @@ fn build_text_cache<'a>(
         &artist_line,
         Color::RGB(210, 210, 210),
         panel_x,
-        panel_y
+        panel_y,
     )?;
     panel_y += preset.body_line_spacing;
 
@@ -167,7 +267,7 @@ fn build_text_cache<'a>(
         &third_line,
         Color::RGB(180, 180, 180),
         panel_x,
-        panel_y
+        panel_y,
     )?;
     panel_y += preset.detail_line_spacing;
 
@@ -177,7 +277,7 @@ fn build_text_cache<'a>(
         &detail_line,
         Color::RGB(140, 140, 140),
         panel_x,
-        panel_y
+        panel_y,
     )?;
 
     Ok(TextCache {
@@ -195,7 +295,7 @@ fn draw_polyline(
     y: i32,
     width: u32,
     height: u32,
-    color: Color
+    color: Color,
 ) -> Result<(), String> {
     if points.len() < 2 {
         return Ok(());
@@ -225,7 +325,7 @@ fn draw_oscilloscope(
     x: i32,
     y: i32,
     width: u32,
-    height: u32
+    height: u32,
 ) -> Result<(), String> {
     canvas.set_draw_color(Color::RGB(10, 10, 10));
     canvas.fill_rect(Rect::new(x, y, width, height))?;
@@ -233,16 +333,32 @@ fn draw_oscilloscope(
     canvas.set_draw_color(Color::RGB(40, 40, 40));
     canvas.draw_line(
         Point::new(x, y + (height as i32) / 4),
-        Point::new(x + (width as i32), y + (height as i32) / 4)
+        Point::new(x + (width as i32), y + (height as i32) / 4),
     )?;
     canvas.draw_line(
         Point::new(x, y + ((height as i32) * 3) / 4),
-        Point::new(x + (width as i32), y + ((height as i32) * 3) / 4)
+        Point::new(x + (width as i32), y + ((height as i32) * 3) / 4),
     )?;
 
-    draw_polyline(canvas, left_points, x, y, width, height, Color::RGB(80, 220, 120))?;
+    draw_polyline(
+        canvas,
+        left_points,
+        x,
+        y,
+        width,
+        height,
+        Color::RGB(80, 220, 120),
+    )?;
 
-    draw_polyline(canvas, right_points, x, y, width, height, Color::RGB(80, 160, 255))?;
+    draw_polyline(
+        canvas,
+        right_points,
+        x,
+        y,
+        width,
+        height,
+        Color::RGB(80, 160, 255),
+    )?;
 
     Ok(())
 }
@@ -255,7 +371,7 @@ fn draw_spectrum(
     y: i32,
     width: u32,
     height: u32,
-    bar_gap: u32
+    bar_gap: u32,
 ) -> Result<(), String> {
     canvas.set_draw_color(Color::RGB(10, 10, 10));
     canvas.fill_rect(Rect::new(x, y, width, height))?;
@@ -276,7 +392,7 @@ fn draw_spectrum(
     canvas.set_draw_color(Color::RGB(40, 40, 40));
     canvas.draw_line(
         Point::new(x, y + (half_h as i32)),
-        Point::new(x + (width as i32), y + (half_h as i32))
+        Point::new(x + (width as i32), y + (half_h as i32)),
     )?;
 
     for (i, value) in upper_bins.iter().enumerate() {
@@ -313,7 +429,7 @@ fn draw_visualizer(
     y: i32,
     width: u32,
     height: u32,
-    bar_gap: u32
+    bar_gap: u32,
 ) -> Result<(), String> {
     match mode {
         VisualizerMode::None => Ok(()),
@@ -357,7 +473,7 @@ impl<'a> StaticSceneCache<'a> {
         artwork_texture: Option<&Texture<'a>>,
         scene_w: u32,
         top_h: u32,
-        bottom_h: u32
+        bottom_h: u32,
     ) -> Result<(), String> {
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
@@ -382,23 +498,25 @@ pub fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
     shared_state: Arc<Mutex<SongState>>,
-    shared_audio: Arc<Mutex<SharedAudioBuffer>>
+    shared_audio: Arc<Mutex<SharedAudioBuffer>>,
 ) -> Result<(), String> {
     let sdl = sdl2::init()?;
     let video = sdl.video()?;
     let _image_ctx = sdl2::image::init(InitFlag::JPG | InitFlag::PNG)?;
     let ttf_ctx = sdl2::ttf::init().map_err(|e| e.to_string())?;
 
-    log_info(&ctx, &format!("SDL video driver: {}", video.current_video_driver()));
+    log_info(
+        &ctx,
+        &format!("SDL video driver: {}", video.current_video_driver()),
+    );
 
-    let preset = selected_display_preset(&ctx).ok_or_else(||
-        format!("Unknown display preset: {}", ctx.config.display.orientation)
-    )?;
+    let preset = selected_display_preset(&ctx)
+        .ok_or_else(|| format!("Unknown display preset: {}", ctx.config.display.orientation))?;
 
     let mut window_builder = video.window(
         &ctx.config.display.window_title,
         preset.width,
-        preset.height
+        preset.height,
     );
     window_builder.position_centered();
 
@@ -418,19 +536,28 @@ pub fn run_display_loop(
         .map_err(|e| e.to_string())?;
 
     let info = canvas.info();
-    log_info(&ctx, &format!("SDL renderer: name='{}' flags={:?}", info.name, info.flags));
+    log_info(
+        &ctx,
+        &format!("SDL renderer: name='{}' flags={:?}", info.name, info.flags),
+    );
 
     let texture_creator = canvas.texture_creator();
 
-    let (title_font_path, body_font_path, title_font_size, body_font_size) = selected_fonts(&ctx);
+    let initial_state = SongState::default();
+    let (title_font_path, body_font_path, title_font_size, body_font_size, selected_theme) =
+        selected_fonts(&ctx, &initial_state);
 
-    let title_font = ttf_ctx
+    log_info(&ctx, &format!("Selected font theme: {}", selected_theme));
+
+    let mut title_font = ttf_ctx
         .load_font(title_font_path, title_font_size)
         .map_err(|e| format!("Failed to load title font from {}: {e}", title_font_path))?;
 
-    let body_font = ttf_ctx
+    let mut body_font = ttf_ctx
         .load_font(body_font_path, body_font_size)
         .map_err(|e| format!("Failed to load body font from {}: {e}", body_font_path))?;
+
+    let mut loaded_font_theme = selected_theme;
 
     let scene_w = preset.width;
     let scene_h = preset.height;
@@ -460,7 +587,11 @@ pub fn run_display_loop(
     while running.load(Ordering::SeqCst) {
         for event in event_pump.poll_iter() {
             match event {
-                Event::Quit { .. } | Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                Event::Quit { .. }
+                | Event::KeyDown {
+                    keycode: Some(Keycode::Escape),
+                    ..
+                } => {
                     running.store(false, Ordering::SeqCst);
                 }
                 _ => {}
@@ -495,7 +626,7 @@ pub fn run_display_loop(
                 ctx.config.visualizer.y_scale,
                 ctx.config.visualizer.gain,
                 ctx.config.visualizer.visible_sample_count,
-                ctx.config.visualizer.max_gain
+                ctx.config.visualizer.max_gain,
             );
 
             let right = build_oscilloscope_points(
@@ -505,7 +636,7 @@ pub fn run_display_loop(
                 ctx.config.visualizer.y_scale,
                 ctx.config.visualizer.gain,
                 ctx.config.visualizer.visible_sample_count,
-                ctx.config.visualizer.max_gain
+                ctx.config.visualizer.max_gain,
             );
 
             let bins = compute_spectrum_bins(
@@ -521,10 +652,18 @@ pub fn run_display_loop(
                 ctx.config.visualizer.spectrum_log_scale,
                 ctx.config.visualizer.spectrum_log_offset,
                 ctx.config.visualizer.spectrum_noise_floor,
-                ctx.config.visualizer.spectrum_contrast
+                ctx.config.visualizer.spectrum_contrast,
             );
 
-            (audio_len, sample_len, level, left, right, bins.clone(), bins)
+            (
+                audio_len,
+                sample_len,
+                level,
+                left,
+                right,
+                bins.clone(),
+                bins,
+            )
         };
 
         // Faster rise, slower fall makes the spectrum feel lively without looking jittery.
@@ -553,10 +692,18 @@ pub fn run_display_loop(
             }
         }
 
-        display_peak = if live_level > display_peak { live_level } else { display_peak * 0.96 };
+        display_peak = if live_level > display_peak {
+            live_level
+        } else {
+            display_peak * 0.96
+        };
 
         state.meter.level = live_level;
-        state.meter.peak = if ctx.config.visualizer.peak_hold { display_peak } else { live_level };
+        state.meter.peak = if ctx.config.visualizer.peak_hold {
+            display_peak
+        } else {
+            live_level
+        };
         state.visualizer.enabled = ctx.config.visualizer.enabled;
         state.visualizer.mode = match ctx.config.visualizer.mode.to_ascii_lowercase().as_str() {
             "oscilloscope" => VisualizerMode::Oscilloscope,
@@ -567,9 +714,8 @@ pub fn run_display_loop(
         state.visualizer.frame.left_points = left_points;
         state.visualizer.frame.right_points = right_points;
 
-        if
-            last_vis_debug.elapsed() >=
-            Duration::from_millis(ctx.config.visualizer.debug_log_interval_ms)
+        if last_vis_debug.elapsed()
+            >= Duration::from_millis(ctx.config.visualizer.debug_log_interval_ms)
         {
             let smooth_max_bin = smoothed_upper_bins.iter().copied().fold(0.0f32, f32::max);
 
@@ -592,7 +738,7 @@ pub fn run_display_loop(
                     smoothed_upper_bins.get(0).copied().unwrap_or(0.0),
                     smoothed_upper_bins.get(8).copied().unwrap_or(0.0),
                     smoothed_upper_bins.get(16).copied().unwrap_or(0.0)
-                )
+                ),
             );
 
             last_vis_debug = Instant::now();
@@ -608,9 +754,8 @@ pub fn run_display_loop(
                             &ctx,
                             &format!(
                                 "Renderer loaded artwork version {} from {}",
-                                loaded_version,
-                                state.artwork_path
-                            )
+                                loaded_version, state.artwork_path
+                            ),
                         );
                     }
                     Err(e) => {
@@ -626,7 +771,10 @@ pub fn run_display_loop(
 
         let (canvas_w, canvas_h) = canvas.output_size().map_err(|e| e.to_string())?;
         if last_canvas_size != Some((canvas_w, canvas_h)) {
-            log_debug(&ctx, &format!("Canvas output size: {}x{}", canvas_w, canvas_h));
+            log_debug(
+                &ctx,
+                &format!("Canvas output size: {}x{}", canvas_w, canvas_h),
+            );
             last_canvas_size = Some((canvas_w, canvas_h));
         }
 
@@ -636,13 +784,40 @@ pub fn run_display_loop(
             .unwrap_or(true);
 
         if needs_static_rebuild {
+            let (title_font_path, body_font_path, title_font_size, body_font_size, selected_theme) =
+                selected_fonts(&ctx, &state);
+
+            if selected_theme != loaded_font_theme {
+                log_info(
+                    &ctx,
+                    &format!(
+                        "Changing font theme from '{}' to '{}' for genre='{}' released='{}'",
+                        loaded_font_theme, selected_theme, state.genre, state.released
+                    ),
+                );
+
+                title_font = ttf_ctx
+                    .load_font(title_font_path, title_font_size)
+                    .map_err(|e| {
+                        format!("Failed to load title font from {}: {e}", title_font_path)
+                    })?;
+
+                body_font = ttf_ctx
+                    .load_font(body_font_path, body_font_size)
+                    .map_err(|e| {
+                        format!("Failed to load body font from {}: {e}", body_font_path)
+                    })?;
+
+                loaded_font_theme = selected_theme;
+            }
+
             let text = build_text_cache(
                 &texture_creator,
                 &title_font,
                 &body_font,
                 &state,
                 preset,
-                top_h
+                top_h,
             )?;
 
             let artwork_rect = artwork_texture
@@ -662,13 +837,16 @@ pub fn run_display_loop(
                         artwork_texture.as_ref(),
                         scene_w,
                         top_h,
-                        bottom_h
+                        bottom_h,
                     );
                 })
                 .map_err(|e| e.to_string())?;
 
             static_scene_cache = Some(cache);
-            log_debug(&ctx, &format!("Rebuilt static scene for version {}", state.version));
+            log_debug(
+                &ctx,
+                &format!("Rebuilt static scene for version {}", state.version),
+            );
         }
 
         let scale_x = (canvas_w as f32) / (scene_w as f32);
@@ -711,7 +889,7 @@ pub fn run_display_loop(
                 sy(vis_y_scene),
                 sw(vis_w_scene),
                 sh(vis_h),
-                ctx.config.visualizer.spectrum_bar_gap
+                ctx.config.visualizer.spectrum_bar_gap,
             )?;
         }
 

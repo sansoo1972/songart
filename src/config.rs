@@ -76,9 +76,21 @@ pub struct DisplayPreset {
 }
 
 /// High-level font selection.
+/// High-level font selection.
 #[derive(Debug, Deserialize, Clone)]
 pub struct FontsConfig {
+    /// Default font theme used in fixed mode and as a manual baseline.
     pub theme: String,
+
+    /// Font selection mode:
+    /// - fixed: always use `theme`
+    /// - metadata: choose a theme based on song genre/year metadata
+    #[serde(default = "default_font_mode")]
+    pub mode: String,
+
+    /// Theme used when metadata mode cannot confidently choose a match.
+    #[serde(default = "default_fallback_font_theme")]
+    pub fallback_theme: String,
 }
 
 /// A single named font theme.
@@ -268,9 +280,18 @@ fn default_spectrum_attack() -> f32 {
     0.1
 }
 
+fn default_font_mode() -> String {
+    "fixed".to_string()
+}
+
+fn default_fallback_font_theme() -> String {
+    "simple".to_string()
+}
+
 /// Loads application configuration from a TOML file.
 pub fn load_config(path: &str) -> Result<AppConfig, String> {
-    let raw = fs::read_to_string(path).map_err(|e| format!("Failed to read config {}: {e}", path))?;
+    let raw =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read config {}: {e}", path))?;
 
     toml::from_str(&raw).map_err(|e| format!("Failed to parse config {}: {e}", path))
 }

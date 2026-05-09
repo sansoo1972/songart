@@ -55,7 +55,11 @@ body_line_spacing = 34
 detail_line_spacing = 40
 
 [fonts]
-theme = "scripted"
+mode = "metadata"
+fallback_theme = "simple"
+# mode = "fixed"     # always use [fonts].theme
+# mode = "metadata"  # choose based on genre/year/song metadata
+# mode = "random"    # choose a random theme per detected track
 
 [font_themes.modern]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
