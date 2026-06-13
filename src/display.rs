@@ -1,4 +1,4 @@
-use crate::audio::{SharedAudioBuffer, build_oscilloscope_points, compute_rms};
+use crate::audio::{build_oscilloscope_points, compute_rms, SharedAudioBuffer};
 use crate::config::DisplayPreset;
 use crate::fft::compute_spectrum_bins;
 use crate::logging::{log_debug, log_error, log_info};
@@ -6,17 +6,18 @@ use crate::state::{AppContext, SongState};
 use crate::visualizer::VisualizerMode;
 
 use sdl2::event::Event;
-use sdl2::image::{InitFlag, LoadTexture};
+use sdl2::image::{InitFlag, LoadSurface, LoadTexture};
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::{Point, Rect};
 use sdl2::render::{Texture, TextureCreator, TextureQuery};
+use sdl2::surface::Surface;
 use sdl2::video::WindowContext;
 
 use std::path::Path;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -101,6 +102,227 @@ fn visualizer_background_color(ctx: &AppContext) -> Color {
         &ctx.config.display.colors.visualizer_background,
         canvas_background_color(ctx),
     )
+}
+
+#[derive(Clone, Copy, Debug)]
+struct VisualizerDrawColors {
+    upper: Color,
+    lower: Color,
+}
+
+impl VisualizerDrawColors {
+    fn fixed(ctx: &AppContext) -> Self {
+        Self {
+            upper: parse_hex_color(
+                &ctx.config.visualizer.colors.upper,
+                Color::RGB(80, 220, 120),
+            ),
+            lower: parse_hex_color(
+                &ctx.config.visualizer.colors.lower,
+                Color::RGB(80, 160, 255),
+            ),
+        }
+    }
+
+    fn fallback(ctx: &AppContext) -> Self {
+        Self {
+            upper: parse_hex_color(
+                &ctx.config.visualizer.colors.fallback_upper,
+                Color::RGB(80, 220, 120),
+            ),
+            lower: parse_hex_color(
+                &ctx.config.visualizer.colors.fallback_lower,
+                Color::RGB(80, 160, 255),
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ArtworkColorCandidate {
+    color: Color,
+    hue: f32,
+    score: f32,
+}
+
+fn color_channels(color: Color) -> (u8, u8, u8) {
+    (color.r, color.g, color.b)
+}
+
+fn perceived_brightness(r: u8, g: u8, b: u8) -> f32 {
+    (0.299 * (r as f32)) + (0.587 * (g as f32)) + (0.114 * (b as f32))
+}
+
+fn rgb_saturation(r: u8, g: u8, b: u8) -> f32 {
+    let max = r.max(g).max(b) as f32;
+    let min = r.min(g).min(b) as f32;
+
+    if max <= 0.0 {
+        0.0
+    } else {
+        (max - min) / max
+    }
+}
+
+fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
+    let rf = (r as f32) / 255.0;
+    let gf = (g as f32) / 255.0;
+    let bf = (b as f32) / 255.0;
+    let max = rf.max(gf).max(bf);
+    let min = rf.min(gf).min(bf);
+    let delta = max - min;
+
+    if delta <= f32::EPSILON {
+        return 0.0;
+    }
+
+    let hue = if (max - rf).abs() <= f32::EPSILON {
+        60.0 * (((gf - bf) / delta) % 6.0)
+    } else if (max - gf).abs() <= f32::EPSILON {
+        60.0 * (((bf - rf) / delta) + 2.0)
+    } else {
+        60.0 * (((rf - gf) / delta) + 4.0)
+    };
+
+    if hue < 0.0 {
+        hue + 360.0
+    } else {
+        hue
+    }
+}
+
+fn hue_distance(a: f32, b: f32) -> f32 {
+    let diff = (a - b).abs();
+    diff.min(360.0 - diff)
+}
+
+fn extract_visualizer_colors_from_artwork(
+    ctx: &AppContext,
+    artwork_path: &str,
+) -> Result<VisualizerDrawColors, String> {
+    let surface = Surface::from_file(artwork_path)?;
+    let surface = surface.convert_format(PixelFormatEnum::RGB24)?;
+    let pixels = surface
+        .without_lock()
+        .ok_or_else(|| "Artwork pixel buffer requires locking".to_string())?;
+
+    let width = surface.width() as usize;
+    let height = surface.height() as usize;
+    let pitch = surface.pitch() as usize;
+    let pixel_count = width.saturating_mul(height);
+
+    if width == 0 || height == 0 || pixel_count == 0 {
+        return Err("Artwork has no pixels".to_string());
+    }
+
+    let sample_stride = (pixel_count / 4096).max(1);
+    let min_brightness = ctx.config.visualizer.colors.min_brightness as f32;
+    let min_saturation = ctx.config.visualizer.colors.min_saturation.clamp(0.0, 1.0);
+    let mut candidates = Vec::new();
+
+    for i in (0..pixel_count).step_by(sample_stride) {
+        let x = i % width;
+        let y = i / width;
+        let offset = y.saturating_mul(pitch) + x.saturating_mul(3);
+
+        if offset + 2 >= pixels.len() {
+            continue;
+        }
+
+        let r = pixels[offset];
+        let g = pixels[offset + 1];
+        let b = pixels[offset + 2];
+        let brightness = perceived_brightness(r, g, b);
+        let saturation = rgb_saturation(r, g, b);
+
+        if brightness < min_brightness || saturation < min_saturation {
+            continue;
+        }
+
+        candidates.push(ArtworkColorCandidate {
+            color: Color::RGB(r, g, b),
+            hue: rgb_hue(r, g, b),
+            score: saturation * 2.0 + (brightness / 255.0),
+        });
+    }
+
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let upper = candidates
+        .first()
+        .copied()
+        .ok_or_else(|| "Artwork did not contain enough bright saturated pixels".to_string())?;
+
+    let lower = candidates
+        .iter()
+        .copied()
+        .find(|candidate| hue_distance(candidate.hue, upper.hue) >= 35.0)
+        .or_else(|| candidates.get(1).copied())
+        .unwrap_or(upper);
+
+    Ok(VisualizerDrawColors {
+        upper: upper.color,
+        lower: lower.color,
+    })
+}
+
+fn visualizer_colors_for_artwork(
+    ctx: &AppContext,
+    artwork_path: Option<&str>,
+) -> VisualizerDrawColors {
+    match ctx
+        .config
+        .visualizer
+        .colors
+        .mode
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "artwork" => {
+            if let Some(path) = artwork_path {
+                match extract_visualizer_colors_from_artwork(ctx, path) {
+                    Ok(colors) => {
+                        let (ur, ug, ub) = color_channels(colors.upper);
+                        let (lr, lg, lb) = color_channels(colors.lower);
+                        log_debug(
+                            ctx,
+                            &format!(
+                                "Visualizer colors derived from artwork: upper=#{:02X}{:02X}{:02X} lower=#{:02X}{:02X}{:02X}",
+                                ur, ug, ub, lr, lg, lb
+                            ),
+                        );
+                        colors
+                    }
+                    Err(e) => {
+                        log_error(
+                            ctx,
+                            &format!(
+                                "Failed to derive visualizer colors from artwork; using fallback colors: {e}"
+                            ),
+                        );
+                        VisualizerDrawColors::fallback(ctx)
+                    }
+                }
+            } else {
+                VisualizerDrawColors::fallback(ctx)
+            }
+        }
+        "fixed" => VisualizerDrawColors::fixed(ctx),
+        other => {
+            log_error(
+                ctx,
+                &format!(
+                    "Unknown visualizer color mode '{}'; using fallback colors",
+                    other
+                ),
+            );
+            VisualizerDrawColors::fallback(ctx)
+        }
+    }
 }
 
 // ==============================================================================
@@ -393,6 +615,7 @@ fn draw_polyline(
 fn draw_oscilloscope(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     ctx: &AppContext,
+    colors: VisualizerDrawColors,
     left_points: &[(f32, f32)],
     right_points: &[(f32, f32)],
     x: i32,
@@ -413,25 +636,9 @@ fn draw_oscilloscope(
         Point::new(x + (width as i32), y + ((height as i32) * 3) / 4),
     )?;
 
-    draw_polyline(
-        canvas,
-        left_points,
-        x,
-        y,
-        width,
-        height,
-        Color::RGB(80, 220, 120),
-    )?;
+    draw_polyline(canvas, left_points, x, y, width, height, colors.upper)?;
 
-    draw_polyline(
-        canvas,
-        right_points,
-        x,
-        y,
-        width,
-        height,
-        Color::RGB(80, 160, 255),
-    )?;
+    draw_polyline(canvas, right_points, x, y, width, height, colors.lower)?;
 
     Ok(())
 }
@@ -439,6 +646,7 @@ fn draw_oscilloscope(
 fn draw_spectrum(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     ctx: &AppContext,
+    colors: VisualizerDrawColors,
     upper_bins: &[f32],
     lower_bins: &[f32],
     x: i32,
@@ -475,7 +683,7 @@ fn draw_spectrum(
         let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
         let rect = Rect::new(bar_x, y + (half_h as i32) - (bar_h as i32), bar_w, bar_h);
 
-        canvas.set_draw_color(Color::RGB(80, 220, 120));
+        canvas.set_draw_color(colors.upper);
         canvas.fill_rect(rect)?;
     }
 
@@ -485,7 +693,7 @@ fn draw_spectrum(
         let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
         let rect = Rect::new(bar_x, y + (half_h as i32), bar_w, bar_h);
 
-        canvas.set_draw_color(Color::RGB(80, 160, 255));
+        canvas.set_draw_color(colors.lower);
         canvas.fill_rect(rect)?;
     }
 
@@ -495,6 +703,7 @@ fn draw_spectrum(
 fn draw_visualizer(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     ctx: &AppContext,
+    colors: VisualizerDrawColors,
     mode: VisualizerMode,
     left_points: &[(f32, f32)],
     right_points: &[(f32, f32)],
@@ -508,11 +717,19 @@ fn draw_visualizer(
 ) -> Result<(), String> {
     match mode {
         VisualizerMode::None => Ok(()),
-        VisualizerMode::Oscilloscope | VisualizerMode::AnalogVu => {
-            draw_oscilloscope(canvas, ctx, left_points, right_points, x, y, width, height)
-        }
+        VisualizerMode::Oscilloscope | VisualizerMode::AnalogVu => draw_oscilloscope(
+            canvas,
+            ctx,
+            colors,
+            left_points,
+            right_points,
+            x,
+            y,
+            width,
+            height,
+        ),
         VisualizerMode::Spectrum => draw_spectrum(
-            canvas, ctx, upper_bins, lower_bins, x, y, width, height, bar_gap,
+            canvas, ctx, colors, upper_bins, lower_bins, x, y, width, height, bar_gap,
         ),
     }
 }
@@ -712,6 +929,7 @@ pub fn run_display_loop(
     let mut event_pump = sdl.event_pump()?;
     let mut loaded_version: u64 = u64::MAX;
     let mut artwork_texture: Option<Texture<'_>> = None;
+    let mut visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
     let mut last_canvas_size: Option<(u32, u32)> = None;
     let mut display_peak = 0.0f32;
     let mut last_vis_debug = Instant::now();
@@ -850,6 +1068,8 @@ pub fn run_display_loop(
                 match texture_creator.load_texture(&state.artwork_path) {
                     Ok(texture) => {
                         artwork_texture = Some(texture);
+                        visualizer_colors =
+                            visualizer_colors_for_artwork(&ctx, Some(&state.artwork_path));
                         loaded_version = state.version;
                         log_debug(
                             &ctx,
@@ -862,10 +1082,12 @@ pub fn run_display_loop(
                     Err(e) => {
                         log_error(&ctx, &format!("Renderer failed to load artwork: {e}"));
                         artwork_texture = None;
+                        visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
                     }
                 }
             } else {
                 artwork_texture = None;
+                visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
                 loaded_version = state.version;
             }
         }
@@ -983,6 +1205,7 @@ pub fn run_display_loop(
             draw_visualizer(
                 &mut canvas,
                 &ctx,
+                visualizer_colors,
                 state.visualizer.mode,
                 &state.visualizer.frame.left_points,
                 &state.visualizer.frame.right_points,

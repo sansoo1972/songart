@@ -283,3 +283,24 @@ spectrum_noise_floor = 0.26
 
 # Higher values increase contrast and keep quiet bars lower.
 spectrum_contrast = 1.45
+
+# ------------------------------------------------------------------------------
+# Artwork Color Background Matching
+# ------------------------------------------------------------------------------
+
+[visualizer.colors]
+mode = "artwork"       # fixed, artwork
+
+# Used when mode = "fixed"
+upper = "#50DC78"
+lower = "#50A0FF"
+
+# Used when mode = "artwork" but extraction fails
+fallback_upper = "#50DC78"
+fallback_lower = "#50A0FF"
+
+# Minimum perceived brightness for artwork-derived colors
+min_brightness = 80
+
+# Helps avoid muddy gray/brown colors
+min_saturation = 0.25

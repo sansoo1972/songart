@@ -255,6 +255,53 @@ pub struct VisualizerConfig {
 
     #[serde(default = "default_spectrum_contrast")]
     pub spectrum_contrast: f32,
+
+    /// Visualizer foreground color selection.
+    #[serde(default)]
+    pub colors: VisualizerColorsConfig,
+}
+
+/// Configurable visualizer foreground colors.
+///
+/// `mode` accepts:
+/// - `fixed`: use `upper` and `lower`
+/// - `artwork`: derive colors from artwork, falling back to `fallback_*`
+#[derive(Debug, Deserialize, Clone)]
+pub struct VisualizerColorsConfig {
+    #[serde(default = "default_visualizer_color_mode")]
+    pub mode: String,
+
+    #[serde(default = "default_visualizer_upper_color")]
+    pub upper: String,
+
+    #[serde(default = "default_visualizer_lower_color")]
+    pub lower: String,
+
+    #[serde(default = "default_visualizer_upper_color")]
+    pub fallback_upper: String,
+
+    #[serde(default = "default_visualizer_lower_color")]
+    pub fallback_lower: String,
+
+    #[serde(default = "default_visualizer_min_brightness")]
+    pub min_brightness: u8,
+
+    #[serde(default = "default_visualizer_min_saturation")]
+    pub min_saturation: f32,
+}
+
+impl Default for VisualizerColorsConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_visualizer_color_mode(),
+            upper: default_visualizer_upper_color(),
+            lower: default_visualizer_lower_color(),
+            fallback_upper: default_visualizer_upper_color(),
+            fallback_lower: default_visualizer_lower_color(),
+            min_brightness: default_visualizer_min_brightness(),
+            min_saturation: default_visualizer_min_saturation(),
+        }
+    }
 }
 
 // ==============================================================================
@@ -383,6 +430,28 @@ fn default_spectrum_noise_floor() -> f32 {
 
 fn default_spectrum_contrast() -> f32 {
     1.0
+}
+
+// Visualizer color defaults.
+
+fn default_visualizer_color_mode() -> String {
+    "fixed".to_string()
+}
+
+fn default_visualizer_upper_color() -> String {
+    "#50DC78".to_string()
+}
+
+fn default_visualizer_lower_color() -> String {
+    "#50A0FF".to_string()
+}
+
+fn default_visualizer_min_brightness() -> u8 {
+    80
+}
+
+fn default_visualizer_min_saturation() -> f32 {
+    0.25
 }
 
 // ==============================================================================
