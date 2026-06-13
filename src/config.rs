@@ -288,6 +288,12 @@ pub struct VisualizerColorsConfig {
 
     #[serde(default = "default_visualizer_min_saturation")]
     pub min_saturation: f32,
+
+    #[serde(default = "default_visualizer_palette_size")]
+    pub palette_size: usize,
+
+    #[serde(default = "default_visualizer_hue_bucket_count")]
+    pub hue_bucket_count: usize,
 }
 
 impl Default for VisualizerColorsConfig {
@@ -300,6 +306,8 @@ impl Default for VisualizerColorsConfig {
             fallback_lower: default_visualizer_lower_color(),
             min_brightness: default_visualizer_min_brightness(),
             min_saturation: default_visualizer_min_saturation(),
+            palette_size: default_visualizer_palette_size(),
+            hue_bucket_count: default_visualizer_hue_bucket_count(),
         }
     }
 }
@@ -452,6 +460,14 @@ fn default_visualizer_min_brightness() -> u8 {
 
 fn default_visualizer_min_saturation() -> f32 {
     0.25
+}
+
+fn default_visualizer_palette_size() -> usize {
+    6
+}
+
+fn default_visualizer_hue_bucket_count() -> usize {
+    12
 }
 
 // ==============================================================================

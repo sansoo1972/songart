@@ -104,36 +104,45 @@ fn visualizer_background_color(ctx: &AppContext) -> Color {
     )
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct VisualizerDrawColors {
     upper: Color,
     lower: Color,
+    palette: Vec<Color>,
 }
 
 impl VisualizerDrawColors {
     fn fixed(ctx: &AppContext) -> Self {
+        let upper = parse_hex_color(
+            &ctx.config.visualizer.colors.upper,
+            Color::RGB(80, 220, 120),
+        );
+        let lower = parse_hex_color(
+            &ctx.config.visualizer.colors.lower,
+            Color::RGB(80, 160, 255),
+        );
+
         Self {
-            upper: parse_hex_color(
-                &ctx.config.visualizer.colors.upper,
-                Color::RGB(80, 220, 120),
-            ),
-            lower: parse_hex_color(
-                &ctx.config.visualizer.colors.lower,
-                Color::RGB(80, 160, 255),
-            ),
+            upper,
+            lower,
+            palette: vec![upper, lower],
         }
     }
 
     fn fallback(ctx: &AppContext) -> Self {
+        let upper = parse_hex_color(
+            &ctx.config.visualizer.colors.fallback_upper,
+            Color::RGB(80, 220, 120),
+        );
+        let lower = parse_hex_color(
+            &ctx.config.visualizer.colors.fallback_lower,
+            Color::RGB(80, 160, 255),
+        );
+
         Self {
-            upper: parse_hex_color(
-                &ctx.config.visualizer.colors.fallback_upper,
-                Color::RGB(80, 220, 120),
-            ),
-            lower: parse_hex_color(
-                &ctx.config.visualizer.colors.fallback_lower,
-                Color::RGB(80, 160, 255),
-            ),
+            upper,
+            lower,
+            palette: vec![upper, lower],
         }
     }
 }
@@ -143,6 +152,41 @@ struct ArtworkColorCandidate {
     color: Color,
     hue: f32,
     score: f32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct HueBucket {
+    red_sum: f32,
+    green_sum: f32,
+    blue_sum: f32,
+    score_sum: f32,
+    count: usize,
+}
+
+impl HueBucket {
+    fn push(&mut self, r: u8, g: u8, b: u8, score: f32) {
+        self.red_sum += (r as f32) * score;
+        self.green_sum += (g as f32) * score;
+        self.blue_sum += (b as f32) * score;
+        self.score_sum += score;
+        self.count += 1;
+    }
+
+    fn candidate(self, hue: f32) -> Option<ArtworkColorCandidate> {
+        if self.count == 0 || self.score_sum <= 0.0 {
+            return None;
+        }
+
+        Some(ArtworkColorCandidate {
+            color: Color::RGB(
+                (self.red_sum / self.score_sum).round().clamp(0.0, 255.0) as u8,
+                (self.green_sum / self.score_sum).round().clamp(0.0, 255.0) as u8,
+                (self.blue_sum / self.score_sum).round().clamp(0.0, 255.0) as u8,
+            ),
+            hue,
+            score: self.score_sum,
+        })
+    }
 }
 
 fn color_channels(color: Color) -> (u8, u8, u8) {
@@ -196,6 +240,60 @@ fn hue_distance(a: f32, b: f32) -> f32 {
     diff.min(360.0 - diff)
 }
 
+fn pick_spread_palette(
+    candidates: &[ArtworkColorCandidate],
+    palette_size: usize,
+) -> Vec<ArtworkColorCandidate> {
+    let target_size = palette_size.clamp(2, 12);
+    let mut palette = Vec::new();
+
+    for min_distance in [55.0, 40.0, 25.0, 0.0] {
+        for candidate in candidates {
+            if palette.len() >= target_size {
+                return palette;
+            }
+
+            let is_distinct = palette.iter().all(|selected: &ArtworkColorCandidate| {
+                hue_distance(selected.hue, candidate.hue) >= min_distance
+            });
+
+            if is_distinct {
+                palette.push(*candidate);
+            }
+        }
+    }
+
+    palette
+}
+
+fn lerp_channel(a: u8, b: u8, t: f32) -> u8 {
+    ((a as f32) + ((b as f32) - (a as f32)) * t)
+        .round()
+        .clamp(0.0, 255.0) as u8
+}
+
+fn palette_color_at(palette: &[Color], index: usize, count: usize) -> Color {
+    match palette {
+        [] => Color::RGB(80, 220, 120),
+        [color] => *color,
+        colors => {
+            let denom = count.saturating_sub(1).max(1) as f32;
+            let position = (index as f32 / denom) * ((colors.len() - 1) as f32);
+            let left = position.floor() as usize;
+            let right = (left + 1).min(colors.len() - 1);
+            let t = position - (left as f32);
+            let a = colors[left];
+            let b = colors[right];
+
+            Color::RGB(
+                lerp_channel(a.r, b.r, t),
+                lerp_channel(a.g, b.g, t),
+                lerp_channel(a.b, b.b, t),
+            )
+        }
+    }
+}
+
 fn extract_visualizer_colors_from_artwork(
     ctx: &AppContext,
     artwork_path: &str,
@@ -218,7 +316,8 @@ fn extract_visualizer_colors_from_artwork(
     let sample_stride = (pixel_count / 4096).max(1);
     let min_brightness = ctx.config.visualizer.colors.min_brightness as f32;
     let min_saturation = ctx.config.visualizer.colors.min_saturation.clamp(0.0, 1.0);
-    let mut candidates = Vec::new();
+    let hue_bucket_count = ctx.config.visualizer.colors.hue_bucket_count.clamp(3, 36);
+    let mut buckets = vec![HueBucket::default(); hue_bucket_count];
 
     for i in (0..pixel_count).step_by(sample_stride) {
         let x = i % width;
@@ -239,12 +338,20 @@ fn extract_visualizer_colors_from_artwork(
             continue;
         }
 
-        candidates.push(ArtworkColorCandidate {
-            color: Color::RGB(r, g, b),
-            hue: rgb_hue(r, g, b),
-            score: saturation * 2.0 + (brightness / 255.0),
-        });
+        let hue = rgb_hue(r, g, b);
+        let bucket_index =
+            ((hue / 360.0) * (hue_bucket_count as f32)).floor() as usize % hue_bucket_count;
+        let score = saturation * 2.0 + (brightness / 255.0);
+
+        buckets[bucket_index].push(r, g, b, score);
     }
+
+    let bucket_width = 360.0 / (hue_bucket_count as f32);
+    let mut candidates: Vec<ArtworkColorCandidate> = buckets
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, bucket)| bucket.candidate((index as f32 + 0.5) * bucket_width))
+        .collect();
 
     candidates.sort_by(|a, b| {
         b.score
@@ -252,21 +359,26 @@ fn extract_visualizer_colors_from_artwork(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let upper = candidates
+    let palette = pick_spread_palette(&candidates, ctx.config.visualizer.colors.palette_size);
+    let upper = palette
         .first()
         .copied()
         .ok_or_else(|| "Artwork did not contain enough bright saturated pixels".to_string())?;
 
-    let lower = candidates
+    let lower = palette
         .iter()
         .copied()
         .find(|candidate| hue_distance(candidate.hue, upper.hue) >= 35.0)
-        .or_else(|| candidates.get(1).copied())
+        .or_else(|| palette.get(1).copied())
         .unwrap_or(upper);
 
     Ok(VisualizerDrawColors {
         upper: upper.color,
         lower: lower.color,
+        palette: palette
+            .into_iter()
+            .map(|candidate| candidate.color)
+            .collect(),
     })
 }
 
@@ -291,8 +403,8 @@ fn visualizer_colors_for_artwork(
                         log_debug(
                             ctx,
                             &format!(
-                                "Visualizer colors derived from artwork: upper=#{:02X}{:02X}{:02X} lower=#{:02X}{:02X}{:02X}",
-                                ur, ug, ub, lr, lg, lb
+                                "Visualizer colors derived from artwork: upper=#{:02X}{:02X}{:02X} lower=#{:02X}{:02X}{:02X} palette_colors={}",
+                                ur, ug, ub, lr, lg, lb, colors.palette.len()
                             ),
                         );
                         colors
@@ -615,7 +727,7 @@ fn draw_polyline(
 fn draw_oscilloscope(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     ctx: &AppContext,
-    colors: VisualizerDrawColors,
+    colors: &VisualizerDrawColors,
     left_points: &[(f32, f32)],
     right_points: &[(f32, f32)],
     x: i32,
@@ -646,7 +758,7 @@ fn draw_oscilloscope(
 fn draw_spectrum(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     ctx: &AppContext,
-    colors: VisualizerDrawColors,
+    colors: &VisualizerDrawColors,
     upper_bins: &[f32],
     lower_bins: &[f32],
     x: i32,
@@ -683,7 +795,11 @@ fn draw_spectrum(
         let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
         let rect = Rect::new(bar_x, y + (half_h as i32) - (bar_h as i32), bar_w, bar_h);
 
-        canvas.set_draw_color(colors.upper);
+        canvas.set_draw_color(palette_color_at(
+            &colors.palette,
+            i as usize,
+            count as usize,
+        ));
         canvas.fill_rect(rect)?;
     }
 
@@ -693,7 +809,11 @@ fn draw_spectrum(
         let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
         let rect = Rect::new(bar_x, y + (half_h as i32), bar_w, bar_h);
 
-        canvas.set_draw_color(colors.lower);
+        canvas.set_draw_color(palette_color_at(
+            &colors.palette,
+            count.saturating_sub(1).saturating_sub(i) as usize,
+            count as usize,
+        ));
         canvas.fill_rect(rect)?;
     }
 
@@ -703,7 +823,7 @@ fn draw_spectrum(
 fn draw_visualizer(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     ctx: &AppContext,
-    colors: VisualizerDrawColors,
+    colors: &VisualizerDrawColors,
     mode: VisualizerMode,
     left_points: &[(f32, f32)],
     right_points: &[(f32, f32)],
@@ -1205,7 +1325,7 @@ pub fn run_display_loop(
             draw_visualizer(
                 &mut canvas,
                 &ctx,
-                visualizer_colors,
+                &visualizer_colors,
                 state.visualizer.mode,
                 &state.visualizer.frame.left_points,
                 &state.visualizer.frame.right_points,

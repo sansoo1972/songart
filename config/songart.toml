@@ -304,3 +304,9 @@ min_brightness = 80
 
 # Helps avoid muddy gray/brown colors
 min_saturation = 0.25
+
+# Number of artwork-derived colors used across spectrum bars.
+palette_size = 6
+
+# Number of hue regions sampled when building the artwork palette.
+hue_bucket_count = 12
