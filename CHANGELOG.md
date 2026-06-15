@@ -4,6 +4,33 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
+## [0.10.0] - 2026-06-15
+
+### Added
+- Artwork-derived visualizer colors for spectrum and oscilloscope rendering.
+- Configurable visualizer color mode:
+  - `fixed` for explicit configured colors
+  - `artwork` for colors extracted from the current album artwork
+- Configurable fallback visualizer colors when artwork loading or color extraction fails.
+- Artwork palette extraction controls:
+  - minimum perceived brightness
+  - minimum saturation
+  - palette size
+  - hue bucket count
+
+### Changed
+- Spectrum analyzer bars now sweep through a broader artwork-derived color palette instead of using only two fixed colors.
+- Lower spectrum bars use the palette in reverse order for stronger visual variation.
+- Visualizer color selection remains config-driven and preserves fixed/fallback behavior.
+
+### Fixed
+- [#12](https://github.com/sansoo1972/songart/issues/12) Visualizer colors can now be derived from album artwork while falling back safely to configured colors.
+
+### Notes
+- Artwork palette extraction intentionally favors bright, saturated colors to avoid muddy gray/brown output.
+
+---
+
 ## [0.9.2] - 2026-05-08
 
 ### Added

@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.9.2 adds human-readable logging timestamps, metadata-driven font themes, improved portrait layout defaults for 1080x1920 displays, a larger and more responsive spectrum analyzer, and configurable display-region background colors.
+Version 0.10.0 adds artwork-derived visualizer colors, broader album-art palette extraction for spectrum bars, and configurable fallback/fixed visualizer color controls.
 
 ---
 
@@ -27,6 +27,7 @@ Version 0.9.2 adds human-readable logging timestamps, metadata-driven font theme
   - metadata background
   - visualizer background
 - Configurable spectrum analyzer responsiveness and scaling
+- Artwork-derived visualizer color palettes with fixed/fallback color support
 - Human-readable timestamped logging with configurable log levels
 - Externalized runtime configuration via TOML
 - Graceful Ctrl+C shutdown handling
@@ -123,6 +124,7 @@ config/songart.toml
 - `fonts` selects fixed or metadata-driven font behavior
 - `font_themes` define title/body font paths and font sizes
 - `visualizer` controls FFT, spectrum, oscilloscope, and responsiveness behavior
+- `visualizer.colors` controls fixed or artwork-derived visualizer foreground colors
 
 ---
 
@@ -233,6 +235,17 @@ spectrum_log_offset = 0.62
 spectrum_noise_floor = 0.26
 spectrum_contrast = 1.45
 spectrum_attack = 0.18
+
+[visualizer.colors]
+mode = "artwork"
+upper = "#50DC78"
+lower = "#50A0FF"
+fallback_upper = "#50DC78"
+fallback_lower = "#50A0FF"
+min_brightness = 80
+min_saturation = 0.25
+palette_size = 6
+hue_bucket_count = 12
 ```
 
 ---
@@ -353,12 +366,25 @@ spectrum_noise_floor = 0.26
 spectrum_contrast = 1.45
 gain = 1.0
 max_gain = 8.0
+
+[visualizer.colors]
+mode = "artwork"
+upper = "#50DC78"
+lower = "#50A0FF"
+fallback_upper = "#50DC78"
+fallback_lower = "#50A0FF"
+min_brightness = 80
+min_saturation = 0.25
+palette_size = 6
+hue_bucket_count = 12
 ```
 
 Current implementation:
 
 - FFT spectrum analyzer
 - Oscilloscope rendering
+- Artwork-derived visualizer palettes
+- Fixed and fallback visualizer colors
 - Log-spaced frequency bins
 - Spectrum smoothing
 - Spectrum attack tuning
@@ -441,15 +467,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.9.2**.
+This project is now at **0.10.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.9.2 -m "songart 0.9.2"
-git push origin v0.9.2
+git tag -a v0.10.0 -m "songart 0.10.0"
+git push origin v0.10.0
 ```
 
 ---
@@ -469,6 +495,7 @@ git push origin v0.9.2
 - Native 1080x1920 portrait layout working
 - FFT spectrum analyzer working
 - Larger and more responsive spectrum visualizer working
+- Artwork-derived visualizer color palettes working
 - Oscilloscope visualizer working
 - Shared rolling audio analysis working
 - Renderer scene caching working
@@ -480,7 +507,7 @@ git push origin v0.9.2
 
 ## Future Improvements
 
-- Artwork-derived visualizer color palettes
+- Additional artwork palette tuning options
 - Optional turntable-style album artwork mode
 - Kiosk-selectable display and artwork modes
 - Further font-theme refinement
