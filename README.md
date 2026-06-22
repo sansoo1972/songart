@@ -367,6 +367,17 @@ spectrum_contrast = 1.45
 gain = 1.0
 max_gain = 8.0
 
+[visualizer.spectrum]
+render_style = "full"        # full, top_only
+top_only_height_ratio = 0.35 # visible portion of each active bar in top_only mode
+
+[visualizer.peaks]
+enabled = false
+hold_ms = 100
+drop_pixels = 1
+color = "#FFFFFF"
+use_bar_color = true
+
 [visualizer.colors]
 mode = "artwork"
 upper = "#50DC78"
@@ -388,6 +399,8 @@ Current implementation:
 - Log-spaced frequency bins
 - Spectrum smoothing
 - Spectrum attack tuning
+- Mirrored full-spectrum rendering or full-height top-only spectrum rendering
+- Optional peak hold/drop-off markers
 - Noise floor and contrast controls
 - Shared rolling audio analysis buffer
 - Configurable gain and FFT sizing

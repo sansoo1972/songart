@@ -256,9 +256,71 @@ pub struct VisualizerConfig {
     #[serde(default = "default_spectrum_contrast")]
     pub spectrum_contrast: f32,
 
+    /// Spectrum analyzer rendering options.
+    #[serde(default)]
+    pub spectrum: VisualizerSpectrumConfig,
+
+    /// Spectrum peak marker options.
+    #[serde(default)]
+    pub peaks: VisualizerPeaksConfig,
+
     /// Visualizer foreground color selection.
     #[serde(default)]
     pub colors: VisualizerColorsConfig,
+}
+
+/// Spectrum analyzer rendering options.
+///
+/// `render_style` accepts:
+/// - `full`: draw each bar from the baseline outward
+/// - `top_only`: draw only the outer/top segment of each active bar
+#[derive(Debug, Deserialize, Clone)]
+pub struct VisualizerSpectrumConfig {
+    #[serde(default = "default_spectrum_render_style")]
+    pub render_style: String,
+
+    #[serde(default = "default_top_only_height_ratio")]
+    pub top_only_height_ratio: f32,
+}
+
+impl Default for VisualizerSpectrumConfig {
+    fn default() -> Self {
+        Self {
+            render_style: default_spectrum_render_style(),
+            top_only_height_ratio: default_top_only_height_ratio(),
+        }
+    }
+}
+
+/// Spectrum peak marker options.
+#[derive(Debug, Deserialize, Clone)]
+pub struct VisualizerPeaksConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default = "default_peak_hold_ms")]
+    pub hold_ms: u64,
+
+    #[serde(default = "default_peak_drop_pixels")]
+    pub drop_pixels: u32,
+
+    #[serde(default = "default_peak_color")]
+    pub color: String,
+
+    #[serde(default = "default_peak_use_bar_color")]
+    pub use_bar_color: bool,
+}
+
+impl Default for VisualizerPeaksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hold_ms: default_peak_hold_ms(),
+            drop_pixels: default_peak_drop_pixels(),
+            color: default_peak_color(),
+            use_bar_color: default_peak_use_bar_color(),
+        }
+    }
 }
 
 /// Configurable visualizer foreground colors.
@@ -438,6 +500,30 @@ fn default_spectrum_noise_floor() -> f32 {
 
 fn default_spectrum_contrast() -> f32 {
     1.0
+}
+
+fn default_spectrum_render_style() -> String {
+    "full".to_string()
+}
+
+fn default_top_only_height_ratio() -> f32 {
+    0.35
+}
+
+fn default_peak_hold_ms() -> u64 {
+    100
+}
+
+fn default_peak_drop_pixels() -> u32 {
+    1
+}
+
+fn default_peak_color() -> String {
+    "#FFFFFF".to_string()
+}
+
+fn default_peak_use_bar_color() -> bool {
+    true
 }
 
 // Visualizer color defaults.
