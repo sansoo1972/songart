@@ -1,4 +1,4 @@
-use crate::audio::{build_oscilloscope_points, compute_rms, SharedAudioBuffer};
+use crate::audio::{SharedAudioBuffer, build_oscilloscope_points, compute_rms};
 use crate::config::DisplayPreset;
 use crate::fft::compute_spectrum_bins;
 use crate::logging::{log_debug, log_error, log_info};
@@ -16,8 +16,8 @@ use sdl2::video::WindowContext;
 
 use std::path::Path;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -201,11 +201,7 @@ fn rgb_saturation(r: u8, g: u8, b: u8) -> f32 {
     let max = r.max(g).max(b) as f32;
     let min = r.min(g).min(b) as f32;
 
-    if max <= 0.0 {
-        0.0
-    } else {
-        (max - min) / max
-    }
+    if max <= 0.0 { 0.0 } else { (max - min) / max }
 }
 
 fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
@@ -228,11 +224,7 @@ fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
         60.0 * (((rf - gf) / delta) + 4.0)
     };
 
-    if hue < 0.0 {
-        hue + 360.0
-    } else {
-        hue
-    }
+    if hue < 0.0 { hue + 360.0 } else { hue }
 }
 
 fn hue_distance(a: f32, b: f32) -> f32 {
@@ -404,7 +396,13 @@ fn visualizer_colors_for_artwork(
                             ctx,
                             &format!(
                                 "Visualizer colors derived from artwork: upper=#{:02X}{:02X}{:02X} lower=#{:02X}{:02X}{:02X} palette_colors={}",
-                                ur, ug, ub, lr, lg, lb, colors.palette.len()
+                                ur,
+                                ug,
+                                ub,
+                                lr,
+                                lg,
+                                lb,
+                                colors.palette.len()
                             ),
                         );
                         colors
@@ -761,6 +759,8 @@ fn draw_spectrum(
     colors: &VisualizerDrawColors,
     upper_bins: &[f32],
     lower_bins: &[f32],
+    upper_peaks: &[f32],
+    lower_peaks: &[f32],
     x: i32,
     y: i32,
     width: u32,
@@ -775,6 +775,10 @@ fn draw_spectrum(
     }
 
     let half_h = height / 2;
+    if half_h == 0 {
+        return Ok(());
+    }
+
     let count = upper_bins.len().min(lower_bins.len()) as u32;
     if count == 0 {
         return Ok(());
@@ -793,31 +797,134 @@ fn draw_spectrum(
         let i = i as u32;
         let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
         let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
-        let rect = Rect::new(bar_x, y + (half_h as i32) - (bar_h as i32), bar_w, bar_h);
 
         canvas.set_draw_color(palette_color_at(
             &colors.palette,
             i as usize,
             count as usize,
         ));
-        canvas.fill_rect(rect)?;
+
+        if let Some(rect) = spectrum_bar_rect(
+            bar_x,
+            y + (half_h as i32),
+            bar_w,
+            bar_h,
+            true,
+            &ctx.config.visualizer.spectrum.render_style,
+            ctx.config.visualizer.spectrum.top_only_height_ratio,
+        ) {
+            canvas.fill_rect(rect)?;
+        }
     }
 
     for (i, value) in lower_bins.iter().enumerate() {
         let i = i as u32;
         let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
         let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
-        let rect = Rect::new(bar_x, y + (half_h as i32), bar_w, bar_h);
 
         canvas.set_draw_color(palette_color_at(
             &colors.palette,
             count.saturating_sub(1).saturating_sub(i) as usize,
             count as usize,
         ));
-        canvas.fill_rect(rect)?;
+
+        if let Some(rect) = spectrum_bar_rect(
+            bar_x,
+            y + (half_h as i32),
+            bar_w,
+            bar_h,
+            false,
+            &ctx.config.visualizer.spectrum.render_style,
+            ctx.config.visualizer.spectrum.top_only_height_ratio,
+        ) {
+            canvas.fill_rect(rect)?;
+        }
+    }
+
+    if ctx.config.visualizer.peaks.enabled {
+        let peak_marker_h = ctx.config.visualizer.peaks.drop_pixels.max(1).min(half_h);
+        let peak_color = parse_hex_color(
+            &ctx.config.visualizer.peaks.color,
+            Color::RGB(255, 255, 255),
+        );
+
+        for (i, value) in upper_peaks.iter().take(count as usize).enumerate() {
+            let i = i as u32;
+            let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
+            let peak_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
+
+            if peak_h == 0 {
+                continue;
+            }
+
+            canvas.set_draw_color(if ctx.config.visualizer.peaks.use_bar_color {
+                palette_color_at(&colors.palette, i as usize, count as usize)
+            } else {
+                peak_color
+            });
+
+            let marker_y = y + (half_h as i32) - (peak_h as i32);
+            canvas.fill_rect(Rect::new(bar_x, marker_y, bar_w, peak_marker_h))?;
+        }
+
+        for (i, value) in lower_peaks.iter().take(count as usize).enumerate() {
+            let i = i as u32;
+            let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
+            let peak_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
+
+            if peak_h == 0 {
+                continue;
+            }
+
+            canvas.set_draw_color(if ctx.config.visualizer.peaks.use_bar_color {
+                palette_color_at(
+                    &colors.palette,
+                    count.saturating_sub(1).saturating_sub(i) as usize,
+                    count as usize,
+                )
+            } else {
+                peak_color
+            });
+
+            let marker_y = y + (half_h as i32) + (peak_h as i32) - (peak_marker_h as i32);
+            canvas.fill_rect(Rect::new(bar_x, marker_y, bar_w, peak_marker_h))?;
+        }
     }
 
     Ok(())
+}
+
+fn spectrum_bar_rect(
+    bar_x: i32,
+    baseline_y: i32,
+    bar_w: u32,
+    bar_h: u32,
+    extends_up: bool,
+    render_style: &str,
+    top_only_height_ratio: f32,
+) -> Option<Rect> {
+    if bar_h == 0 {
+        return None;
+    }
+
+    let top_only = render_style.eq_ignore_ascii_case("top_only");
+    let visible_h = if top_only {
+        ((bar_h as f32) * top_only_height_ratio.clamp(0.0, 1.0))
+            .ceil()
+            .max(1.0) as u32
+    } else {
+        bar_h
+    };
+
+    let rect_y = if extends_up {
+        baseline_y - (bar_h as i32)
+    } else if top_only {
+        baseline_y + (bar_h as i32) - (visible_h as i32)
+    } else {
+        baseline_y
+    };
+
+    Some(Rect::new(bar_x, rect_y, bar_w, visible_h))
 }
 
 fn draw_visualizer(
@@ -829,6 +936,8 @@ fn draw_visualizer(
     right_points: &[(f32, f32)],
     upper_bins: &[f32],
     lower_bins: &[f32],
+    upper_peaks: &[f32],
+    lower_peaks: &[f32],
     x: i32,
     y: i32,
     width: u32,
@@ -849,7 +958,18 @@ fn draw_visualizer(
             height,
         ),
         VisualizerMode::Spectrum => draw_spectrum(
-            canvas, ctx, colors, upper_bins, lower_bins, x, y, width, height, bar_gap,
+            canvas,
+            ctx,
+            colors,
+            upper_bins,
+            lower_bins,
+            upper_peaks,
+            lower_peaks,
+            x,
+            y,
+            width,
+            height,
+            bar_gap,
         ),
     }
 }
@@ -938,6 +1058,35 @@ fn update_smoothed_bins(smoothed: &mut [f32], raw: &[f32], rise: f32, fall: f32)
             };
         }
     }
+}
+
+fn update_spectrum_peaks(
+    peaks: &mut Vec<f32>,
+    current: &[f32],
+    drop_amount: f32,
+    should_drop: bool,
+) -> bool {
+    if peaks.len() != current.len() {
+        peaks.resize(current.len(), 0.0);
+    }
+
+    let mut rose = false;
+
+    if should_drop {
+        for peak in peaks.iter_mut() {
+            *peak = (*peak - drop_amount).max(0.0);
+        }
+    }
+
+    for (peak, value) in peaks.iter_mut().zip(current.iter()) {
+        let value = value.clamp(0.0, 1.0);
+        if value > *peak {
+            *peak = value;
+            rose = true;
+        }
+    }
+
+    rose
 }
 
 fn log_visualizer_debug(
@@ -1059,6 +1208,9 @@ pub fn run_display_loop(
 
     let mut smoothed_upper_bins = vec![0.0f32; ctx.config.visualizer.spectrum_bin_count];
     let mut smoothed_lower_bins = vec![0.0f32; ctx.config.visualizer.spectrum_bin_count];
+    let mut upper_peak_bins = vec![0.0f32; ctx.config.visualizer.spectrum_bin_count];
+    let mut lower_peak_bins = vec![0.0f32; ctx.config.visualizer.spectrum_bin_count];
+    let mut last_spectrum_peak_drop = Instant::now();
 
     let mut static_scene_cache: Option<StaticSceneCache<'_>> = None;
     let mut static_scene_texture = texture_creator
@@ -1151,6 +1303,34 @@ pub fn run_display_loop(
 
         update_smoothed_bins(&mut smoothed_upper_bins, &raw_upper_bins, rise, fall);
         update_smoothed_bins(&mut smoothed_lower_bins, &raw_lower_bins, rise, fall);
+
+        if ctx.config.visualizer.peaks.enabled {
+            let hold = Duration::from_millis(ctx.config.visualizer.peaks.hold_ms);
+            let should_drop = last_spectrum_peak_drop.elapsed() >= hold;
+            let peak_scale = (ctx.config.visualizer.height / 2).max(1) as f32;
+            let drop_amount = (ctx.config.visualizer.peaks.drop_pixels as f32) / peak_scale;
+
+            let upper_rose = update_spectrum_peaks(
+                &mut upper_peak_bins,
+                &smoothed_upper_bins,
+                drop_amount,
+                should_drop,
+            );
+            let lower_rose = update_spectrum_peaks(
+                &mut lower_peak_bins,
+                &smoothed_lower_bins,
+                drop_amount,
+                should_drop,
+            );
+
+            if upper_rose || lower_rose || should_drop {
+                last_spectrum_peak_drop = Instant::now();
+            }
+        } else {
+            upper_peak_bins.fill(0.0);
+            lower_peak_bins.fill(0.0);
+            last_spectrum_peak_drop = Instant::now();
+        }
 
         display_peak = if live_level > display_peak {
             live_level
@@ -1331,6 +1511,8 @@ pub fn run_display_loop(
                 &state.visualizer.frame.right_points,
                 &smoothed_upper_bins,
                 &smoothed_lower_bins,
+                &upper_peak_bins,
+                &lower_peak_bins,
                 sx(vis_x_scene),
                 sy(vis_y_scene),
                 sw(vis_w_scene),
