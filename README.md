@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.10.0 adds artwork-derived visualizer colors, broader album-art palette extraction for spectrum bars, and configurable fallback/fixed visualizer color controls.
+Version 0.11.0 adds full-height top-only spectrum rendering and optional peak hold/drop-off markers for spectrum bars.
 
 ---
 
@@ -480,15 +480,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.10.0**.
+This project is now at **0.11.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.10.0 -m "songart 0.10.0"
-git push origin v0.10.0
+git tag -a v0.11.0 -m "songart 0.11.0"
+git push origin v0.11.0
 ```
 
 ---
