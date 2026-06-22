@@ -293,7 +293,8 @@ spectrum_contrast = 1.45
 # Options: "full", "top_only"
 render_style = "full"
 
-# When render_style = "top_only", draw this portion of each active bar.
+# When render_style = "top_only", use the full analyzer height and draw this
+# visible portion of each active bar near the top edge.
 top_only_height_ratio = 0.35
 
 

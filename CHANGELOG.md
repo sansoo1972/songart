@@ -4,6 +4,29 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
+## [0.11.0] - 2026-06-22
+
+### Added
+- Spectrum analyzer `top_only` rendering mode that uses the full analyzer height for a top-edge spectrum display.
+- Configurable `top_only_height_ratio` for drawing only the active upper portion of each spectrum bar.
+- Optional per-bar spectrum peak hold/drop-off markers.
+- Configurable peak marker behavior:
+  - `enabled`
+  - `hold_ms`
+  - `drop_pixels`
+  - `color`
+  - `use_bar_color`
+
+### Changed
+- Spectrum rendering now supports both the existing mirrored `full` mode and the new full-height `top_only` mode.
+- Peak marker rendering works with artwork-derived palette colors or a fixed configured color.
+
+### Fixed
+- [#15](https://github.com/sansoo1972/songart/issues/15) Spectrum bars can now render as a top-only display instead of full mirrored bars.
+- [#16](https://github.com/sansoo1972/songart/issues/16) Spectrum bars now support peak hold/drop-off markers.
+
+---
+
 ## [0.10.0] - 2026-06-15
 
 ### Added

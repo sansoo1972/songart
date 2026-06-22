@@ -369,7 +369,7 @@ max_gain = 8.0
 
 [visualizer.spectrum]
 render_style = "full"        # full, top_only
-top_only_height_ratio = 0.35
+top_only_height_ratio = 0.35 # visible portion of each active bar in top_only mode
 
 [visualizer.peaks]
 enabled = false
@@ -399,7 +399,7 @@ Current implementation:
 - Log-spaced frequency bins
 - Spectrum smoothing
 - Spectrum attack tuning
-- Full or top-only spectrum bar rendering
+- Mirrored full-spectrum rendering or full-height top-only spectrum rendering
 - Optional peak hold/drop-off markers
 - Noise floor and contrast controls
 - Shared rolling audio analysis buffer
