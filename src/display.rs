@@ -1,4 +1,4 @@
-use crate::audio::{SharedAudioBuffer, build_oscilloscope_points, compute_rms};
+use crate::audio::{build_oscilloscope_points, compute_rms, SharedAudioBuffer};
 use crate::config::DisplayPreset;
 use crate::fft::compute_spectrum_bins;
 use crate::logging::{log_debug, log_error, log_info};
@@ -16,8 +16,8 @@ use sdl2::video::WindowContext;
 
 use std::path::Path;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -201,7 +201,11 @@ fn rgb_saturation(r: u8, g: u8, b: u8) -> f32 {
     let max = r.max(g).max(b) as f32;
     let min = r.min(g).min(b) as f32;
 
-    if max <= 0.0 { 0.0 } else { (max - min) / max }
+    if max <= 0.0 {
+        0.0
+    } else {
+        (max - min) / max
+    }
 }
 
 fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
@@ -224,7 +228,11 @@ fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
         60.0 * (((rf - gf) / delta) + 4.0)
     };
 
-    if hue < 0.0 { hue + 360.0 } else { hue }
+    if hue < 0.0 {
+        hue + 360.0
+    } else {
+        hue
+    }
 }
 
 fn hue_distance(a: f32, b: f32) -> f32 {
@@ -792,17 +800,25 @@ fn draw_spectrum(
         .spectrum
         .render_style
         .eq_ignore_ascii_case("top_only");
+    let upper_h = if top_only { height } else { half_h };
+    let baseline_y = if top_only {
+        y + (height as i32)
+    } else {
+        y + (half_h as i32)
+    };
 
-    canvas.set_draw_color(Color::RGB(40, 40, 40));
-    canvas.draw_line(
-        Point::new(x, y + (half_h as i32)),
-        Point::new(x + (width as i32), y + (half_h as i32)),
-    )?;
+    if !top_only {
+        canvas.set_draw_color(Color::RGB(40, 40, 40));
+        canvas.draw_line(
+            Point::new(x, baseline_y),
+            Point::new(x + (width as i32), baseline_y),
+        )?;
+    }
 
     for (i, value) in upper_bins.iter().enumerate() {
         let i = i as u32;
         let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
-        let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
+        let bar_h = ((*value).clamp(0.0, 1.0) * (upper_h as f32)) as u32;
 
         canvas.set_draw_color(palette_color_at(
             &colors.palette,
@@ -812,7 +828,7 @@ fn draw_spectrum(
 
         if let Some(rect) = spectrum_bar_rect(
             bar_x,
-            y + (half_h as i32),
+            baseline_y,
             bar_w,
             bar_h,
             true,
@@ -859,7 +875,7 @@ fn draw_spectrum(
         for (i, value) in upper_peaks.iter().take(count as usize).enumerate() {
             let i = i as u32;
             let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
-            let peak_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
+            let peak_h = ((*value).clamp(0.0, 1.0) * (upper_h as f32)) as u32;
 
             if peak_h == 0 {
                 continue;
@@ -871,7 +887,7 @@ fn draw_spectrum(
                 peak_color
             });
 
-            let marker_y = y + (half_h as i32) - (peak_h as i32);
+            let marker_y = baseline_y - (peak_h as i32);
             canvas.fill_rect(Rect::new(bar_x, marker_y, bar_w, peak_marker_h))?;
         }
 
@@ -1317,7 +1333,17 @@ pub fn run_display_loop(
         if ctx.config.visualizer.peaks.enabled {
             let hold = Duration::from_millis(ctx.config.visualizer.peaks.hold_ms);
             let should_drop = last_spectrum_peak_drop.elapsed() >= hold;
-            let peak_scale = (ctx.config.visualizer.height / 2).max(1) as f32;
+            let top_only = ctx
+                .config
+                .visualizer
+                .spectrum
+                .render_style
+                .eq_ignore_ascii_case("top_only");
+            let peak_scale = if top_only {
+                ctx.config.visualizer.height.max(1)
+            } else {
+                (ctx.config.visualizer.height / 2).max(1)
+            } as f32;
             let drop_amount = (ctx.config.visualizer.peaks.drop_pixels as f32) / peak_scale;
 
             let upper_rose = update_spectrum_peaks(
