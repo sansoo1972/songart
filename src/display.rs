@@ -786,6 +786,12 @@ fn draw_spectrum(
 
     let total_gap = bar_gap.saturating_mul(count.saturating_sub(1));
     let bar_w = (width.saturating_sub(total_gap) / count).max(1);
+    let top_only = ctx
+        .config
+        .visualizer
+        .spectrum
+        .render_style
+        .eq_ignore_ascii_case("top_only");
 
     canvas.set_draw_color(Color::RGB(40, 40, 40));
     canvas.draw_line(
@@ -817,27 +823,29 @@ fn draw_spectrum(
         }
     }
 
-    for (i, value) in lower_bins.iter().enumerate() {
-        let i = i as u32;
-        let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
-        let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
+    if !top_only {
+        for (i, value) in lower_bins.iter().enumerate() {
+            let i = i as u32;
+            let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
+            let bar_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
 
-        canvas.set_draw_color(palette_color_at(
-            &colors.palette,
-            count.saturating_sub(1).saturating_sub(i) as usize,
-            count as usize,
-        ));
+            canvas.set_draw_color(palette_color_at(
+                &colors.palette,
+                count.saturating_sub(1).saturating_sub(i) as usize,
+                count as usize,
+            ));
 
-        if let Some(rect) = spectrum_bar_rect(
-            bar_x,
-            y + (half_h as i32),
-            bar_w,
-            bar_h,
-            false,
-            &ctx.config.visualizer.spectrum.render_style,
-            ctx.config.visualizer.spectrum.top_only_height_ratio,
-        ) {
-            canvas.fill_rect(rect)?;
+            if let Some(rect) = spectrum_bar_rect(
+                bar_x,
+                y + (half_h as i32),
+                bar_w,
+                bar_h,
+                false,
+                &ctx.config.visualizer.spectrum.render_style,
+                ctx.config.visualizer.spectrum.top_only_height_ratio,
+            ) {
+                canvas.fill_rect(rect)?;
+            }
         }
     }
 
@@ -867,27 +875,29 @@ fn draw_spectrum(
             canvas.fill_rect(Rect::new(bar_x, marker_y, bar_w, peak_marker_h))?;
         }
 
-        for (i, value) in lower_peaks.iter().take(count as usize).enumerate() {
-            let i = i as u32;
-            let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
-            let peak_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
+        if !top_only {
+            for (i, value) in lower_peaks.iter().take(count as usize).enumerate() {
+                let i = i as u32;
+                let bar_x = x + ((i * (bar_w + bar_gap)) as i32);
+                let peak_h = ((*value).clamp(0.0, 1.0) * (half_h as f32)) as u32;
 
-            if peak_h == 0 {
-                continue;
+                if peak_h == 0 {
+                    continue;
+                }
+
+                canvas.set_draw_color(if ctx.config.visualizer.peaks.use_bar_color {
+                    palette_color_at(
+                        &colors.palette,
+                        count.saturating_sub(1).saturating_sub(i) as usize,
+                        count as usize,
+                    )
+                } else {
+                    peak_color
+                });
+
+                let marker_y = y + (half_h as i32) + (peak_h as i32) - (peak_marker_h as i32);
+                canvas.fill_rect(Rect::new(bar_x, marker_y, bar_w, peak_marker_h))?;
             }
-
-            canvas.set_draw_color(if ctx.config.visualizer.peaks.use_bar_color {
-                palette_color_at(
-                    &colors.palette,
-                    count.saturating_sub(1).saturating_sub(i) as usize,
-                    count as usize,
-                )
-            } else {
-                peak_color
-            });
-
-            let marker_y = y + (half_h as i32) + (peak_h as i32) - (peak_marker_h as i32);
-            canvas.fill_rect(Rect::new(bar_x, marker_y, bar_w, peak_marker_h))?;
         }
     }
 
