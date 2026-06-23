@@ -4,7 +4,7 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
-## [Unreleased]
+## [0.12.1] - 2026-06-23
 
 ### Added
 - [#22](https://github.com/sansoo1972/songart/issues/22) Oscilloscope mode now renders as a polished scope view with a graticule grid, clipped trace area, layered trace glow, and higher-density default sampling.
