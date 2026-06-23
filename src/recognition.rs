@@ -65,6 +65,33 @@ fn relation_artist_name(relation: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn recording_matches(recording: &Value, title: &str, artist: &str) -> bool {
+    let title_lower = title.trim().to_ascii_lowercase();
+    let artist_lower = artist.trim().to_ascii_lowercase();
+
+    let recording_title = recording["title"].as_str().unwrap_or("").to_ascii_lowercase();
+    let title_matches = title_lower.is_empty()
+        || recording_title == title_lower
+        || recording_title.contains(&title_lower)
+        || title_lower.contains(&recording_title);
+
+    let artist_matches = artist_lower.is_empty()
+        || recording["artist-credit"]
+            .as_array()
+            .map(|credits| {
+                credits.iter().any(|credit| {
+                    credit["artist"]["name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_ascii_lowercase()
+                        .contains(&artist_lower)
+                })
+            })
+            .unwrap_or(true);
+
+    title_matches && artist_matches
+}
+
 fn collect_composer_names_from_relations(relations: &Value, out: &mut BTreeSet<String>) {
     let Some(relations) = relations.as_array() else {
         return;
@@ -85,32 +112,9 @@ fn collect_composer_names_from_relations(relations: &Value, out: &mut BTreeSet<S
 fn composer_from_musicbrainz_response(json: &Value, title: &str, artist: &str) -> Option<String> {
     let mut names = BTreeSet::new();
 
-    let title_lower = title.trim().to_ascii_lowercase();
-    let artist_lower = artist.trim().to_ascii_lowercase();
-
     if let Some(recordings) = json["recordings"].as_array() {
         for recording in recordings {
-            let recording_title = recording["title"].as_str().unwrap_or("").to_ascii_lowercase();
-            let title_matches = title_lower.is_empty()
-                || recording_title == title_lower
-                || recording_title.contains(&title_lower)
-                || title_lower.contains(&recording_title);
-
-            let artist_matches = artist_lower.is_empty()
-                || recording["artist-credit"]
-                    .as_array()
-                    .map(|credits| {
-                        credits.iter().any(|credit| {
-                            credit["artist"]["name"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_ascii_lowercase()
-                                .contains(&artist_lower)
-                        })
-                    })
-                    .unwrap_or(true);
-
-            if title_matches && artist_matches {
+            if recording_matches(recording, title, artist) {
                 collect_composer_names_from_relations(&recording["relations"], &mut names);
             }
         }
@@ -131,8 +135,63 @@ fn composer_from_musicbrainz_response(json: &Value, title: &str, artist: &str) -
     }
 }
 
-fn lookup_composer_from_musicbrainz(
+fn musicbrainz_client(ctx: &AppContext) -> Option<reqwest::blocking::Client> {
+    match reqwest::blocking::Client
+        ::builder()
+        .user_agent(MUSICBRAINZ_USER_AGENT)
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(client) => Some(client),
+        Err(e) => {
+            log_debug(ctx, &format!("MusicBrainz client build failed: {e}"));
+            None
+        }
+    }
+}
+
+fn fetch_musicbrainz_json(
     ctx: &AppContext,
+    client: &reqwest::blocking::Client,
+    url: &str,
+    query: &[(&str, &str)]
+) -> Option<Value> {
+    let response = match client.get(url).query(query).send() {
+        Ok(response) => response,
+        Err(e) => {
+            log_debug(ctx, &format!("MusicBrainz request failed for {url}: {e}"));
+            return None;
+        }
+    };
+
+    if !response.status().is_success() {
+        log_debug(
+            ctx,
+            &format!("MusicBrainz request returned HTTP {} for {url}", response.status())
+        );
+        return None;
+    }
+
+    let body = match response.text() {
+        Ok(body) => body,
+        Err(e) => {
+            log_debug(ctx, &format!("MusicBrainz response read failed for {url}: {e}"));
+            return None;
+        }
+    };
+
+    match serde_json::from_str(&body) {
+        Ok(json) => Some(json),
+        Err(e) => {
+            log_debug(ctx, &format!("MusicBrainz JSON parse failed for {url}: {e}"));
+            None
+        }
+    }
+}
+
+fn lookup_composer_by_isrc(
+    ctx: &AppContext,
+    client: &reqwest::blocking::Client,
     isrc: &str,
     title: &str,
     artist: &str
@@ -142,55 +201,139 @@ fn lookup_composer_from_musicbrainz(
         return None;
     }
 
-    let client = reqwest::blocking::Client
-        ::builder()
-        .user_agent(MUSICBRAINZ_USER_AGENT)
-        .timeout(Duration::from_secs(5))
-        .build()
-        .ok()?;
-
     let url = format!("https://musicbrainz.org/ws/2/isrc/{isrc}");
-    let response = match
-        client
-            .get(url)
-            .query(&[
-                ("inc", "artist-credits+work-rels+artist-rels+work-level-rels"),
-                ("fmt", "json"),
-            ])
-            .send()
-    {
-        Ok(response) => response,
-        Err(e) => {
-            log_debug(ctx, &format!("MusicBrainz composer lookup failed: {e}"));
-            return None;
-        }
+    let json = fetch_musicbrainz_json(
+        ctx,
+        client,
+        &url,
+        &[
+            ("inc", "artist-credits+work-rels+artist-rels+work-level-rels"),
+            ("fmt", "json"),
+        ],
+    )?;
+
+    composer_from_musicbrainz_response(&json, title, artist)
+}
+
+fn escape_musicbrainz_search_value(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn musicbrainz_recording_search_query(title: &str, artist: &str) -> String {
+    let title = escape_musicbrainz_search_value(title);
+    let artist = escape_musicbrainz_search_value(artist);
+
+    if artist.trim().is_empty() || is_unknown(&artist) {
+        format!("recording:\"{title}\"")
+    } else {
+        format!("recording:\"{title}\" AND artist:\"{artist}\"")
+    }
+}
+
+fn musicbrainz_recording_ids(json: &Value, title: &str, artist: &str) -> Vec<String> {
+    let Some(recordings) = json["recordings"].as_array() else {
+        return Vec::new();
     };
 
-    if !response.status().is_success() {
-        log_debug(
-            ctx,
-            &format!("MusicBrainz composer lookup returned HTTP {}", response.status())
-        );
+    let mut ids = Vec::new();
+
+    for recording in recordings {
+        if recording_matches(recording, title, artist) {
+            if let Some(id) = recording["id"].as_str() {
+                ids.push(id.to_string());
+            }
+        }
+    }
+
+    if ids.is_empty() {
+        for recording in recordings {
+            if let Some(id) = recording["id"].as_str() {
+                ids.push(id.to_string());
+            }
+        }
+    }
+
+    ids.truncate(3);
+    ids
+}
+
+fn lookup_composer_by_recording_search(
+    ctx: &AppContext,
+    client: &reqwest::blocking::Client,
+    title: &str,
+    artist: &str
+) -> Option<String> {
+    if title.trim().is_empty() || is_unknown(title) {
         return None;
     }
 
-    let body = match response.text() {
-        Ok(body) => body,
-        Err(e) => {
-            log_debug(ctx, &format!("MusicBrainz composer response read failed: {e}"));
-            return None;
-        }
-    };
+    let query = musicbrainz_recording_search_query(title, artist);
+    let search = fetch_musicbrainz_json(
+        ctx,
+        client,
+        "https://musicbrainz.org/ws/2/recording",
+        &[("query", &query), ("limit", "5"), ("fmt", "json")],
+    )?;
 
-    let json: Value = match serde_json::from_str(&body) {
-        Ok(json) => json,
-        Err(e) => {
-            log_debug(ctx, &format!("MusicBrainz composer JSON parse failed: {e}"));
-            return None;
-        }
-    };
+    let recording_ids = musicbrainz_recording_ids(&search, title, artist);
+    if recording_ids.is_empty() {
+        log_debug(ctx, "MusicBrainz recording search returned no candidates.");
+        return None;
+    }
 
-    composer_from_musicbrainz_response(&json, title, artist)
+    for (i, recording_id) in recording_ids.iter().enumerate() {
+        if i > 0 {
+            thread::sleep(Duration::from_secs(1));
+        }
+
+        let url = format!("https://musicbrainz.org/ws/2/recording/{recording_id}");
+        let Some(recording) = fetch_musicbrainz_json(
+            ctx,
+            client,
+            &url,
+            &[
+                ("inc", "artist-credits+work-rels+artist-rels+work-level-rels"),
+                ("fmt", "json"),
+            ],
+        ) else {
+            continue;
+        };
+
+        if let Some(composer) = composer_from_musicbrainz_response(&recording, title, artist) {
+            return Some(composer);
+        }
+    }
+
+    None
+}
+
+fn lookup_composer_from_musicbrainz(
+    ctx: &AppContext,
+    isrc: &str,
+    title: &str,
+    artist: &str
+) -> Option<String> {
+    let client = musicbrainz_client(ctx)?;
+
+    if !is_unknown(isrc) {
+        if let Some(composer) = lookup_composer_by_isrc(ctx, &client, isrc, title, artist) {
+            log_debug(ctx, "Composer resolved through MusicBrainz ISRC lookup.");
+            return Some(composer);
+        }
+
+        log_debug(ctx, "MusicBrainz ISRC lookup did not return composer metadata.");
+        thread::sleep(Duration::from_secs(1));
+    } else {
+        log_debug(ctx, "SongRec did not provide an ISRC for MusicBrainz composer lookup.");
+    }
+
+    let composer = lookup_composer_by_recording_search(ctx, &client, title, artist);
+    if composer.is_some() {
+        log_debug(ctx, "Composer resolved through MusicBrainz recording search.");
+    } else {
+        log_debug(ctx, "MusicBrainz recording search did not return composer metadata.");
+    }
+    composer
 }
 
 fn resolve_composer(ctx: &AppContext, json: &Value, title: &str, artist: &str) -> String {
@@ -697,6 +840,41 @@ mod tests {
         assert_eq!(
             composer_from_musicbrainz_response(&json, "Song Title", "Song Artist"),
             Some("Right Composer".to_string())
+        );
+    }
+
+    #[test]
+    fn builds_musicbrainz_recording_search_query() {
+        assert_eq!(
+            musicbrainz_recording_search_query("Song \"Title\"", "Song Artist"),
+            "recording:\"Song \\\"Title\\\"\" AND artist:\"Song Artist\""
+        );
+    }
+
+    #[test]
+    fn prefers_matching_musicbrainz_recording_ids() {
+        let json = json!({
+            "recordings": [
+                {
+                    "id": "fallback-id",
+                    "title": "Other Song",
+                    "artist-credit": [
+                        { "artist": { "name": "Different Artist" } }
+                    ]
+                },
+                {
+                    "id": "matching-id",
+                    "title": "Song Title",
+                    "artist-credit": [
+                        { "artist": { "name": "Song Artist" } }
+                    ]
+                }
+            ]
+        });
+
+        assert_eq!(
+            musicbrainz_recording_ids(&json, "Song Title", "Song Artist"),
+            vec!["matching-id".to_string()]
         );
     }
 }
