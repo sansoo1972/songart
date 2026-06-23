@@ -285,7 +285,7 @@ fn lookup_composer_by_isrc(
         client,
         &url,
         &[
-            ("inc", "artist-credits+work-rels+artist-rels+work-level-rels"),
+            ("inc", "artist-credits+work-rels+artist-rels"),
             ("fmt", "json"),
         ],
     )?;
@@ -686,6 +686,7 @@ pub fn run_recognition_loop(
 ) {
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
+    let mut last_composer = UNKNOWN.to_string();
 
     log_info(&ctx, &format!("Log file: {}", ctx.config.logging.file));
     log_info(&ctx, "Recognition loop started.");
@@ -767,7 +768,6 @@ pub fn run_recognition_loop(
         let artist = json["track"]["subtitle"].as_str().unwrap_or("Unknown");
         let album = extract_album(&json);
         let track_number = extract_track_number(&json);
-        let composer = resolve_composer(&ctx, &json, title, artist);
         let released = extract_released(&json);
         let genre = extract_genre(&json);
         let label = extract_label(&json);
@@ -783,10 +783,26 @@ pub fn run_recognition_loop(
         }
 
         if current == last_track && preview_url == last_artwork_url {
+            if is_unknown(&last_composer) {
+                let composer = resolve_composer(&ctx, &json, title, artist);
+                if !is_unknown(&composer) {
+                    {
+                        let mut state = shared_state.lock().unwrap();
+                        state.composer = composer.clone();
+                        state.version = state.version.wrapping_add(1);
+                    }
+
+                    last_composer = composer;
+                    log_info(&ctx, &format!("Updated composer metadata for same track: {current}"));
+                }
+            }
+
             log_info(&ctx, &format!("Same track and artwork: {current}"));
             thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
             continue;
         }
+
+        let composer = resolve_composer(&ctx, &json, title, artist);
 
         log_blank(&ctx);
         log_info(&ctx, "========================================");
@@ -816,7 +832,7 @@ pub fn run_recognition_loop(
                     state.artist = artist.to_string();
                     state.album = album;
                     state.track_number = track_number;
-                    state.composer = composer;
+                    state.composer = composer.clone();
                     state.released = released;
                     state.genre = genre;
                     state.label = label;
@@ -834,6 +850,7 @@ pub fn run_recognition_loop(
 
                 last_track = current;
                 last_artwork_url = final_url;
+                last_composer = composer;
             }
             Err(e) => {
                 log_error(&ctx, &format!("Failed to download artwork: {e}"));
