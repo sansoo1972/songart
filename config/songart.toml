@@ -222,7 +222,7 @@ peak_hold = false
 window_ms = 120
 
 # Number of points used by oscilloscope-style modes.
-point_count = 96
+point_count = 180
 
 # General visualizer gain controls.
 gain = 1.0
@@ -232,7 +232,7 @@ y_scale = 1.0
 # Oscilloscope channel placement.
 left_y_offset = 0.25
 right_y_offset = 0.75
-visible_sample_count = 160
+visible_sample_count = 384
 
 # Interval for visualizer debug logging.
 debug_log_interval_ms = 10000

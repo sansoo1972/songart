@@ -65,6 +65,15 @@ fn parse_hex_color(value: &str, fallback: Color) -> Color {
     }
 }
 
+fn dim_color(color: Color, factor: f32) -> Color {
+    let factor = factor.clamp(0.0, 1.0);
+    Color::RGB(
+        ((color.r as f32) * factor) as u8,
+        ((color.g as f32) * factor) as u8,
+        ((color.b as f32) * factor) as u8,
+    )
+}
+
 fn canvas_background_color(ctx: &AppContext) -> Color {
     parse_hex_color(&ctx.config.display.colors.background, Color::RGB(0, 0, 0))
 }
@@ -891,6 +900,80 @@ fn draw_polyline(
     Ok(())
 }
 
+fn draw_polyline_thick(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    points: &[(f32, f32)],
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    color: Color,
+    thickness: i32,
+) -> Result<(), String> {
+    if thickness <= 1 {
+        return draw_polyline(canvas, points, x, y, width, height, color);
+    }
+
+    canvas.set_draw_color(color);
+
+    let radius = thickness / 2;
+    for pair in points.windows(2) {
+        let (x1n, y1n) = pair[0];
+        let (x2n, y2n) = pair[1];
+
+        let x1 = x + ((x1n.clamp(0.0, 1.0) * (width as f32)) as i32);
+        let y1 = y + ((y1n.clamp(0.0, 1.0) * (height as f32)) as i32);
+        let x2 = x + ((x2n.clamp(0.0, 1.0) * (width as f32)) as i32);
+        let y2 = y + ((y2n.clamp(0.0, 1.0) * (height as f32)) as i32);
+
+        for offset_x in -radius..=radius {
+            for offset_y in -radius..=radius {
+                if offset_x.abs() + offset_y.abs() <= radius {
+                    canvas.draw_line(
+                        Point::new(x1 + offset_x, y1 + offset_y),
+                        Point::new(x2 + offset_x, y2 + offset_y),
+                    )?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn draw_scope_graticule(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    let w = width as i32;
+    let h = height as i32;
+
+    canvas.set_draw_color(Color::RGB(18, 36, 30));
+    for division in 1..10 {
+        let line_x = x + (w * division) / 10;
+        canvas.draw_line(Point::new(line_x, y), Point::new(line_x, y + h))?;
+    }
+
+    for division in 1..8 {
+        let line_y = y + (h * division) / 8;
+        canvas.draw_line(Point::new(x, line_y), Point::new(x + w, line_y))?;
+    }
+
+    canvas.set_draw_color(Color::RGB(38, 78, 62));
+    for y_ratio in [0.25_f32, 0.75_f32] {
+        let line_y = y + ((height as f32) * y_ratio) as i32;
+        canvas.draw_line(Point::new(x, line_y), Point::new(x + w, line_y))?;
+    }
+
+    canvas.set_draw_color(Color::RGB(42, 70, 60));
+    canvas.draw_rect(Rect::new(x, y, width, height))?;
+
+    Ok(())
+}
+
 fn draw_oscilloscope(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     ctx: &AppContext,
@@ -905,19 +988,63 @@ fn draw_oscilloscope(
     canvas.set_draw_color(visualizer_background_color(ctx));
     canvas.fill_rect(Rect::new(x, y, width, height))?;
 
-    canvas.set_draw_color(Color::RGB(40, 40, 40));
-    canvas.draw_line(
-        Point::new(x, y + (height as i32) / 4),
-        Point::new(x + (width as i32), y + (height as i32) / 4),
-    )?;
-    canvas.draw_line(
-        Point::new(x, y + ((height as i32) * 3) / 4),
-        Point::new(x + (width as i32), y + ((height as i32) * 3) / 4),
-    )?;
+    let inset = 10_i32;
+    let scope_x = x + inset;
+    let scope_y = y + inset;
+    let scope_w = width.saturating_sub((inset as u32) * 2).max(1);
+    let scope_h = height.saturating_sub((inset as u32) * 2).max(1);
 
-    draw_polyline(canvas, left_points, x, y, width, height, colors.upper)?;
+    draw_scope_graticule(canvas, scope_x, scope_y, scope_w, scope_h)?;
 
-    draw_polyline(canvas, right_points, x, y, width, height, colors.lower)?;
+    let clip = Rect::new(scope_x, scope_y, scope_w, scope_h);
+    canvas.set_clip_rect(Some(clip));
+
+    let trace_result = (|| -> Result<(), String> {
+        draw_polyline_thick(
+            canvas,
+            left_points,
+            scope_x,
+            scope_y,
+            scope_w,
+            scope_h,
+            dim_color(colors.upper, 0.38),
+            5,
+        )?;
+        draw_polyline_thick(
+            canvas,
+            right_points,
+            scope_x,
+            scope_y,
+            scope_w,
+            scope_h,
+            dim_color(colors.lower, 0.38),
+            5,
+        )?;
+        draw_polyline_thick(
+            canvas,
+            left_points,
+            scope_x,
+            scope_y,
+            scope_w,
+            scope_h,
+            colors.upper,
+            2,
+        )?;
+        draw_polyline_thick(
+            canvas,
+            right_points,
+            scope_x,
+            scope_y,
+            scope_w,
+            scope_h,
+            colors.lower,
+            2,
+        )?;
+        Ok(())
+    })();
+
+    canvas.set_clip_rect(None);
+    trace_result?;
 
     Ok(())
 }

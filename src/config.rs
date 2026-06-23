@@ -421,7 +421,7 @@ fn default_window_ms() -> usize {
 }
 
 fn default_point_count() -> usize {
-    96
+    180
 }
 
 fn default_gain() -> f32 {
@@ -441,7 +441,7 @@ fn default_right_y_offset() -> f32 {
 }
 
 fn default_visible_sample_count() -> usize {
-    160
+    384
 }
 
 fn default_max_gain() -> f32 {
