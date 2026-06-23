@@ -1,4 +1,4 @@
-use crate::audio::{SharedAudioBuffer, build_oscilloscope_points, compute_rms};
+use crate::audio::{build_oscilloscope_points, compute_rms, SharedAudioBuffer};
 use crate::config::DisplayPreset;
 use crate::fft::compute_spectrum_bins;
 use crate::logging::{log_debug, log_error, log_info};
@@ -16,8 +16,8 @@ use sdl2::video::WindowContext;
 
 use std::path::Path;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -187,7 +187,11 @@ fn rgb_saturation(r: u8, g: u8, b: u8) -> f32 {
     let max = r.max(g).max(b) as f32;
     let min = r.min(g).min(b) as f32;
 
-    if max <= 0.0 { 0.0 } else { (max - min) / max }
+    if max <= 0.0 {
+        0.0
+    } else {
+        (max - min) / max
+    }
 }
 
 fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
@@ -210,7 +214,11 @@ fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
         60.0 * (((rf - gf) / delta) + 4.0)
     };
 
-    if hue < 0.0 { hue + 360.0 } else { hue }
+    if hue < 0.0 {
+        hue + 360.0
+    } else {
+        hue
+    }
 }
 
 fn hue_distance(a: f32, b: f32) -> f32 {
@@ -583,28 +591,26 @@ impl<'a> CachedText<'a> {
         })
     }
 
-    fn scroll_offset(&self, elapsed: Duration) -> u32 {
+    fn scroll_offset(&self, elapsed: Duration) -> i32 {
         const START_PAUSE_SECS: f32 = 5.0;
-        const END_PAUSE_SECS: f32 = 2.0;
         const SCROLL_PIXELS_PER_SEC: f32 = 55.0;
+        const LOOP_GAP_PIXELS: u32 = 28;
 
         if self.rect.width() <= self.viewport_width {
             return 0;
         }
 
-        let overflow = self.rect.width() - self.viewport_width;
-        let scroll_secs = (overflow as f32) / SCROLL_PIXELS_PER_SEC;
-        let cycle_secs = START_PAUSE_SECS + scroll_secs + END_PAUSE_SECS;
+        let loop_distance = self.rect.width() + LOOP_GAP_PIXELS;
+        let scroll_secs = (loop_distance as f32) / SCROLL_PIXELS_PER_SEC;
+        let cycle_secs = START_PAUSE_SECS + scroll_secs;
         let cycle_pos = elapsed.as_secs_f32() % cycle_secs;
 
         if cycle_pos < START_PAUSE_SECS {
             0
-        } else if cycle_pos >= START_PAUSE_SECS + scroll_secs {
-            overflow
         } else {
             ((cycle_pos - START_PAUSE_SECS) * SCROLL_PIXELS_PER_SEC)
                 .round()
-                .clamp(0.0, overflow as f32) as u32
+                .clamp(0.0, loop_distance as f32) as i32
         }
     }
 
@@ -616,32 +622,45 @@ impl<'a> CachedText<'a> {
         scale: f32,
         elapsed: Duration,
     ) -> Result<(), String> {
-        let src_x = self.scroll_offset(elapsed);
-        let visible_w = self
-            .viewport_width
-            .min(self.rect.width().saturating_sub(src_x))
-            .max(1);
+        const LOOP_GAP_PIXELS: i32 = 28;
 
-        let src = Rect::new(src_x as i32, 0, visible_w, self.rect.height());
-        let dst = Rect::new(
-            offset_x + (((self.rect.x()) as f32 * scale) as i32),
-            offset_y + (((self.rect.y()) as f32 * scale) as i32),
-            ((visible_w as f32) * scale).max(1.0) as u32,
-            ((self.rect.height() as f32) * scale).max(1.0) as u32,
-        );
+        let scroll_x = self.scroll_offset(elapsed);
+        let base_x = offset_x + (((self.rect.x() - scroll_x) as f32 * scale) as i32);
+        let base_y = offset_y + (((self.rect.y()) as f32 * scale) as i32);
+        let texture_w = ((self.rect.width() as f32) * scale).max(1.0) as u32;
+        let texture_h = ((self.rect.height() as f32) * scale).max(1.0) as u32;
+        let viewport_x = offset_x + (((self.rect.x()) as f32 * scale) as i32);
 
         let clip = Rect::new(
-            dst.x(),
-            dst.y(),
+            viewport_x,
+            base_y,
             ((self.viewport_width as f32) * scale).max(1.0) as u32,
-            dst.height(),
+            texture_h,
         );
 
         canvas.set_clip_rect(Some(clip));
-        let result = canvas.copy(&self.texture, src, dst);
+        let result = canvas.copy(
+            &self.texture,
+            None,
+            Rect::new(base_x, base_y, texture_w, texture_h),
+        );
+
+        let second_result = if result.is_ok() && self.rect.width() > self.viewport_width {
+            let second_x =
+                base_x + (((self.rect.width() as i32 + LOOP_GAP_PIXELS) as f32 * scale) as i32);
+            canvas.copy(
+                &self.texture,
+                None,
+                Rect::new(second_x, base_y, texture_w, texture_h),
+            )
+        } else {
+            Ok(())
+        };
+
         canvas.set_clip_rect(None);
 
         result?;
+        second_result?;
         Ok(())
     }
 }
