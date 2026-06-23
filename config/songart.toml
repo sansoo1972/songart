@@ -210,7 +210,7 @@ mode = "spectrum"
 height = 300
 padding = 16
 
-# Peak hold is more useful for VU/oscilloscope modes.
+# Peak hold keeps the analog VU peak lamp/needle emphasis visible longer.
 peak_hold = false
 
 

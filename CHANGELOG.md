@@ -4,6 +4,13 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
+## [Unreleased]
+
+### Added
+- [#23](https://github.com/sansoo1972/songart/issues/23) `analog_vu` mode now renders a realistic dual analog VU meter with amber circular gauges, black bezels, numbered scale markings, red zones, peak lamps, visible pivot hardware, glass highlights, and smoothed needles.
+
+---
+
 ## [0.12.1] - 2026-06-23
 
 ### Added
