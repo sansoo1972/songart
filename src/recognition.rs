@@ -3,11 +3,15 @@ use crate::logging::{ log_blank, log_debug, log_error, log_info };
 use crate::state::{ AppContext, SongState };
 
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::fs;
 use std::process::Command;
 use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
 use std::time::Duration;
+
+const UNKNOWN: &str = "Unknown";
+const MUSICBRAINZ_USER_AGENT: &str = "songart/0.11.1 (https://github.com/sansoo1972/songart)";
 
 /// Looks up a metadata value by title in SongRec's nested JSON sections.
 fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
@@ -43,9 +47,521 @@ fn extract_released(json: &Value) -> String {
 
 fn extract_composer(json: &Value) -> String {
     metadata_value(json, "Composer")
+        .or_else(|| metadata_value(json, "Composers"))
+        .or_else(|| metadata_value(json, "Songwriter"))
+        .or_else(|| metadata_value(json, "Songwriters"))
         .or_else(|| metadata_value(json, "Writers"))
         .or_else(|| metadata_value(json, "Writer"))
-        .unwrap_or_else(|| "Unknown".to_string())
+        .or_else(|| metadata_value(json, "Written By"))
+        .or_else(|| metadata_value(json, "Written by"))
+        .or_else(|| metadata_value(json, "Composed By"))
+        .or_else(|| metadata_value(json, "Composed by"))
+        .or_else(|| metadata_value(json, "Music By"))
+        .or_else(|| metadata_value(json, "Music by"))
+        .unwrap_or_else(|| UNKNOWN.to_string())
+}
+
+fn is_unknown(value: &str) -> bool {
+    value.trim().is_empty() || value.eq_ignore_ascii_case(UNKNOWN)
+}
+
+fn relation_artist_name(relation: &Value) -> Option<String> {
+    relation["artist"]["name"]
+        .as_str()
+        .or_else(|| relation["artist"]["sort-name"].as_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_match_text(value: &str) -> String {
+    value
+        .trim()
+        .replace(['’', '‘', '`'], "'")
+        .replace(['“', '”'], "\"")
+        .to_ascii_lowercase()
+}
+
+fn metadata_titles(json: &Value) -> Vec<String> {
+    let Some(sections) = json["track"]["sections"].as_array() else {
+        return Vec::new();
+    };
+
+    let mut titles = BTreeSet::new();
+    for section in sections {
+        let Some(metadata) = section["metadata"].as_array() else {
+            continue;
+        };
+
+        for item in metadata {
+            if let Some(title) = item["title"].as_str() {
+                let title = title.trim();
+                if !title.is_empty() {
+                    titles.insert(title.to_string());
+                }
+            }
+        }
+    }
+
+    titles.into_iter().collect()
+}
+
+fn artist_search_terms(artist: &str) -> Vec<String> {
+    let separators = [
+        " feat. ",
+        " feat ",
+        " featuring ",
+        " ft. ",
+        " ft ",
+        " with ",
+        " x ",
+        " X ",
+        " & ",
+        ",",
+    ];
+
+    let mut terms = Vec::new();
+    let artist = artist.trim();
+
+    if !artist.is_empty() && !is_unknown(artist) {
+        terms.push(artist.to_string());
+
+        let mut primary = artist;
+        for separator in separators {
+            if let Some((left, _)) = primary.split_once(separator) {
+                primary = left.trim();
+            }
+        }
+
+        if !primary.is_empty() && primary != artist {
+            terms.push(primary.to_string());
+        }
+    }
+
+    terms
+}
+
+fn recording_matches(recording: &Value, title: &str, artist: &str) -> bool {
+    let title_lower = normalize_match_text(title);
+    let artist_terms: Vec<String> = artist_search_terms(artist)
+        .into_iter()
+        .map(|term| normalize_match_text(&term))
+        .collect();
+
+    let recording_title = normalize_match_text(recording["title"].as_str().unwrap_or(""));
+    let title_matches = title_lower.is_empty()
+        || recording_title == title_lower
+        || recording_title.contains(&title_lower)
+        || title_lower.contains(&recording_title);
+
+    let artist_matches = artist_terms.is_empty()
+        || recording["artist-credit"]
+            .as_array()
+            .map(|credits| {
+                credits.iter().any(|credit| {
+                    let recording_artist =
+                        normalize_match_text(credit["artist"]["name"].as_str().unwrap_or(""));
+
+                    artist_terms.iter().any(|artist_term| {
+                        recording_artist.contains(artist_term)
+                            || artist_term.contains(&recording_artist)
+                    })
+                })
+            })
+            .unwrap_or(true);
+
+    title_matches && artist_matches
+}
+
+fn collect_composer_names_from_relations(relations: &Value, out: &mut BTreeSet<String>) {
+    let Some(relations) = relations.as_array() else {
+        return;
+    };
+
+    for relation in relations {
+        let relation_type = relation["type"].as_str().unwrap_or("").to_ascii_lowercase();
+        if matches!(
+            relation_type.as_str(),
+            "composer" | "writer" | "lyricist" | "librettist"
+        ) {
+            if let Some(name) = relation_artist_name(relation) {
+                out.insert(name);
+            }
+        }
+
+        collect_composer_names_from_relations(&relation["work"]["relations"], out);
+    }
+}
+
+fn composer_from_musicbrainz_response(json: &Value, title: &str, artist: &str) -> Option<String> {
+    let mut names = BTreeSet::new();
+
+    if let Some(recordings) = json["recordings"].as_array() {
+        for recording in recordings {
+            if recording_matches(recording, title, artist) {
+                collect_composer_names_from_relations(&recording["relations"], &mut names);
+            }
+        }
+
+        if names.is_empty() {
+            for recording in recordings {
+                collect_composer_names_from_relations(&recording["relations"], &mut names);
+            }
+        }
+    } else {
+        collect_composer_names_from_relations(&json["relations"], &mut names);
+    }
+
+    if names.is_empty() {
+        None
+    } else {
+        Some(names.into_iter().collect::<Vec<_>>().join(", "))
+    }
+}
+
+fn musicbrainz_client(ctx: &AppContext) -> Option<reqwest::blocking::Client> {
+    match reqwest::blocking::Client
+        ::builder()
+        .user_agent(MUSICBRAINZ_USER_AGENT)
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(client) => Some(client),
+        Err(e) => {
+            log_debug(ctx, &format!("MusicBrainz client build failed: {e}"));
+            None
+        }
+    }
+}
+
+fn fetch_musicbrainz_json(
+    ctx: &AppContext,
+    client: &reqwest::blocking::Client,
+    url: &str,
+    query: &[(&str, &str)]
+) -> Option<Value> {
+    let response = match client.get(url).query(query).send() {
+        Ok(response) => response,
+        Err(e) => {
+            log_debug(ctx, &format!("MusicBrainz request failed for {url}: {e}"));
+            return None;
+        }
+    };
+
+    if !response.status().is_success() {
+        log_debug(
+            ctx,
+            &format!("MusicBrainz request returned HTTP {} for {url}", response.status())
+        );
+        return None;
+    }
+
+    let body = match response.text() {
+        Ok(body) => body,
+        Err(e) => {
+            log_debug(ctx, &format!("MusicBrainz response read failed for {url}: {e}"));
+            return None;
+        }
+    };
+
+    match serde_json::from_str(&body) {
+        Ok(json) => Some(json),
+        Err(e) => {
+            log_debug(ctx, &format!("MusicBrainz JSON parse failed for {url}: {e}"));
+            None
+        }
+    }
+}
+
+fn lookup_composer_by_isrc(
+    ctx: &AppContext,
+    client: &reqwest::blocking::Client,
+    isrc: &str,
+    title: &str,
+    artist: &str
+) -> Option<String> {
+    let isrc = isrc.trim();
+    if is_unknown(isrc) {
+        return None;
+    }
+
+    let url = format!("https://musicbrainz.org/ws/2/isrc/{isrc}");
+    let json = fetch_musicbrainz_json(
+        ctx,
+        client,
+        &url,
+        &[
+            ("inc", "artist-credits+work-rels+artist-rels"),
+            ("fmt", "json"),
+        ],
+    )?;
+
+    let recording_count = json["recordings"].as_array().map(Vec::len).unwrap_or(0);
+    log_debug(
+        ctx,
+        &format!("MusicBrainz ISRC lookup returned {recording_count} recording candidate(s).")
+    );
+
+    composer_from_musicbrainz_response(&json, title, artist)
+}
+
+fn escape_musicbrainz_search_value(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn musicbrainz_recording_search_query(title: &str, artist: &str) -> String {
+    let title = escape_musicbrainz_search_value(title);
+    let artist = escape_musicbrainz_search_value(artist);
+
+    if artist.trim().is_empty() || is_unknown(&artist) {
+        format!("recording:\"{title}\"")
+    } else {
+        format!("recording:\"{title}\" AND artist:\"{artist}\"")
+    }
+}
+
+fn musicbrainz_recording_search_queries(title: &str, artist: &str) -> Vec<String> {
+    let mut queries = Vec::new();
+
+    for artist_term in artist_search_terms(artist) {
+        queries.push(musicbrainz_recording_search_query(title, &artist_term));
+    }
+
+    queries.push(musicbrainz_recording_search_query(title, ""));
+    queries.dedup();
+    queries
+}
+
+fn musicbrainz_recording_ids(json: &Value, title: &str, artist: &str) -> Vec<String> {
+    let Some(recordings) = json["recordings"].as_array() else {
+        return Vec::new();
+    };
+
+    let mut ids = Vec::new();
+
+    for recording in recordings {
+        if recording_matches(recording, title, artist) {
+            if let Some(id) = recording["id"].as_str() {
+                ids.push(id.to_string());
+            }
+        }
+    }
+
+    if ids.is_empty() {
+        for recording in recordings {
+            if let Some(id) = recording["id"].as_str() {
+                ids.push(id.to_string());
+            }
+        }
+    }
+
+    ids.truncate(3);
+    ids
+}
+
+fn work_has_recording_relation(work: &Value, recording_ids: &[String]) -> bool {
+    let Some(relations) = work["relations"].as_array() else {
+        return false;
+    };
+
+    relations.iter().any(|relation| {
+        relation["type"].as_str().unwrap_or("") == "performance"
+            && relation["recording"]["id"]
+                .as_str()
+                .map(|id| recording_ids.iter().any(|recording_id| recording_id == id))
+                .unwrap_or(false)
+    })
+}
+
+fn composer_from_musicbrainz_work_search(
+    json: &Value,
+    title: &str,
+    recording_ids: &[String]
+) -> Option<String> {
+    let Some(works) = json["works"].as_array() else {
+        return None;
+    };
+
+    let mut names = BTreeSet::new();
+    let title_lower = normalize_match_text(title);
+
+    for work in works {
+        let work_title = normalize_match_text(work["title"].as_str().unwrap_or(""));
+        if work_title != title_lower {
+            continue;
+        }
+
+        if !recording_ids.is_empty() && !work_has_recording_relation(work, recording_ids) {
+            continue;
+        }
+
+        collect_composer_names_from_relations(&work["relations"], &mut names);
+    }
+
+    if names.is_empty() {
+        None
+    } else {
+        Some(names.into_iter().collect::<Vec<_>>().join(", "))
+    }
+}
+
+fn lookup_composer_by_work_search(
+    ctx: &AppContext,
+    client: &reqwest::blocking::Client,
+    title: &str,
+    recording_ids: &[String]
+) -> Option<String> {
+    if title.trim().is_empty() || is_unknown(title) {
+        return None;
+    }
+
+    let title_query = format!("work:\"{}\"", escape_musicbrainz_search_value(title));
+    let search = fetch_musicbrainz_json(
+        ctx,
+        client,
+        "https://musicbrainz.org/ws/2/work",
+        &[
+            ("query", &title_query),
+            ("limit", "10"),
+            ("inc", "artist-rels+recording-rels"),
+            ("fmt", "json"),
+        ],
+    )?;
+
+    let result_count = search["works"].as_array().map(Vec::len).unwrap_or(0);
+    log_debug(
+        ctx,
+        &format!("MusicBrainz work search query '{title_query}' returned {result_count} candidate(s).")
+    );
+
+    composer_from_musicbrainz_work_search(&search, title, recording_ids)
+}
+
+fn lookup_composer_by_recording_search(
+    ctx: &AppContext,
+    client: &reqwest::blocking::Client,
+    title: &str,
+    artist: &str
+) -> Option<String> {
+    if title.trim().is_empty() || is_unknown(title) {
+        return None;
+    }
+
+    let mut recording_ids = Vec::new();
+    let queries = musicbrainz_recording_search_queries(title, artist);
+
+    for (i, query) in queries.iter().enumerate() {
+        if i > 0 {
+            thread::sleep(Duration::from_secs(1));
+        }
+
+        let Some(search) = fetch_musicbrainz_json(
+            ctx,
+            client,
+            "https://musicbrainz.org/ws/2/recording",
+            &[("query", query), ("limit", "5"), ("fmt", "json")],
+        ) else {
+            continue;
+        };
+
+        let result_count = search["recordings"].as_array().map(Vec::len).unwrap_or(0);
+        log_debug(
+            ctx,
+            &format!(
+                "MusicBrainz recording search query '{query}' returned {result_count} candidate(s)."
+            )
+        );
+
+        recording_ids = musicbrainz_recording_ids(&search, title, artist);
+        if !recording_ids.is_empty() {
+            break;
+        }
+    }
+
+    if recording_ids.is_empty() {
+        log_debug(ctx, "MusicBrainz recording search returned no usable candidate IDs.");
+        return None;
+    }
+
+    for (i, recording_id) in recording_ids.iter().enumerate() {
+        if i > 0 {
+            thread::sleep(Duration::from_secs(1));
+        }
+
+        let url = format!("https://musicbrainz.org/ws/2/recording/{recording_id}");
+        let Some(recording) = fetch_musicbrainz_json(
+            ctx,
+            client,
+            &url,
+            &[
+                ("inc", "artist-credits+work-rels+artist-rels+work-level-rels"),
+                ("fmt", "json"),
+            ],
+        ) else {
+            continue;
+        };
+
+        if let Some(composer) = composer_from_musicbrainz_response(&recording, title, artist) {
+            return Some(composer);
+        }
+    }
+
+    thread::sleep(Duration::from_secs(1));
+    lookup_composer_by_work_search(ctx, client, title, &recording_ids)
+}
+
+fn lookup_composer_from_musicbrainz(
+    ctx: &AppContext,
+    isrc: &str,
+    title: &str,
+    artist: &str
+) -> Option<String> {
+    let client = musicbrainz_client(ctx)?;
+
+    if !is_unknown(isrc) {
+        if let Some(composer) = lookup_composer_by_isrc(ctx, &client, isrc, title, artist) {
+            log_debug(ctx, "Composer resolved through MusicBrainz ISRC lookup.");
+            return Some(composer);
+        }
+
+        log_debug(ctx, "MusicBrainz ISRC lookup did not return composer metadata.");
+        thread::sleep(Duration::from_secs(1));
+    } else {
+        log_debug(ctx, "SongRec did not provide an ISRC for MusicBrainz composer lookup.");
+    }
+
+    let composer = lookup_composer_by_recording_search(ctx, &client, title, artist);
+    if composer.is_some() {
+        log_debug(ctx, "Composer resolved through MusicBrainz recording search.");
+    } else {
+        log_debug(ctx, "MusicBrainz recording search did not return composer metadata.");
+    }
+    composer
+}
+
+fn resolve_composer(ctx: &AppContext, json: &Value, title: &str, artist: &str) -> String {
+    let composer = extract_composer(json);
+    if !is_unknown(&composer) {
+        log_debug(ctx, &format!("Composer resolved from SongRec metadata: {composer}"));
+        return composer;
+    }
+
+    let isrc = extract_isrc(json);
+    let titles = metadata_titles(json);
+    log_debug(
+        ctx,
+        &format!(
+            "Composer missing from SongRec metadata for '{title}' by '{artist}'. ISRC='{isrc}'. Metadata titles: {}",
+            if titles.is_empty() {
+                "none".to_string()
+            } else {
+                titles.join(", ")
+            }
+        )
+    );
+
+    lookup_composer_from_musicbrainz(ctx, &isrc, title, artist)
+        .unwrap_or_else(|| UNKNOWN.to_string())
 }
 
 fn extract_track_number(json: &Value) -> String {
@@ -255,6 +771,8 @@ pub fn run_recognition_loop(
 ) {
     let mut last_track = String::new();
     let mut last_artwork_url = String::new();
+    let mut last_composer = UNKNOWN.to_string();
+    let mut last_composer_lookup_attempted = false;
 
     log_info(&ctx, &format!("Log file: {}", ctx.config.logging.file));
     log_info(&ctx, "Recognition loop started.");
@@ -336,7 +854,6 @@ pub fn run_recognition_loop(
         let artist = json["track"]["subtitle"].as_str().unwrap_or("Unknown");
         let album = extract_album(&json);
         let track_number = extract_track_number(&json);
-        let composer = extract_composer(&json);
         let released = extract_released(&json);
         let genre = extract_genre(&json);
         let label = extract_label(&json);
@@ -352,10 +869,28 @@ pub fn run_recognition_loop(
         }
 
         if current == last_track && preview_url == last_artwork_url {
+            if is_unknown(&last_composer) && !last_composer_lookup_attempted {
+                let composer = resolve_composer(&ctx, &json, title, artist);
+                last_composer_lookup_attempted = true;
+
+                if !is_unknown(&composer) {
+                    {
+                        let mut state = shared_state.lock().unwrap();
+                        state.composer = composer.clone();
+                        state.version = state.version.wrapping_add(1);
+                    }
+
+                    last_composer = composer;
+                    log_info(&ctx, &format!("Updated composer metadata for same track: {current}"));
+                }
+            }
+
             log_info(&ctx, &format!("Same track and artwork: {current}"));
             thread::sleep(Duration::from_secs(ctx.config.audio.loop_delay_secs));
             continue;
         }
+
+        let composer = resolve_composer(&ctx, &json, title, artist);
 
         log_blank(&ctx);
         log_info(&ctx, "========================================");
@@ -385,7 +920,7 @@ pub fn run_recognition_loop(
                     state.artist = artist.to_string();
                     state.album = album;
                     state.track_number = track_number;
-                    state.composer = composer;
+                    state.composer = composer.clone();
                     state.released = released;
                     state.genre = genre;
                     state.label = label;
@@ -403,6 +938,8 @@ pub fn run_recognition_loop(
 
                 last_track = current;
                 last_artwork_url = final_url;
+                last_composer = composer;
+                last_composer_lookup_attempted = true;
             }
             Err(e) => {
                 log_error(&ctx, &format!("Failed to download artwork: {e}"));
@@ -415,4 +952,282 @@ pub fn run_recognition_loop(
     }
 
     log_info(&ctx, "Recognition loop stopped.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extracts_composer_from_songrec_metadata() {
+        let json = json!({
+            "track": {
+                "sections": [
+                    {
+                        "metadata": [
+                            { "title": "Album", "text": "Sample Album" },
+                            { "title": "Composer", "text": "Jane Composer" }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        assert_eq!(extract_composer(&json), "Jane Composer");
+    }
+
+    #[test]
+    fn extracts_writer_as_composer_fallback() {
+        let json = json!({
+            "track": {
+                "sections": [
+                    {
+                        "metadata": [
+                            { "title": "Writers", "text": "Jane Writer, John Writer" }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        assert_eq!(extract_composer(&json), "Jane Writer, John Writer");
+    }
+
+    #[test]
+    fn extracts_songwriter_as_composer_fallback() {
+        let json = json!({
+            "track": {
+                "sections": [
+                    {
+                        "metadata": [
+                            { "title": "Songwriters", "text": "Jane Songwriter" }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        assert_eq!(extract_composer(&json), "Jane Songwriter");
+    }
+
+    #[test]
+    fn extracts_composer_from_musicbrainz_work_relations() {
+        let json = json!({
+            "recordings": [
+                {
+                    "title": "Song Title",
+                    "artist-credit": [
+                        { "artist": { "name": "Song Artist" } }
+                    ],
+                    "relations": [
+                        {
+                            "type": "performance",
+                            "work": {
+                                "relations": [
+                                    {
+                                        "type": "composer",
+                                        "artist": { "name": "Jane Composer" }
+                                    },
+                                    {
+                                        "type": "lyricist",
+                                        "artist": { "name": "John Lyricist" }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        });
+
+        assert_eq!(
+            composer_from_musicbrainz_response(&json, "Song Title", "Song Artist"),
+            Some("Jane Composer, John Lyricist".to_string())
+        );
+    }
+
+    #[test]
+    fn prefers_matching_musicbrainz_recordings() {
+        let json = json!({
+            "recordings": [
+                {
+                    "title": "Song Title",
+                    "artist-credit": [
+                        { "artist": { "name": "Song Artist" } }
+                    ],
+                    "relations": [
+                        {
+                            "type": "performance",
+                            "work": {
+                                "relations": [
+                                    {
+                                        "type": "composer",
+                                        "artist": { "name": "Right Composer" }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {
+                    "title": "Other Song",
+                    "artist-credit": [
+                        { "artist": { "name": "Different Artist" } }
+                    ],
+                    "relations": [
+                        {
+                            "type": "performance",
+                            "work": {
+                                "relations": [
+                                    {
+                                        "type": "composer",
+                                        "artist": { "name": "Fallback Composer" }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        });
+
+        assert_eq!(
+            composer_from_musicbrainz_response(&json, "Song Title", "Song Artist"),
+            Some("Right Composer".to_string())
+        );
+    }
+
+    #[test]
+    fn builds_musicbrainz_recording_search_query() {
+        assert_eq!(
+            musicbrainz_recording_search_query("Song \"Title\"", "Song Artist"),
+            "recording:\"Song \\\"Title\\\"\" AND artist:\"Song Artist\""
+        );
+    }
+
+    #[test]
+    fn builds_musicbrainz_recording_search_queries_with_primary_artist_fallback() {
+        assert_eq!(
+            musicbrainz_recording_search_queries("Song Title", "Song Artist feat. Guest"),
+            vec![
+                "recording:\"Song Title\" AND artist:\"Song Artist feat. Guest\"".to_string(),
+                "recording:\"Song Title\" AND artist:\"Song Artist\"".to_string(),
+                "recording:\"Song Title\"".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn prefers_matching_musicbrainz_recording_ids() {
+        let json = json!({
+            "recordings": [
+                {
+                    "id": "fallback-id",
+                    "title": "Other Song",
+                    "artist-credit": [
+                        { "artist": { "name": "Different Artist" } }
+                    ]
+                },
+                {
+                    "id": "matching-id",
+                    "title": "Song Title",
+                    "artist-credit": [
+                        { "artist": { "name": "Song Artist" } }
+                    ]
+                }
+            ]
+        });
+
+        assert_eq!(
+            musicbrainz_recording_ids(&json, "Song Title", "Song Artist"),
+            vec!["matching-id".to_string()]
+        );
+    }
+
+    #[test]
+    fn extracts_composer_from_work_search_matched_by_recording_relation() {
+        let json = json!({
+            "works": [
+                {
+                    "title": "Song Title",
+                    "relations": [
+                        {
+                            "type": "writer",
+                            "artist": { "name": "Jane Writer" }
+                        },
+                        {
+                            "type": "performance",
+                            "recording": {
+                                "id": "matching-recording-id",
+                                "title": "Song Title"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "title": "Song Title",
+                    "relations": [
+                        {
+                            "type": "writer",
+                            "artist": { "name": "Wrong Writer" }
+                        },
+                        {
+                            "type": "performance",
+                            "recording": {
+                                "id": "other-recording-id",
+                                "title": "Song Title"
+                            }
+                        }
+                    ]
+                }
+            ]
+        });
+
+        assert_eq!(
+            composer_from_musicbrainz_work_search(
+                &json,
+                "Song Title",
+                &["matching-recording-id".to_string()]
+            ),
+            Some("Jane Writer".to_string())
+        );
+    }
+
+    #[test]
+    fn work_search_matches_curly_and_straight_apostrophes() {
+        let json = json!({
+            "works": [
+                {
+                    "title": "Don’t Tell Me",
+                    "relations": [
+                        {
+                            "type": "writer",
+                            "artist": { "name": "Neil Arthur" }
+                        },
+                        {
+                            "type": "writer",
+                            "artist": { "name": "Stephen Luscombe" }
+                        },
+                        {
+                            "type": "performance",
+                            "recording": {
+                                "id": "matching-recording-id",
+                                "title": "Don’t Tell Me"
+                            }
+                        }
+                    ]
+                }
+            ]
+        });
+
+        assert_eq!(
+            composer_from_musicbrainz_work_search(
+                &json,
+                "Don't Tell Me",
+                &["matching-recording-id".to_string()]
+            ),
+            Some("Neil Arthur, Stephen Luscombe".to_string())
+        );
+    }
 }

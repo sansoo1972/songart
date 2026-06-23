@@ -4,6 +4,17 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
+## [0.12.0] - 2026-06-22
+
+### Added
+- Long song title, artist, album, year, genre, and composer values now scroll horizontally when they exceed the available display width while labels remain fixed.
+- Overflowing metadata values now loop continuously instead of snapping back after reaching the end.
+
+### Fixed
+- [#19](https://github.com/sansoo1972/songart/issues/19) Composer metadata now falls back to a MusicBrainz ISRC lookup when SongRec/Shazam metadata does not include composer or writer fields.
+
+---
+
 ## [0.11.0] - 2026-06-22
 
 ### Added

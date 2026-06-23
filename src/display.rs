@@ -26,35 +26,21 @@ use std::time::{Duration, Instant};
 // Text + Metadata Helpers
 // ==============================================================================
 
-fn ellipsize(input: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = input.chars().collect();
-    if chars.len() <= max_chars {
-        return input.to_string();
-    }
-
-    let trimmed: String = chars
-        .into_iter()
-        .take(max_chars.saturating_sub(1))
-        .collect();
-
-    format!("{trimmed}…")
-}
-
-fn album_or_release_line(state: &SongState) -> String {
-    let mut third_line = state.album.clone();
-
-    if !state.released.is_empty() && state.released != "Unknown" {
-        if third_line.is_empty() || third_line == "Unknown" {
-            third_line = state.released.clone();
-        } else {
-            third_line = format!("{} • {}", state.album, state.released);
-        }
-    }
-
-    if third_line.trim().is_empty() {
+fn album_line(state: &SongState) -> String {
+    if state.album.trim().is_empty() || state.album == "Unknown" {
         "Album unknown".to_string()
     } else {
-        ellipsize(&third_line, 56)
+        state.album.clone()
+    }
+}
+
+fn release_year_line(state: &SongState) -> String {
+    if let Some(year) = parse_release_year(&state.released) {
+        year.to_string()
+    } else if state.released.trim().is_empty() || state.released == "Unknown" {
+        "Unknown".to_string()
+    } else {
+        state.released.clone()
     }
 }
 
@@ -572,6 +558,7 @@ fn selected_display_preset<'a>(ctx: &'a AppContext) -> Option<&'a DisplayPreset>
 struct CachedText<'a> {
     texture: Texture<'a>,
     rect: Rect,
+    viewport_width: u32,
 }
 
 impl<'a> CachedText<'a> {
@@ -582,6 +569,7 @@ impl<'a> CachedText<'a> {
         color: Color,
         x: i32,
         y: i32,
+        viewport_width: u32,
     ) -> Result<Self, String> {
         let safe_text = if text.trim().is_empty() { " " } else { text };
 
@@ -596,20 +584,151 @@ impl<'a> CachedText<'a> {
 
         let rect = Rect::new(x, y, surface.width(), surface.height());
 
-        Ok(Self { texture, rect })
+        Ok(Self {
+            texture,
+            rect,
+            viewport_width,
+        })
     }
 
-    fn draw(&self, canvas: &mut sdl2::render::Canvas<sdl2::video::Window>) -> Result<(), String> {
-        canvas.copy(&self.texture, None, self.rect)?;
+    fn scroll_offset(&self, elapsed: Duration) -> i32 {
+        const START_PAUSE_SECS: f32 = 5.0;
+        const SCROLL_PIXELS_PER_SEC: f32 = 55.0;
+        const LOOP_GAP_PIXELS: u32 = 28;
+
+        if self.rect.width() <= self.viewport_width {
+            return 0;
+        }
+
+        let loop_distance = self.rect.width() + LOOP_GAP_PIXELS;
+        let scroll_secs = (loop_distance as f32) / SCROLL_PIXELS_PER_SEC;
+        let cycle_secs = START_PAUSE_SECS + scroll_secs;
+        let cycle_pos = elapsed.as_secs_f32() % cycle_secs;
+
+        if cycle_pos < START_PAUSE_SECS {
+            0
+        } else {
+            ((cycle_pos - START_PAUSE_SECS) * SCROLL_PIXELS_PER_SEC)
+                .round()
+                .clamp(0.0, loop_distance as f32) as i32
+        }
+    }
+
+    fn draw(
+        &self,
+        canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+        offset_x: i32,
+        offset_y: i32,
+        scale: f32,
+        elapsed: Duration,
+    ) -> Result<(), String> {
+        const LOOP_GAP_PIXELS: i32 = 28;
+
+        let scroll_x = self.scroll_offset(elapsed);
+        let base_x = offset_x + (((self.rect.x() - scroll_x) as f32 * scale) as i32);
+        let base_y = offset_y + (((self.rect.y()) as f32 * scale) as i32);
+        let texture_w = ((self.rect.width() as f32) * scale).max(1.0) as u32;
+        let texture_h = ((self.rect.height() as f32) * scale).max(1.0) as u32;
+        let viewport_x = offset_x + (((self.rect.x()) as f32 * scale) as i32);
+
+        let clip = Rect::new(
+            viewport_x,
+            base_y,
+            ((self.viewport_width as f32) * scale).max(1.0) as u32,
+            texture_h,
+        );
+
+        canvas.set_clip_rect(Some(clip));
+        let result = canvas.copy(
+            &self.texture,
+            None,
+            Rect::new(base_x, base_y, texture_w, texture_h),
+        );
+
+        let second_result = if result.is_ok() && self.rect.width() > self.viewport_width {
+            let second_x =
+                base_x + (((self.rect.width() as i32 + LOOP_GAP_PIXELS) as f32 * scale) as i32);
+            canvas.copy(
+                &self.texture,
+                None,
+                Rect::new(second_x, base_y, texture_w, texture_h),
+            )
+        } else {
+            Ok(())
+        };
+
+        canvas.set_clip_rect(None);
+
+        result?;
+        second_result?;
+        Ok(())
+    }
+}
+
+struct TextField<'a> {
+    label: CachedText<'a>,
+    value: CachedText<'a>,
+}
+
+impl<'a> TextField<'a> {
+    fn new(
+        texture_creator: &'a TextureCreator<WindowContext>,
+        font: &sdl2::ttf::Font,
+        label: &str,
+        value: &str,
+        label_color: Color,
+        value_color: Color,
+        x: i32,
+        y: i32,
+        viewport_width: u32,
+    ) -> Result<Self, String> {
+        let label = CachedText::new(
+            texture_creator,
+            font,
+            label,
+            label_color,
+            x,
+            y,
+            viewport_width,
+        )?;
+        let value_x = x + label.rect.width() as i32;
+        let value_viewport_width = viewport_width.saturating_sub(label.rect.width()).max(1);
+        let value = CachedText::new(
+            texture_creator,
+            font,
+            value,
+            value_color,
+            value_x,
+            y,
+            value_viewport_width,
+        )?;
+
+        Ok(Self { label, value })
+    }
+
+    fn draw(
+        &self,
+        canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+        offset_x: i32,
+        offset_y: i32,
+        scale: f32,
+        elapsed: Duration,
+    ) -> Result<(), String> {
+        self.label
+            .draw(canvas, offset_x, offset_y, scale, Duration::ZERO)?;
+        self.value
+            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
         Ok(())
     }
 }
 
 struct TextCache<'a> {
-    title: CachedText<'a>,
-    artist: CachedText<'a>,
-    third: CachedText<'a>,
-    detail: CachedText<'a>,
+    title: TextField<'a>,
+    artist: TextField<'a>,
+    album: TextField<'a>,
+    year: TextField<'a>,
+    genre: TextField<'a>,
+    composer: TextField<'a>,
 }
 
 fn build_text_cache<'a>(
@@ -622,77 +741,119 @@ fn build_text_cache<'a>(
 ) -> Result<TextCache<'a>, String> {
     let panel_x = preset.panel_x;
     let mut panel_y = (top_h as i32) + preset.panel_y;
+    let viewport_width = preset
+        .width
+        .saturating_sub((panel_x as u32).saturating_mul(2));
 
-    let title_line = ellipsize(
-        if state.title.trim().is_empty() {
-            "Waiting for music..."
-        } else {
-            &state.title
-        },
-        48,
-    );
+    let title_line = if state.title.trim().is_empty() {
+        "Waiting for music...".to_string()
+    } else {
+        state.title.clone()
+    };
 
-    let artist_line = ellipsize(
-        if state.artist.trim().is_empty() {
-            "No track identified yet"
-        } else {
-            &state.artist
-        },
-        56,
-    );
+    let artist_line = if state.artist.trim().is_empty() {
+        "No track identified yet".to_string()
+    } else {
+        state.artist.clone()
+    };
 
-    let third_line = album_or_release_line(state);
+    let album_line = album_line(state);
+    let year_line = release_year_line(state);
 
-    let detail_line = format!(
-        "Genre: {}    Composer: {}",
-        ellipsize(&state.genre, 20),
-        ellipsize(&state.composer, 28)
-    );
-
-    let title = CachedText::new(
+    let title = TextField::new(
         texture_creator,
         title_font,
+        "Title: ",
         &title_line,
+        Color::RGB(255, 255, 255),
         Color::RGB(255, 255, 255),
         panel_x,
         panel_y,
+        viewport_width,
     )?;
     panel_y += preset.title_line_spacing;
 
-    let artist = CachedText::new(
+    let artist = TextField::new(
         texture_creator,
         body_font,
+        "Artist: ",
         &artist_line,
+        Color::RGB(170, 170, 170),
         Color::RGB(210, 210, 210),
         panel_x,
         panel_y,
+        viewport_width,
     )?;
     panel_y += preset.body_line_spacing;
 
-    let third = CachedText::new(
+    let year_x = panel_x + ((viewport_width as f32) * 0.76) as i32;
+    let album_viewport_width = (year_x - panel_x).max(1) as u32;
+    let year_viewport_width = (panel_x + viewport_width as i32)
+        .saturating_sub(year_x)
+        .max(1) as u32;
+
+    let album = TextField::new(
         texture_creator,
         body_font,
-        &third_line,
+        "Album: ",
+        &album_line,
+        Color::RGB(150, 150, 150),
         Color::RGB(180, 180, 180),
         panel_x,
         panel_y,
+        album_viewport_width,
+    )?;
+
+    let year = TextField::new(
+        texture_creator,
+        body_font,
+        "Year: ",
+        &year_line,
+        Color::RGB(150, 150, 150),
+        Color::RGB(180, 180, 180),
+        year_x,
+        panel_y,
+        year_viewport_width,
     )?;
     panel_y += preset.detail_line_spacing;
 
-    let detail = CachedText::new(
+    let composer_x = panel_x + ((viewport_width as f32) * 0.38) as i32;
+    let genre_viewport_width = (composer_x - panel_x).max(1) as u32;
+    let composer_viewport_width = (panel_x + viewport_width as i32)
+        .saturating_sub(composer_x)
+        .max(1) as u32;
+
+    let genre = TextField::new(
         texture_creator,
         body_font,
-        &detail_line,
+        "Genre: ",
+        &state.genre,
+        Color::RGB(120, 120, 120),
         Color::RGB(140, 140, 140),
         panel_x,
         panel_y,
+        genre_viewport_width,
+    )?;
+
+    let composer = TextField::new(
+        texture_creator,
+        body_font,
+        "Composer: ",
+        &state.composer,
+        Color::RGB(120, 120, 120),
+        Color::RGB(140, 140, 140),
+        composer_x,
+        panel_y,
+        composer_viewport_width,
     )?;
 
     Ok(TextCache {
         title,
         artist,
-        third,
-        detail,
+        album,
+        year,
+        genre,
+        composer,
     })
 }
 
@@ -1051,10 +1212,35 @@ impl<'a> StaticSceneCache<'a> {
             canvas.copy(texture, None, target)?;
         }
 
-        self.text.title.draw(canvas)?;
-        self.text.artist.draw(canvas)?;
-        self.text.third.draw(canvas)?;
-        self.text.detail.draw(canvas)?;
+        Ok(())
+    }
+
+    fn draw_text(
+        &self,
+        canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+        offset_x: i32,
+        offset_y: i32,
+        scale: f32,
+        elapsed: Duration,
+    ) -> Result<(), String> {
+        self.text
+            .title
+            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
+        self.text
+            .artist
+            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
+        self.text
+            .album
+            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
+        self.text
+            .year
+            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
+        self.text
+            .genre
+            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
+        self.text
+            .composer
+            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
 
         Ok(())
     }
@@ -1231,6 +1417,7 @@ pub fn run_display_loop(
     let mut last_frame_log = Instant::now();
     let mut frame_counter: u32 = 0;
     let mut frame_timer = Instant::now();
+    let mut text_scroll_started_at = Instant::now();
 
     let mut smoothed_upper_bins = vec![0.0f32; ctx.config.visualizer.spectrum_bin_count];
     let mut smoothed_lower_bins = vec![0.0f32; ctx.config.visualizer.spectrum_bin_count];
@@ -1503,6 +1690,7 @@ pub fn run_display_loop(
                 .map_err(|e| e.to_string())?;
 
             static_scene_cache = Some(cache);
+            text_scroll_started_at = Instant::now();
             log_debug(
                 &ctx,
                 &format!("Rebuilt static scene for version {}", state.version),
@@ -1529,6 +1717,16 @@ pub fn run_display_loop(
 
         let static_target = Rect::new(offset_x, offset_y, render_w, render_h);
         canvas.copy(&static_scene_texture, None, static_target)?;
+
+        if let Some(cache) = static_scene_cache.as_ref() {
+            cache.draw_text(
+                &mut canvas,
+                offset_x,
+                offset_y,
+                scene_scale,
+                text_scroll_started_at.elapsed(),
+            )?;
+        }
 
         if ctx.config.visualizer.enabled && state.visualizer.enabled {
             let vis_h = ctx.config.visualizer.height.min(bottom_h.saturating_sub(8));
