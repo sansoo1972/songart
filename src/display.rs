@@ -1,4 +1,4 @@
-use crate::audio::{build_oscilloscope_points, compute_rms, SharedAudioBuffer};
+use crate::audio::{SharedAudioBuffer, build_oscilloscope_points, compute_rms};
 use crate::config::DisplayPreset;
 use crate::fft::compute_spectrum_bins;
 use crate::logging::{log_debug, log_error, log_info};
@@ -16,8 +16,8 @@ use sdl2::video::WindowContext;
 
 use std::path::Path;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -41,6 +41,16 @@ fn album_or_release_line(state: &SongState) -> String {
         "Album unknown".to_string()
     } else {
         third_line
+    }
+}
+
+fn album_or_release_label(state: &SongState) -> &'static str {
+    if !state.album.trim().is_empty() && state.album != "Unknown" {
+        "Album: "
+    } else if !state.released.trim().is_empty() && state.released != "Unknown" {
+        "Released: "
+    } else {
+        "Album: "
     }
 }
 
@@ -187,11 +197,7 @@ fn rgb_saturation(r: u8, g: u8, b: u8) -> f32 {
     let max = r.max(g).max(b) as f32;
     let min = r.min(g).min(b) as f32;
 
-    if max <= 0.0 {
-        0.0
-    } else {
-        (max - min) / max
-    }
+    if max <= 0.0 { 0.0 } else { (max - min) / max }
 }
 
 fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
@@ -214,11 +220,7 @@ fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
         60.0 * (((rf - gf) / delta) + 4.0)
     };
 
-    if hue < 0.0 {
-        hue + 360.0
-    } else {
-        hue
-    }
+    if hue < 0.0 { hue + 360.0 } else { hue }
 }
 
 fn hue_distance(a: f32, b: f32) -> f32 {
@@ -593,6 +595,7 @@ impl<'a> CachedText<'a> {
 
     fn scroll_offset(&self, elapsed: Duration) -> u32 {
         const START_PAUSE_SECS: f32 = 5.0;
+        const END_PAUSE_SECS: f32 = 2.0;
         const SCROLL_PIXELS_PER_SEC: f32 = 55.0;
 
         if self.rect.width() <= self.viewport_width {
@@ -601,11 +604,13 @@ impl<'a> CachedText<'a> {
 
         let overflow = self.rect.width() - self.viewport_width;
         let scroll_secs = (overflow as f32) / SCROLL_PIXELS_PER_SEC;
-        let cycle_secs = START_PAUSE_SECS + scroll_secs;
+        let cycle_secs = START_PAUSE_SECS + scroll_secs + END_PAUSE_SECS;
         let cycle_pos = elapsed.as_secs_f32() % cycle_secs;
 
         if cycle_pos < START_PAUSE_SECS {
             0
+        } else if cycle_pos >= START_PAUSE_SECS + scroll_secs {
+            overflow
         } else {
             ((cycle_pos - START_PAUSE_SECS) * SCROLL_PIXELS_PER_SEC)
                 .round()
@@ -651,11 +656,69 @@ impl<'a> CachedText<'a> {
     }
 }
 
+struct TextField<'a> {
+    label: CachedText<'a>,
+    value: CachedText<'a>,
+}
+
+impl<'a> TextField<'a> {
+    fn new(
+        texture_creator: &'a TextureCreator<WindowContext>,
+        font: &sdl2::ttf::Font,
+        label: &str,
+        value: &str,
+        label_color: Color,
+        value_color: Color,
+        x: i32,
+        y: i32,
+        viewport_width: u32,
+    ) -> Result<Self, String> {
+        let label = CachedText::new(
+            texture_creator,
+            font,
+            label,
+            label_color,
+            x,
+            y,
+            viewport_width,
+        )?;
+        let value_x = x + label.rect.width() as i32;
+        let value_viewport_width = viewport_width.saturating_sub(label.rect.width()).max(1);
+        let value = CachedText::new(
+            texture_creator,
+            font,
+            value,
+            value_color,
+            value_x,
+            y,
+            value_viewport_width,
+        )?;
+
+        Ok(Self { label, value })
+    }
+
+    fn draw(
+        &self,
+        canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+        offset_x: i32,
+        offset_y: i32,
+        scale: f32,
+        elapsed: Duration,
+    ) -> Result<(), String> {
+        self.label
+            .draw(canvas, offset_x, offset_y, scale, Duration::ZERO)?;
+        self.value
+            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
+        Ok(())
+    }
+}
+
 struct TextCache<'a> {
-    title: CachedText<'a>,
-    artist: CachedText<'a>,
-    third: CachedText<'a>,
-    detail: CachedText<'a>,
+    title: TextField<'a>,
+    artist: TextField<'a>,
+    third: TextField<'a>,
+    genre: TextField<'a>,
+    composer: TextField<'a>,
 }
 
 fn build_text_cache<'a>(
@@ -686,16 +749,12 @@ fn build_text_cache<'a>(
 
     let third_line = album_or_release_line(state);
 
-    let detail_line = format!(
-        "Genre: {}    Composer: {}",
-        state.genre,
-        state.composer
-    );
-
-    let title = CachedText::new(
+    let title = TextField::new(
         texture_creator,
         title_font,
+        "Title: ",
         &title_line,
+        Color::RGB(255, 255, 255),
         Color::RGB(255, 255, 255),
         panel_x,
         panel_y,
@@ -703,10 +762,12 @@ fn build_text_cache<'a>(
     )?;
     panel_y += preset.title_line_spacing;
 
-    let artist = CachedText::new(
+    let artist = TextField::new(
         texture_creator,
         body_font,
+        "Artist: ",
         &artist_line,
+        Color::RGB(170, 170, 170),
         Color::RGB(210, 210, 210),
         panel_x,
         panel_y,
@@ -714,10 +775,12 @@ fn build_text_cache<'a>(
     )?;
     panel_y += preset.body_line_spacing;
 
-    let third = CachedText::new(
+    let third = TextField::new(
         texture_creator,
         body_font,
+        album_or_release_label(state),
         &third_line,
+        Color::RGB(150, 150, 150),
         Color::RGB(180, 180, 180),
         panel_x,
         panel_y,
@@ -725,21 +788,42 @@ fn build_text_cache<'a>(
     )?;
     panel_y += preset.detail_line_spacing;
 
-    let detail = CachedText::new(
+    let composer_x = panel_x + ((viewport_width as f32) * 0.38) as i32;
+    let genre_viewport_width = (composer_x - panel_x).max(1) as u32;
+    let composer_viewport_width = (panel_x + viewport_width as i32)
+        .saturating_sub(composer_x)
+        .max(1) as u32;
+
+    let genre = TextField::new(
         texture_creator,
         body_font,
-        &detail_line,
+        "Genre: ",
+        &state.genre,
+        Color::RGB(120, 120, 120),
         Color::RGB(140, 140, 140),
         panel_x,
         panel_y,
-        viewport_width,
+        genre_viewport_width,
+    )?;
+
+    let composer = TextField::new(
+        texture_creator,
+        body_font,
+        "Composer: ",
+        &state.composer,
+        Color::RGB(120, 120, 120),
+        Color::RGB(140, 140, 140),
+        composer_x,
+        panel_y,
+        composer_viewport_width,
     )?;
 
     Ok(TextCache {
         title,
         artist,
         third,
-        detail,
+        genre,
+        composer,
     })
 }
 
@@ -1119,7 +1203,10 @@ impl<'a> StaticSceneCache<'a> {
             .third
             .draw(canvas, offset_x, offset_y, scale, elapsed)?;
         self.text
-            .detail
+            .genre
+            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
+        self.text
+            .composer
             .draw(canvas, offset_x, offset_y, scale, elapsed)?;
 
         Ok(())
