@@ -291,11 +291,11 @@ spectrum_contrast = 1.45
 
 [visualizer.spectrum]
 # Options: "full", "top_only"
-render_style = "full"
+# render_style = "full"
+render_style = "top_only"
 
 # When render_style = "top_only", use the full analyzer height and draw this
-# visible portion of each active bar near the top edge.
-top_only_height_ratio = 0.35
+top_only_height_ratio = 0.99
 
 
 # ------------------------------------------------------------------------------
@@ -303,9 +303,9 @@ top_only_height_ratio = 0.35
 # ------------------------------------------------------------------------------
 
 [visualizer.peaks]
-enabled = false
-hold_ms = 100
-drop_pixels = 1
+enabled = true
+hold_ms = 30
+drop_pixels = 2 
 color = "#FFFFFF"
 use_bar_color = true
 
