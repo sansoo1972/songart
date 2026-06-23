@@ -3,11 +3,15 @@ use crate::logging::{ log_blank, log_debug, log_error, log_info };
 use crate::state::{ AppContext, SongState };
 
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::fs;
 use std::process::Command;
 use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
 use std::time::Duration;
+
+const UNKNOWN: &str = "Unknown";
+const MUSICBRAINZ_USER_AGENT: &str = "songart/0.11.1 (https://github.com/sansoo1972/songart)";
 
 /// Looks up a metadata value by title in SongRec's nested JSON sections.
 fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
@@ -45,7 +49,159 @@ fn extract_composer(json: &Value) -> String {
     metadata_value(json, "Composer")
         .or_else(|| metadata_value(json, "Writers"))
         .or_else(|| metadata_value(json, "Writer"))
-        .unwrap_or_else(|| "Unknown".to_string())
+        .unwrap_or_else(|| UNKNOWN.to_string())
+}
+
+fn is_unknown(value: &str) -> bool {
+    value.trim().is_empty() || value.eq_ignore_ascii_case(UNKNOWN)
+}
+
+fn relation_artist_name(relation: &Value) -> Option<String> {
+    relation["artist"]["name"]
+        .as_str()
+        .or_else(|| relation["artist"]["sort-name"].as_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn collect_composer_names_from_relations(relations: &Value, out: &mut BTreeSet<String>) {
+    let Some(relations) = relations.as_array() else {
+        return;
+    };
+
+    for relation in relations {
+        let relation_type = relation["type"].as_str().unwrap_or("").to_ascii_lowercase();
+        if matches!(relation_type.as_str(), "composer" | "writer" | "lyricist") {
+            if let Some(name) = relation_artist_name(relation) {
+                out.insert(name);
+            }
+        }
+
+        collect_composer_names_from_relations(&relation["work"]["relations"], out);
+    }
+}
+
+fn composer_from_musicbrainz_response(json: &Value, title: &str, artist: &str) -> Option<String> {
+    let mut names = BTreeSet::new();
+
+    let title_lower = title.trim().to_ascii_lowercase();
+    let artist_lower = artist.trim().to_ascii_lowercase();
+
+    if let Some(recordings) = json["recordings"].as_array() {
+        for recording in recordings {
+            let recording_title = recording["title"].as_str().unwrap_or("").to_ascii_lowercase();
+            let title_matches = title_lower.is_empty()
+                || recording_title == title_lower
+                || recording_title.contains(&title_lower)
+                || title_lower.contains(&recording_title);
+
+            let artist_matches = artist_lower.is_empty()
+                || recording["artist-credit"]
+                    .as_array()
+                    .map(|credits| {
+                        credits.iter().any(|credit| {
+                            credit["artist"]["name"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_ascii_lowercase()
+                                .contains(&artist_lower)
+                        })
+                    })
+                    .unwrap_or(true);
+
+            if title_matches && artist_matches {
+                collect_composer_names_from_relations(&recording["relations"], &mut names);
+            }
+        }
+
+        if names.is_empty() {
+            for recording in recordings {
+                collect_composer_names_from_relations(&recording["relations"], &mut names);
+            }
+        }
+    } else {
+        collect_composer_names_from_relations(&json["relations"], &mut names);
+    }
+
+    if names.is_empty() {
+        None
+    } else {
+        Some(names.into_iter().collect::<Vec<_>>().join(", "))
+    }
+}
+
+fn lookup_composer_from_musicbrainz(
+    ctx: &AppContext,
+    isrc: &str,
+    title: &str,
+    artist: &str
+) -> Option<String> {
+    let isrc = isrc.trim();
+    if is_unknown(isrc) {
+        return None;
+    }
+
+    let client = reqwest::blocking::Client
+        ::builder()
+        .user_agent(MUSICBRAINZ_USER_AGENT)
+        .timeout(Duration::from_secs(5))
+        .build()
+        .ok()?;
+
+    let url = format!("https://musicbrainz.org/ws/2/isrc/{isrc}");
+    let response = match
+        client
+            .get(url)
+            .query(&[
+                ("inc", "artist-credits+work-rels+artist-rels+work-level-rels"),
+                ("fmt", "json"),
+            ])
+            .send()
+    {
+        Ok(response) => response,
+        Err(e) => {
+            log_debug(ctx, &format!("MusicBrainz composer lookup failed: {e}"));
+            return None;
+        }
+    };
+
+    if !response.status().is_success() {
+        log_debug(
+            ctx,
+            &format!("MusicBrainz composer lookup returned HTTP {}", response.status())
+        );
+        return None;
+    }
+
+    let body = match response.text() {
+        Ok(body) => body,
+        Err(e) => {
+            log_debug(ctx, &format!("MusicBrainz composer response read failed: {e}"));
+            return None;
+        }
+    };
+
+    let json: Value = match serde_json::from_str(&body) {
+        Ok(json) => json,
+        Err(e) => {
+            log_debug(ctx, &format!("MusicBrainz composer JSON parse failed: {e}"));
+            return None;
+        }
+    };
+
+    composer_from_musicbrainz_response(&json, title, artist)
+}
+
+fn resolve_composer(ctx: &AppContext, json: &Value, title: &str, artist: &str) -> String {
+    let composer = extract_composer(json);
+    if !is_unknown(&composer) {
+        return composer;
+    }
+
+    let isrc = extract_isrc(json);
+    lookup_composer_from_musicbrainz(ctx, &isrc, title, artist)
+        .unwrap_or_else(|| UNKNOWN.to_string())
 }
 
 fn extract_track_number(json: &Value) -> String {
@@ -336,7 +492,7 @@ pub fn run_recognition_loop(
         let artist = json["track"]["subtitle"].as_str().unwrap_or("Unknown");
         let album = extract_album(&json);
         let track_number = extract_track_number(&json);
-        let composer = extract_composer(&json);
+        let composer = resolve_composer(&ctx, &json, title, artist);
         let released = extract_released(&json);
         let genre = extract_genre(&json);
         let label = extract_label(&json);
@@ -415,4 +571,132 @@ pub fn run_recognition_loop(
     }
 
     log_info(&ctx, "Recognition loop stopped.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extracts_composer_from_songrec_metadata() {
+        let json = json!({
+            "track": {
+                "sections": [
+                    {
+                        "metadata": [
+                            { "title": "Album", "text": "Sample Album" },
+                            { "title": "Composer", "text": "Jane Composer" }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        assert_eq!(extract_composer(&json), "Jane Composer");
+    }
+
+    #[test]
+    fn extracts_writer_as_composer_fallback() {
+        let json = json!({
+            "track": {
+                "sections": [
+                    {
+                        "metadata": [
+                            { "title": "Writers", "text": "Jane Writer, John Writer" }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        assert_eq!(extract_composer(&json), "Jane Writer, John Writer");
+    }
+
+    #[test]
+    fn extracts_composer_from_musicbrainz_work_relations() {
+        let json = json!({
+            "recordings": [
+                {
+                    "title": "Song Title",
+                    "artist-credit": [
+                        { "artist": { "name": "Song Artist" } }
+                    ],
+                    "relations": [
+                        {
+                            "type": "performance",
+                            "work": {
+                                "relations": [
+                                    {
+                                        "type": "composer",
+                                        "artist": { "name": "Jane Composer" }
+                                    },
+                                    {
+                                        "type": "lyricist",
+                                        "artist": { "name": "John Lyricist" }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        });
+
+        assert_eq!(
+            composer_from_musicbrainz_response(&json, "Song Title", "Song Artist"),
+            Some("Jane Composer, John Lyricist".to_string())
+        );
+    }
+
+    #[test]
+    fn prefers_matching_musicbrainz_recordings() {
+        let json = json!({
+            "recordings": [
+                {
+                    "title": "Song Title",
+                    "artist-credit": [
+                        { "artist": { "name": "Song Artist" } }
+                    ],
+                    "relations": [
+                        {
+                            "type": "performance",
+                            "work": {
+                                "relations": [
+                                    {
+                                        "type": "composer",
+                                        "artist": { "name": "Right Composer" }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+                {
+                    "title": "Other Song",
+                    "artist-credit": [
+                        { "artist": { "name": "Different Artist" } }
+                    ],
+                    "relations": [
+                        {
+                            "type": "performance",
+                            "work": {
+                                "relations": [
+                                    {
+                                        "type": "composer",
+                                        "artist": { "name": "Fallback Composer" }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        });
+
+        assert_eq!(
+            composer_from_musicbrainz_response(&json, "Song Title", "Song Artist"),
+            Some("Right Composer".to_string())
+        );
+    }
 }
