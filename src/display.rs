@@ -974,6 +974,528 @@ fn draw_scope_graticule(
     Ok(())
 }
 
+fn angle_point(cx: i32, cy: i32, radius: f32, angle_deg: f32) -> Point {
+    let angle = angle_deg.to_radians();
+    Point::new(
+        cx + (radius * angle.cos()) as i32,
+        cy + (radius * angle.sin()) as i32,
+    )
+}
+
+fn draw_arc(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    cx: i32,
+    cy: i32,
+    radius: f32,
+    start_deg: f32,
+    end_deg: f32,
+    segments: usize,
+) -> Result<(), String> {
+    let segments = segments.max(2);
+    let mut prev = angle_point(cx, cy, radius, start_deg);
+
+    for i in 1..=segments {
+        let t = (i as f32) / (segments as f32);
+        let angle = start_deg + (end_deg - start_deg) * t;
+        let next = angle_point(cx, cy, radius, angle);
+        canvas.draw_line(prev, next)?;
+        prev = next;
+    }
+
+    Ok(())
+}
+
+fn draw_circle(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+) -> Result<(), String> {
+    if radius <= 0 {
+        return Ok(());
+    }
+
+    let mut x = radius;
+    let mut y = 0;
+    let mut err = 0;
+
+    while x >= y {
+        for (px, py) in [
+            (cx + x, cy + y),
+            (cx + y, cy + x),
+            (cx - y, cy + x),
+            (cx - x, cy + y),
+            (cx - x, cy - y),
+            (cx - y, cy - x),
+            (cx + y, cy - x),
+            (cx + x, cy - y),
+        ] {
+            canvas.draw_point(Point::new(px, py))?;
+        }
+
+        y += 1;
+        if err <= 0 {
+            err += 2 * y + 1;
+        } else {
+            x -= 1;
+            err -= 2 * x + 1;
+        }
+    }
+
+    Ok(())
+}
+
+fn fill_circle(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+) -> Result<(), String> {
+    if radius <= 0 {
+        return Ok(());
+    }
+
+    for dy in -radius..=radius {
+        let dx = ((radius * radius - dy * dy) as f32).sqrt() as i32;
+        canvas.draw_line(Point::new(cx - dx, cy + dy), Point::new(cx + dx, cy + dy))?;
+    }
+
+    Ok(())
+}
+
+fn draw_meter_screw(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+) -> Result<(), String> {
+    canvas.set_draw_color(Color::RGB(104, 92, 72));
+    fill_circle(canvas, cx, cy, radius)?;
+    canvas.set_draw_color(Color::RGB(34, 30, 28));
+    draw_circle(canvas, cx, cy, radius)?;
+    canvas.draw_line(
+        Point::new(cx - radius + 2, cy),
+        Point::new(cx + radius - 2, cy),
+    )?;
+    canvas.set_draw_color(Color::RGB(190, 166, 116));
+    canvas.draw_line(
+        Point::new(cx - radius / 2, cy - radius / 2),
+        Point::new(cx + radius / 2, cy + radius / 2),
+    )?;
+    Ok(())
+}
+
+fn draw_segment_digit(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    digit: char,
+    x: i32,
+    y: i32,
+    scale: i32,
+) -> Result<(), String> {
+    let w = scale * 3;
+    let h = scale * 5;
+    let mid = y + h / 2;
+    let right = x + w;
+    let bottom = y + h;
+
+    let segments = match digit {
+        '0' => [true, true, true, false, true, true, true],
+        '1' => [false, false, true, false, false, true, false],
+        '2' => [true, false, true, true, true, false, true],
+        '3' => [true, false, true, true, false, true, true],
+        '4' => [false, true, true, true, false, true, false],
+        '5' => [true, true, false, true, false, true, true],
+        '6' => [true, true, false, true, true, true, true],
+        '7' => [true, false, true, false, false, true, false],
+        '8' => [true, true, true, true, true, true, true],
+        '9' => [true, true, true, true, false, true, true],
+        _ => [false; 7],
+    };
+
+    if segments[0] {
+        canvas.draw_line(Point::new(x, y), Point::new(right, y))?;
+    }
+    if segments[1] {
+        canvas.draw_line(Point::new(x, y), Point::new(x, mid))?;
+    }
+    if segments[2] {
+        canvas.draw_line(Point::new(right, y), Point::new(right, mid))?;
+    }
+    if segments[3] {
+        canvas.draw_line(Point::new(x, mid), Point::new(right, mid))?;
+    }
+    if segments[4] {
+        canvas.draw_line(Point::new(x, mid), Point::new(x, bottom))?;
+    }
+    if segments[5] {
+        canvas.draw_line(Point::new(right, mid), Point::new(right, bottom))?;
+    }
+    if segments[6] {
+        canvas.draw_line(Point::new(x, bottom), Point::new(right, bottom))?;
+    }
+
+    Ok(())
+}
+
+fn meter_label_width(label: &str, scale: i32) -> i32 {
+    label
+        .chars()
+        .map(|ch| match ch {
+            '0'..='9' => scale * 4,
+            '-' | '+' => scale * 4,
+            '%' => scale * 5,
+            _ => scale * 2,
+        })
+        .sum::<i32>()
+        .saturating_sub(scale)
+}
+
+fn draw_meter_label(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    label: &str,
+    center_x: i32,
+    baseline_y: i32,
+    scale: i32,
+    color: Color,
+) -> Result<(), String> {
+    canvas.set_draw_color(color);
+    let mut x = center_x - meter_label_width(label, scale) / 2;
+    let y = baseline_y - scale * 5;
+
+    for ch in label.chars() {
+        match ch {
+            '0'..='9' => {
+                draw_segment_digit(canvas, ch, x, y, scale)?;
+                x += scale * 4;
+            }
+            '-' => {
+                canvas.draw_line(
+                    Point::new(x, y + scale * 2),
+                    Point::new(x + scale * 3, y + scale * 2),
+                )?;
+                x += scale * 4;
+            }
+            '+' => {
+                canvas.draw_line(
+                    Point::new(x, y + scale * 2),
+                    Point::new(x + scale * 3, y + scale * 2),
+                )?;
+                canvas.draw_line(
+                    Point::new(x + scale + scale / 2, y + scale),
+                    Point::new(x + scale + scale / 2, y + scale * 3),
+                )?;
+                x += scale * 4;
+            }
+            '%' => {
+                fill_circle(canvas, x + scale, y + scale, scale / 2)?;
+                fill_circle(canvas, x + scale * 4, y + scale * 4, scale / 2)?;
+                canvas.draw_line(Point::new(x, y + scale * 5), Point::new(x + scale * 5, y))?;
+                x += scale * 5;
+            }
+            _ => {
+                x += scale * 2;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn draw_vu_mark(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    cx: i32,
+    y: i32,
+    scale: i32,
+) -> Result<(), String> {
+    canvas.set_draw_color(Color::RGB(50, 28, 10));
+    let v_x = cx - scale * 5;
+    let u_x = cx + scale;
+    let top = y;
+    let bottom = y + scale * 6;
+
+    canvas.draw_line(Point::new(v_x, top), Point::new(v_x + scale * 2, bottom))?;
+    canvas.draw_line(
+        Point::new(v_x + scale * 4, top),
+        Point::new(v_x + scale * 2, bottom),
+    )?;
+    canvas.draw_line(Point::new(u_x, top), Point::new(u_x, bottom - scale))?;
+    canvas.draw_line(
+        Point::new(u_x + scale * 4, top),
+        Point::new(u_x + scale * 4, bottom - scale),
+    )?;
+    canvas.draw_line(
+        Point::new(u_x, bottom - scale),
+        Point::new(u_x + scale * 4, bottom - scale),
+    )?;
+
+    Ok(())
+}
+
+fn draw_analog_meter(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    rect: Rect,
+    value: f32,
+    peak: f32,
+    needle_color: Color,
+) -> Result<(), String> {
+    let x = rect.x();
+    let y = rect.y();
+    let width = rect.width();
+    let height = rect.height();
+    let w = width as i32;
+    let h = height as i32;
+
+    canvas.set_draw_color(Color::RGB(9, 8, 7));
+    canvas.fill_rect(rect)?;
+
+    let cx = x + w / 2;
+    let cy = y + h / 2;
+    let outer_r = ((width.min(height) as f32) * 0.48).max(24.0) as i32;
+    let bezel_r = (outer_r as f32 * 0.94) as i32;
+    let glass_r = (outer_r as f32 * 0.82) as i32;
+
+    canvas.set_draw_color(Color::RGB(3, 3, 4));
+    fill_circle(canvas, cx + 4, cy + 5, outer_r)?;
+    canvas.set_draw_color(Color::RGB(12, 12, 13));
+    fill_circle(canvas, cx, cy, outer_r)?;
+    canvas.set_draw_color(Color::RGB(36, 32, 27));
+    draw_circle(canvas, cx, cy, outer_r)?;
+    canvas.set_draw_color(Color::RGB(88, 72, 42));
+    draw_circle(canvas, cx, cy, bezel_r)?;
+
+    for band in (0..=10).rev() {
+        let t = (band as f32) / 10.0;
+        let warm = 1.0 - t;
+        canvas.set_draw_color(Color::RGB(
+            (196.0 + 55.0 * warm) as u8,
+            (112.0 + 86.0 * warm) as u8,
+            (22.0 + 38.0 * warm) as u8,
+        ));
+        fill_circle(canvas, cx, cy, ((glass_r as f32) * t).max(1.0) as i32)?;
+    }
+    canvas.set_draw_color(Color::RGB(255, 202, 78));
+    fill_circle(
+        canvas,
+        cx - glass_r / 8,
+        cy - glass_r / 5,
+        (glass_r as f32 * 0.58) as i32,
+    )?;
+    canvas.set_draw_color(Color::RGB(255, 174, 39));
+    fill_circle(
+        canvas,
+        cx + glass_r / 8,
+        cy + glass_r / 18,
+        (glass_r as f32 * 0.78) as i32,
+    )?;
+    canvas.set_draw_color(Color::RGB(255, 216, 116));
+    draw_arc(canvas, cx, cy, glass_r as f32 * 0.86, -166.0, -72.0, 28)?;
+    canvas.set_draw_color(Color::RGB(176, 92, 16));
+    draw_circle(canvas, cx, cy, glass_r)?;
+
+    let mask_h = (glass_r as f32 * 0.34) as u32;
+    let mask_w = (glass_r as f32 * 1.65) as u32;
+    canvas.set_draw_color(Color::RGB(8, 8, 9));
+    canvas.fill_rect(Rect::new(
+        cx - (mask_w as i32) / 2,
+        cy + glass_r / 3,
+        mask_w,
+        mask_h,
+    ))?;
+
+    let pivot_y = cy + (glass_r as f32 * 0.43) as i32;
+    let radius = (glass_r as f32 * 0.75).max(18.0);
+    let start_deg = -156.0;
+    let end_deg = -24.0;
+
+    canvas.set_draw_color(Color::RGB(56, 36, 18));
+    draw_arc(canvas, cx, pivot_y, radius, start_deg, end_deg, 46)?;
+    draw_arc(canvas, cx, pivot_y, radius * 0.78, start_deg, end_deg, 46)?;
+
+    for tick in 0..=10 {
+        let t = (tick as f32) / 10.0;
+        let angle = start_deg + (end_deg - start_deg) * t;
+        let inner = if tick % 5 == 0 {
+            radius * 0.75
+        } else {
+            radius * 0.82
+        };
+        let outer = radius;
+        canvas.set_draw_color(if tick >= 8 {
+            Color::RGB(172, 34, 22)
+        } else {
+            Color::RGB(42, 24, 12)
+        });
+        canvas.draw_line(
+            angle_point(cx, pivot_y, inner, angle),
+            angle_point(cx, pivot_y, outer, angle),
+        )?;
+
+        if tick % 2 == 0 {
+            let dot = angle_point(cx, pivot_y, radius * 0.62, angle);
+            canvas.set_draw_color(Color::RGB(55, 36, 18));
+            fill_circle(canvas, dot.x(), dot.y(), 2)?;
+        }
+    }
+
+    canvas.set_draw_color(Color::RGB(178, 28, 20));
+    draw_arc(canvas, cx, pivot_y, radius * 0.94, -54.0, end_deg, 14)?;
+    draw_arc(canvas, cx, pivot_y, radius * 0.95, -54.0, end_deg, 14)?;
+
+    let major_labels = [
+        ("20", -146.0, false),
+        ("10", -132.0, false),
+        ("7", -116.0, false),
+        ("5", -101.0, false),
+        ("3", -86.0, false),
+        ("2", -72.0, false),
+        ("1", -60.0, false),
+        ("0", -50.0, true),
+        ("3", -37.0, true),
+        ("5", -26.0, true),
+    ];
+    let label_scale = (glass_r / 38).clamp(2, 5);
+    for (label, angle, red) in major_labels {
+        let p = angle_point(cx, pivot_y, radius * 1.14, angle);
+        draw_meter_label(
+            canvas,
+            label,
+            p.x(),
+            p.y(),
+            label_scale,
+            if red {
+                Color::RGB(166, 28, 18)
+            } else {
+                Color::RGB(50, 28, 10)
+            },
+        )?;
+    }
+
+    let percent_labels = [
+        ("0", -141.0),
+        ("20", -118.0),
+        ("50", -96.0),
+        ("60", -82.0),
+        ("80", -68.0),
+        ("100%", -49.0),
+    ];
+    let small_scale = (glass_r / 55).clamp(1, 3);
+    for (label, angle) in percent_labels {
+        let p = angle_point(cx, pivot_y, radius * 0.58, angle);
+        draw_meter_label(
+            canvas,
+            label,
+            p.x(),
+            p.y(),
+            small_scale,
+            Color::RGB(70, 36, 10),
+        )?;
+    }
+
+    draw_vu_mark(canvas, cx, cy + glass_r / 8, (glass_r / 26).clamp(3, 7))?;
+
+    canvas.set_draw_color(Color::RGB(44, 25, 12));
+    draw_arc(canvas, cx, pivot_y, radius * 0.46, -120.0, -60.0, 16)?;
+
+    let needle_value = value.clamp(0.0, 1.0).powf(0.68);
+    let angle = start_deg + (end_deg - start_deg) * needle_value;
+    let tip = angle_point(cx, pivot_y, radius * 0.92, angle);
+
+    canvas.set_draw_color(Color::RGB(112, 58, 22));
+    canvas.draw_line(
+        Point::new(cx - 1, pivot_y + 1),
+        Point::new(tip.x() - 1, tip.y() + 1),
+    )?;
+    canvas.draw_line(
+        Point::new(cx + 1, pivot_y + 1),
+        Point::new(tip.x() + 1, tip.y() + 1),
+    )?;
+    canvas.set_draw_color(Color::RGB(82, 36, 12));
+    canvas.draw_line(Point::new(cx, pivot_y), tip)?;
+
+    canvas.set_draw_color(Color::RGB(124, 92, 50));
+    canvas.fill_rect(Rect::new(
+        cx - glass_r / 4,
+        pivot_y - 8,
+        (glass_r / 2) as u32,
+        16,
+    ))?;
+    canvas.set_draw_color(Color::RGB(62, 48, 38));
+    canvas.draw_rect(Rect::new(
+        cx - glass_r / 4,
+        pivot_y - 8,
+        (glass_r / 2) as u32,
+        16,
+    ))?;
+    canvas.set_draw_color(Color::RGB(34, 28, 24));
+    fill_circle(canvas, cx, pivot_y, 9)?;
+    canvas.set_draw_color(Color::RGB(154, 126, 80));
+    draw_circle(canvas, cx, pivot_y, 9)?;
+    canvas.draw_line(Point::new(cx - 5, pivot_y), Point::new(cx + 5, pivot_y))?;
+
+    draw_meter_screw(canvas, cx - (glass_r as f32 * 0.72) as i32, pivot_y - 8, 7)?;
+    draw_meter_screw(canvas, cx + (glass_r as f32 * 0.72) as i32, pivot_y - 8, 7)?;
+
+    canvas.set_draw_color(if peak > 0.82 {
+        Color::RGB(255, 74, 36)
+    } else {
+        Color::RGB(82, 28, 18)
+    });
+    fill_circle(
+        canvas,
+        cx + (glass_r as f32 * 0.58) as i32,
+        cy - glass_r / 2,
+        5,
+    )?;
+
+    canvas.set_draw_color(dim_color(needle_color, 0.32));
+    draw_circle(canvas, cx, cy, glass_r - 2)?;
+
+    Ok(())
+}
+
+fn draw_analog_vu(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    ctx: &AppContext,
+    colors: &VisualizerDrawColors,
+    level: f32,
+    peak: f32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    canvas.set_draw_color(visualizer_background_color(ctx));
+    canvas.fill_rect(Rect::new(x, y, width, height))?;
+
+    let padding = 6_u32.min(width / 8).min(height / 8);
+    let gap = 18_u32.min(width / 8);
+    let meter_w = width.saturating_sub(padding * 2 + gap) / 2;
+    let meter_h = height.saturating_sub(padding * 2).max(1);
+    let meter_y = y + padding as i32;
+    let left_x = x + padding as i32;
+    let right_x = left_x + meter_w as i32 + gap as i32;
+
+    let value = (level * 1.35).clamp(0.0, 1.0);
+    let peak = (peak * 1.35).clamp(0.0, 1.0);
+
+    draw_analog_meter(
+        canvas,
+        Rect::new(left_x, meter_y, meter_w, meter_h),
+        value,
+        peak,
+        colors.upper,
+    )?;
+    draw_analog_meter(
+        canvas,
+        Rect::new(right_x, meter_y, meter_w, meter_h),
+        value,
+        peak,
+        colors.lower,
+    )?;
+
+    Ok(())
+}
+
 fn draw_oscilloscope(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     ctx: &AppContext,
@@ -1252,6 +1774,8 @@ fn draw_visualizer(
     lower_bins: &[f32],
     upper_peaks: &[f32],
     lower_peaks: &[f32],
+    meter_level: f32,
+    meter_peak: f32,
     x: i32,
     y: i32,
     width: u32,
@@ -1260,12 +1784,23 @@ fn draw_visualizer(
 ) -> Result<(), String> {
     match mode {
         VisualizerMode::None => Ok(()),
-        VisualizerMode::Oscilloscope | VisualizerMode::AnalogVu => draw_oscilloscope(
+        VisualizerMode::Oscilloscope => draw_oscilloscope(
             canvas,
             ctx,
             colors,
             left_points,
             right_points,
+            x,
+            y,
+            width,
+            height,
+        ),
+        VisualizerMode::AnalogVu => draw_analog_vu(
+            canvas,
+            ctx,
+            colors,
+            meter_level,
+            meter_peak,
             x,
             y,
             width,
@@ -1540,6 +2075,8 @@ pub fn run_display_loop(
     let mut visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
     let mut last_canvas_size: Option<(u32, u32)> = None;
     let mut display_peak = 0.0f32;
+    let mut vu_level = 0.0f32;
+    let mut vu_peak = 0.0f32;
     let mut last_vis_debug = Instant::now();
     let mut last_frame_log = Instant::now();
     let mut frame_counter: u32 = 0;
@@ -1688,11 +2225,22 @@ pub fn run_display_loop(
             display_peak * 0.96
         };
 
-        state.meter.level = live_level;
-        state.meter.peak = if ctx.config.visualizer.peak_hold {
-            display_peak
+        vu_level = if live_level > vu_level {
+            vu_level + (live_level - vu_level) * 0.24
         } else {
-            live_level
+            vu_level + (live_level - vu_level) * 0.055
+        };
+        vu_peak = if display_peak > vu_peak {
+            vu_peak + (display_peak - vu_peak) * 0.18
+        } else {
+            vu_peak + (display_peak - vu_peak) * 0.035
+        };
+
+        state.meter.level = vu_level;
+        state.meter.peak = if ctx.config.visualizer.peak_hold {
+            vu_peak
+        } else {
+            vu_level
         };
 
         state.visualizer.enabled = ctx.config.visualizer.enabled;
@@ -1874,6 +2422,8 @@ pub fn run_display_loop(
                 &smoothed_lower_bins,
                 &upper_peak_bins,
                 &lower_peak_bins,
+                state.meter.level,
+                state.meter.peak,
                 sx(vis_x_scene),
                 sy(vis_y_scene),
                 sw(vis_w_scene),

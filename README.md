@@ -404,10 +404,17 @@ Set `mode = "oscilloscope"` to render the live oscilloscope view. `point_count`,
 `visible_sample_count`, `left_y_offset`, `right_y_offset`, `gain`, `max_gain`,
 and `y_scale` tune its trace density, time window, placement, and amplitude.
 
+Set `mode = "analog_vu"` to render the dual analog VU meter view. The meter uses
+the live RMS/peak audio level, smooths needle movement with analog-style
+ballistics, and draws amber circular gauges with black bezels, red overload
+zones, numbered dial scales, peak lamps, glass highlights, and visible pivot
+hardware.
+
 Current implementation:
 
 - FFT spectrum analyzer
 - Polished oscilloscope rendering with graticule grid and layered live traces
+- Realistic amber analog VU meter rendering with smoothed needles and peak lamps
 - Artwork-derived visualizer palettes
 - Fixed and fallback visualizer colors
 - Log-spaced frequency bins
