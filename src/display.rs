@@ -26,31 +26,21 @@ use std::time::{Duration, Instant};
 // Text + Metadata Helpers
 // ==============================================================================
 
-fn album_or_release_line(state: &SongState) -> String {
-    let mut third_line = state.album.clone();
-
-    if !state.released.is_empty() && state.released != "Unknown" {
-        if third_line.is_empty() || third_line == "Unknown" {
-            third_line = state.released.clone();
-        } else {
-            third_line = format!("{} • {}", state.album, state.released);
-        }
-    }
-
-    if third_line.trim().is_empty() {
+fn album_line(state: &SongState) -> String {
+    if state.album.trim().is_empty() || state.album == "Unknown" {
         "Album unknown".to_string()
     } else {
-        third_line
+        state.album.clone()
     }
 }
 
-fn album_or_release_label(state: &SongState) -> &'static str {
-    if !state.album.trim().is_empty() && state.album != "Unknown" {
-        "Album: "
-    } else if !state.released.trim().is_empty() && state.released != "Unknown" {
-        "Released: "
+fn release_year_line(state: &SongState) -> String {
+    if let Some(year) = parse_release_year(&state.released) {
+        year.to_string()
+    } else if state.released.trim().is_empty() || state.released == "Unknown" {
+        "Unknown".to_string()
     } else {
-        "Album: "
+        state.released.clone()
     }
 }
 
@@ -716,7 +706,8 @@ impl<'a> TextField<'a> {
 struct TextCache<'a> {
     title: TextField<'a>,
     artist: TextField<'a>,
-    third: TextField<'a>,
+    album: TextField<'a>,
+    year: TextField<'a>,
     genre: TextField<'a>,
     composer: TextField<'a>,
 }
@@ -747,7 +738,8 @@ fn build_text_cache<'a>(
         state.artist.clone()
     };
 
-    let third_line = album_or_release_line(state);
+    let album_line = album_line(state);
+    let year_line = release_year_line(state);
 
     let title = TextField::new(
         texture_creator,
@@ -775,16 +767,34 @@ fn build_text_cache<'a>(
     )?;
     panel_y += preset.body_line_spacing;
 
-    let third = TextField::new(
+    let year_x = panel_x + ((viewport_width as f32) * 0.76) as i32;
+    let album_viewport_width = (year_x - panel_x).max(1) as u32;
+    let year_viewport_width = (panel_x + viewport_width as i32)
+        .saturating_sub(year_x)
+        .max(1) as u32;
+
+    let album = TextField::new(
         texture_creator,
         body_font,
-        album_or_release_label(state),
-        &third_line,
+        "Album: ",
+        &album_line,
         Color::RGB(150, 150, 150),
         Color::RGB(180, 180, 180),
         panel_x,
         panel_y,
-        viewport_width,
+        album_viewport_width,
+    )?;
+
+    let year = TextField::new(
+        texture_creator,
+        body_font,
+        "Year: ",
+        &year_line,
+        Color::RGB(150, 150, 150),
+        Color::RGB(180, 180, 180),
+        year_x,
+        panel_y,
+        year_viewport_width,
     )?;
     panel_y += preset.detail_line_spacing;
 
@@ -821,7 +831,8 @@ fn build_text_cache<'a>(
     Ok(TextCache {
         title,
         artist,
-        third,
+        album,
+        year,
         genre,
         composer,
     })
@@ -1200,7 +1211,10 @@ impl<'a> StaticSceneCache<'a> {
             .artist
             .draw(canvas, offset_x, offset_y, scale, elapsed)?;
         self.text
-            .third
+            .album
+            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
+        self.text
+            .year
             .draw(canvas, offset_x, offset_y, scale, elapsed)?;
         self.text
             .genre

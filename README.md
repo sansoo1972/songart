@@ -456,7 +456,7 @@ Important notes:
 - Portrait mode behaves best when the Pi desktop session itself is already rotated to portrait.
 - Running from the Pi GUI session is currently the most reliable path.
 - Matching the preset resolution to the actual display resolution prevents fullscreen scaling artifacts.
-- Long metadata values stay clipped to the metadata panel width while their labels remain fixed; overflowing values pause at the beginning, scroll left, pause at the end, and repeat.
+- Long metadata values stay clipped to their own field widths while labels remain fixed; overflowing title, artist, album, year, genre, and composer values pause at the beginning, scroll left, pause at the end, and repeat.
 
 ---
 
