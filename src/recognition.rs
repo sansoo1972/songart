@@ -74,6 +74,14 @@ fn relation_artist_name(relation: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn normalize_match_text(value: &str) -> String {
+    value
+        .trim()
+        .replace(['’', '‘', '`'], "'")
+        .replace(['“', '”'], "\"")
+        .to_ascii_lowercase()
+}
+
 fn metadata_titles(json: &Value) -> Vec<String> {
     let Some(sections) = json["track"]["sections"].as_array() else {
         return Vec::new();
@@ -134,13 +142,13 @@ fn artist_search_terms(artist: &str) -> Vec<String> {
 }
 
 fn recording_matches(recording: &Value, title: &str, artist: &str) -> bool {
-    let title_lower = title.trim().to_ascii_lowercase();
+    let title_lower = normalize_match_text(title);
     let artist_terms: Vec<String> = artist_search_terms(artist)
         .into_iter()
-        .map(|term| term.to_ascii_lowercase())
+        .map(|term| normalize_match_text(&term))
         .collect();
 
-    let recording_title = recording["title"].as_str().unwrap_or("").to_ascii_lowercase();
+    let recording_title = normalize_match_text(recording["title"].as_str().unwrap_or(""));
     let title_matches = title_lower.is_empty()
         || recording_title == title_lower
         || recording_title.contains(&title_lower)
@@ -151,10 +159,8 @@ fn recording_matches(recording: &Value, title: &str, artist: &str) -> bool {
             .as_array()
             .map(|credits| {
                 credits.iter().any(|credit| {
-                    let recording_artist = credit["artist"]["name"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_ascii_lowercase();
+                    let recording_artist =
+                        normalize_match_text(credit["artist"]["name"].as_str().unwrap_or(""));
 
                     artist_terms.iter().any(|artist_term| {
                         recording_artist.contains(artist_term)
@@ -377,10 +383,10 @@ fn composer_from_musicbrainz_work_search(
     };
 
     let mut names = BTreeSet::new();
-    let title_lower = title.trim().to_ascii_lowercase();
+    let title_lower = normalize_match_text(title);
 
     for work in works {
-        let work_title = work["title"].as_str().unwrap_or("").to_ascii_lowercase();
+        let work_title = normalize_match_text(work["title"].as_str().unwrap_or(""));
         if work_title != title_lower {
             continue;
         }
@@ -1185,6 +1191,43 @@ mod tests {
                 &["matching-recording-id".to_string()]
             ),
             Some("Jane Writer".to_string())
+        );
+    }
+
+    #[test]
+    fn work_search_matches_curly_and_straight_apostrophes() {
+        let json = json!({
+            "works": [
+                {
+                    "title": "Don’t Tell Me",
+                    "relations": [
+                        {
+                            "type": "writer",
+                            "artist": { "name": "Neil Arthur" }
+                        },
+                        {
+                            "type": "writer",
+                            "artist": { "name": "Stephen Luscombe" }
+                        },
+                        {
+                            "type": "performance",
+                            "recording": {
+                                "id": "matching-recording-id",
+                                "title": "Don’t Tell Me"
+                            }
+                        }
+                    ]
+                }
+            ]
+        });
+
+        assert_eq!(
+            composer_from_musicbrainz_work_search(
+                &json,
+                "Don't Tell Me",
+                &["matching-recording-id".to_string()]
+            ),
+            Some("Neil Arthur, Stephen Luscombe".to_string())
         );
     }
 }
