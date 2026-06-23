@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.12.0 improves metadata display with composer fallbacks, separate album/year fields, and continuous scrolling for long field values.
+Version 0.12.1 adds a polished oscilloscope visualizer view with a graticule grid, clipped trace area, layered trace glow, and higher-density default sampling.
 
 ---
 
@@ -218,12 +218,12 @@ padding = 16
 peak_hold = false
 
 window_ms = 120
-point_count = 96
+point_count = 180
 gain = 1.0
 y_scale = 1.0
 left_y_offset = 0.25
 right_y_offset = 0.75
-visible_sample_count = 160
+visible_sample_count = 384
 max_gain = 8.0
 debug_log_interval_ms = 10000
 
@@ -355,11 +355,16 @@ Each theme controls:
 ```toml
 [visualizer]
 enabled = true
-mode = "spectrum"
+mode = "spectrum" # spectrum, oscilloscope, analog_vu
 height = 300
 padding = 16
 
 window_ms = 120
+point_count = 180
+visible_sample_count = 384
+left_y_offset = 0.25
+right_y_offset = 0.75
+y_scale = 1.0
 spectrum_fft_size = 1024
 spectrum_bin_count = 64
 spectrum_min_hz = 60.0
@@ -395,10 +400,14 @@ palette_size = 6
 hue_bucket_count = 12
 ```
 
+Set `mode = "oscilloscope"` to render the live oscilloscope view. `point_count`,
+`visible_sample_count`, `left_y_offset`, `right_y_offset`, `gain`, `max_gain`,
+and `y_scale` tune its trace density, time window, placement, and amplitude.
+
 Current implementation:
 
 - FFT spectrum analyzer
-- Oscilloscope rendering
+- Polished oscilloscope rendering with graticule grid and layered live traces
 - Artwork-derived visualizer palettes
 - Fixed and fallback visualizer colors
 - Log-spaced frequency bins
@@ -486,15 +495,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.12.0**.
+This project is now at **0.12.1**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.12.0 -m "songart 0.12.0"
-git push origin v0.12.0
+git tag -a v0.12.1 -m "songart 0.12.1"
+git push origin v0.12.1
 ```
 
 ---
