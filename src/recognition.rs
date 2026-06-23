@@ -47,8 +47,17 @@ fn extract_released(json: &Value) -> String {
 
 fn extract_composer(json: &Value) -> String {
     metadata_value(json, "Composer")
+        .or_else(|| metadata_value(json, "Composers"))
+        .or_else(|| metadata_value(json, "Songwriter"))
+        .or_else(|| metadata_value(json, "Songwriters"))
         .or_else(|| metadata_value(json, "Writers"))
         .or_else(|| metadata_value(json, "Writer"))
+        .or_else(|| metadata_value(json, "Written By"))
+        .or_else(|| metadata_value(json, "Written by"))
+        .or_else(|| metadata_value(json, "Composed By"))
+        .or_else(|| metadata_value(json, "Composed by"))
+        .or_else(|| metadata_value(json, "Music By"))
+        .or_else(|| metadata_value(json, "Music by"))
         .unwrap_or_else(|| UNKNOWN.to_string())
 }
 
@@ -65,9 +74,71 @@ fn relation_artist_name(relation: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn metadata_titles(json: &Value) -> Vec<String> {
+    let Some(sections) = json["track"]["sections"].as_array() else {
+        return Vec::new();
+    };
+
+    let mut titles = BTreeSet::new();
+    for section in sections {
+        let Some(metadata) = section["metadata"].as_array() else {
+            continue;
+        };
+
+        for item in metadata {
+            if let Some(title) = item["title"].as_str() {
+                let title = title.trim();
+                if !title.is_empty() {
+                    titles.insert(title.to_string());
+                }
+            }
+        }
+    }
+
+    titles.into_iter().collect()
+}
+
+fn artist_search_terms(artist: &str) -> Vec<String> {
+    let separators = [
+        " feat. ",
+        " feat ",
+        " featuring ",
+        " ft. ",
+        " ft ",
+        " with ",
+        " x ",
+        " X ",
+        " & ",
+        ",",
+    ];
+
+    let mut terms = Vec::new();
+    let artist = artist.trim();
+
+    if !artist.is_empty() && !is_unknown(artist) {
+        terms.push(artist.to_string());
+
+        let mut primary = artist;
+        for separator in separators {
+            if let Some((left, _)) = primary.split_once(separator) {
+                primary = left.trim();
+            }
+        }
+
+        if !primary.is_empty() && primary != artist {
+            terms.push(primary.to_string());
+        }
+    }
+
+    terms
+}
+
 fn recording_matches(recording: &Value, title: &str, artist: &str) -> bool {
     let title_lower = title.trim().to_ascii_lowercase();
-    let artist_lower = artist.trim().to_ascii_lowercase();
+    let artist_terms: Vec<String> = artist_search_terms(artist)
+        .into_iter()
+        .map(|term| term.to_ascii_lowercase())
+        .collect();
 
     let recording_title = recording["title"].as_str().unwrap_or("").to_ascii_lowercase();
     let title_matches = title_lower.is_empty()
@@ -75,16 +146,20 @@ fn recording_matches(recording: &Value, title: &str, artist: &str) -> bool {
         || recording_title.contains(&title_lower)
         || title_lower.contains(&recording_title);
 
-    let artist_matches = artist_lower.is_empty()
+    let artist_matches = artist_terms.is_empty()
         || recording["artist-credit"]
             .as_array()
             .map(|credits| {
                 credits.iter().any(|credit| {
-                    credit["artist"]["name"]
+                    let recording_artist = credit["artist"]["name"]
                         .as_str()
                         .unwrap_or("")
-                        .to_ascii_lowercase()
-                        .contains(&artist_lower)
+                        .to_ascii_lowercase();
+
+                    artist_terms.iter().any(|artist_term| {
+                        recording_artist.contains(artist_term)
+                            || artist_term.contains(&recording_artist)
+                    })
                 })
             })
             .unwrap_or(true);
@@ -99,7 +174,10 @@ fn collect_composer_names_from_relations(relations: &Value, out: &mut BTreeSet<S
 
     for relation in relations {
         let relation_type = relation["type"].as_str().unwrap_or("").to_ascii_lowercase();
-        if matches!(relation_type.as_str(), "composer" | "writer" | "lyricist") {
+        if matches!(
+            relation_type.as_str(),
+            "composer" | "writer" | "lyricist" | "librettist"
+        ) {
             if let Some(name) = relation_artist_name(relation) {
                 out.insert(name);
             }
@@ -212,6 +290,12 @@ fn lookup_composer_by_isrc(
         ],
     )?;
 
+    let recording_count = json["recordings"].as_array().map(Vec::len).unwrap_or(0);
+    log_debug(
+        ctx,
+        &format!("MusicBrainz ISRC lookup returned {recording_count} recording candidate(s).")
+    );
+
     composer_from_musicbrainz_response(&json, title, artist)
 }
 
@@ -228,6 +312,18 @@ fn musicbrainz_recording_search_query(title: &str, artist: &str) -> String {
     } else {
         format!("recording:\"{title}\" AND artist:\"{artist}\"")
     }
+}
+
+fn musicbrainz_recording_search_queries(title: &str, artist: &str) -> Vec<String> {
+    let mut queries = Vec::new();
+
+    for artist_term in artist_search_terms(artist) {
+        queries.push(musicbrainz_recording_search_query(title, &artist_term));
+    }
+
+    queries.push(musicbrainz_recording_search_query(title, ""));
+    queries.dedup();
+    queries
 }
 
 fn musicbrainz_recording_ids(json: &Value, title: &str, artist: &str) -> Vec<String> {
@@ -267,17 +363,39 @@ fn lookup_composer_by_recording_search(
         return None;
     }
 
-    let query = musicbrainz_recording_search_query(title, artist);
-    let search = fetch_musicbrainz_json(
-        ctx,
-        client,
-        "https://musicbrainz.org/ws/2/recording",
-        &[("query", &query), ("limit", "5"), ("fmt", "json")],
-    )?;
+    let mut recording_ids = Vec::new();
+    let queries = musicbrainz_recording_search_queries(title, artist);
 
-    let recording_ids = musicbrainz_recording_ids(&search, title, artist);
+    for (i, query) in queries.iter().enumerate() {
+        if i > 0 {
+            thread::sleep(Duration::from_secs(1));
+        }
+
+        let Some(search) = fetch_musicbrainz_json(
+            ctx,
+            client,
+            "https://musicbrainz.org/ws/2/recording",
+            &[("query", query), ("limit", "5"), ("fmt", "json")],
+        ) else {
+            continue;
+        };
+
+        let result_count = search["recordings"].as_array().map(Vec::len).unwrap_or(0);
+        log_debug(
+            ctx,
+            &format!(
+                "MusicBrainz recording search query '{query}' returned {result_count} candidate(s)."
+            )
+        );
+
+        recording_ids = musicbrainz_recording_ids(&search, title, artist);
+        if !recording_ids.is_empty() {
+            break;
+        }
+    }
+
     if recording_ids.is_empty() {
-        log_debug(ctx, "MusicBrainz recording search returned no candidates.");
+        log_debug(ctx, "MusicBrainz recording search returned no usable candidate IDs.");
         return None;
     }
 
@@ -339,10 +457,24 @@ fn lookup_composer_from_musicbrainz(
 fn resolve_composer(ctx: &AppContext, json: &Value, title: &str, artist: &str) -> String {
     let composer = extract_composer(json);
     if !is_unknown(&composer) {
+        log_debug(ctx, &format!("Composer resolved from SongRec metadata: {composer}"));
         return composer;
     }
 
     let isrc = extract_isrc(json);
+    let titles = metadata_titles(json);
+    log_debug(
+        ctx,
+        &format!(
+            "Composer missing from SongRec metadata for '{title}' by '{artist}'. ISRC='{isrc}'. Metadata titles: {}",
+            if titles.is_empty() {
+                "none".to_string()
+            } else {
+                titles.join(", ")
+            }
+        )
+    );
+
     lookup_composer_from_musicbrainz(ctx, &isrc, title, artist)
         .unwrap_or_else(|| UNKNOWN.to_string())
 }
@@ -757,6 +889,23 @@ mod tests {
     }
 
     #[test]
+    fn extracts_songwriter_as_composer_fallback() {
+        let json = json!({
+            "track": {
+                "sections": [
+                    {
+                        "metadata": [
+                            { "title": "Songwriters", "text": "Jane Songwriter" }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        assert_eq!(extract_composer(&json), "Jane Songwriter");
+    }
+
+    #[test]
     fn extracts_composer_from_musicbrainz_work_relations() {
         let json = json!({
             "recordings": [
@@ -848,6 +997,18 @@ mod tests {
         assert_eq!(
             musicbrainz_recording_search_query("Song \"Title\"", "Song Artist"),
             "recording:\"Song \\\"Title\\\"\" AND artist:\"Song Artist\""
+        );
+    }
+
+    #[test]
+    fn builds_musicbrainz_recording_search_queries_with_primary_artist_fallback() {
+        assert_eq!(
+            musicbrainz_recording_search_queries("Song Title", "Song Artist feat. Guest"),
+            vec![
+                "recording:\"Song Title\" AND artist:\"Song Artist feat. Guest\"".to_string(),
+                "recording:\"Song Title\" AND artist:\"Song Artist\"".to_string(),
+                "recording:\"Song Title\"".to_string(),
+            ]
         );
     }
 
