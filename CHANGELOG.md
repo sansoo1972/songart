@@ -4,7 +4,7 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
-## [0.11.1] - 2026-06-22
+## [0.12.0] - 2026-06-22
 
 ### Added
 - Long song title, artist, album, year, genre, and composer values now scroll horizontally when they exceed the available display width while labels remain fixed.
