@@ -1361,6 +1361,37 @@ fn draw_circle_outline(
     canvas.draw_lines(points.as_slice())
 }
 
+fn draw_spiral_groove(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    center_x: i32,
+    center_y: i32,
+    outer_radius: i32,
+    inner_radius: i32,
+    color: Color,
+) -> Result<(), String> {
+    // One continuous Archimedean spiral approximates the single groove cut
+    // into an LP. The spacing is exaggerated slightly so it remains visible
+    // at Raspberry Pi display resolutions.
+    const TURNS: usize = 16;
+    const POINTS_PER_TURN: usize = 64;
+    let point_count = TURNS * POINTS_PER_TURN;
+    let mut points = Vec::with_capacity(point_count + 1);
+
+    for point in 0..=point_count {
+        let progress = point as f32 / point_count as f32;
+        let radius =
+            outer_radius as f32 + (inner_radius - outer_radius) as f32 * progress;
+        let angle = progress * TURNS as f32 * std::f32::consts::TAU;
+        points.push(Point::new(
+            center_x + (angle.cos() * radius).round() as i32,
+            center_y + (angle.sin() * radius).round() as i32,
+        ));
+    }
+
+    canvas.set_draw_color(color);
+    canvas.draw_lines(points.as_slice())
+}
+
 fn draw_vinyl_record(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     target: Rect,
@@ -1379,24 +1410,26 @@ fn draw_vinyl_record(
         Color::RGB(dim(12), dim(12), dim(14)),
     )?;
 
-    // Alternating groove highlights make the record readable against a black
-    // background while remaining subtle enough to resemble pressed vinyl.
+    // A real record has one continuous spiral groove rather than a stack of
+    // independent rings.
     let label_radius = radius / 6;
-    let groove_step = (radius / 18).max(3);
-    let mut groove_radius = label_radius + groove_step;
-    let mut groove_index = 0;
-    while groove_radius < radius - 2 {
-        let shade = if groove_index % 2 == 0 { 35 } else { 25 };
-        draw_circle_outline(
-            canvas,
-            center_x,
-            center_y,
-            groove_radius,
-            Color::RGB(dim(shade), dim(shade), dim(shade + 2)),
-        )?;
-        groove_radius += groove_step;
-        groove_index += 1;
-    }
+    draw_spiral_groove(
+        canvas,
+        center_x,
+        center_y,
+        radius - 5,
+        label_radius + (radius / 28).max(2),
+        Color::RGB(dim(43), dim(43), dim(47)),
+    )?;
+
+    // The smooth runout area and raised outer lip catch a little more light.
+    draw_circle_outline(
+        canvas,
+        center_x,
+        center_y,
+        label_radius + (radius / 40).max(2),
+        Color::RGB(dim(31), dim(31), dim(35)),
+    )?;
     draw_circle_outline(
         canvas,
         center_x,
