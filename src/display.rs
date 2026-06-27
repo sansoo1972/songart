@@ -1369,11 +1369,11 @@ fn draw_spiral_groove(
     inner_radius: i32,
     color: Color,
 ) -> Result<(), String> {
-    // One continuous Archimedean spiral approximates the single groove cut
-    // into an LP. The spacing is exaggerated slightly so it remains visible
-    // at Raspberry Pi display resolutions.
-    const TURNS: usize = 16;
-    const POINTS_PER_TURN: usize = 64;
+    // One continuous Archimedean spiral approximates the groove cut into an
+    // LP. Seventy-two turns keep the groove bed dense without overwhelming
+    // the Raspberry Pi renderer.
+    const TURNS: usize = 72;
+    const POINTS_PER_TURN: usize = 48;
     let point_count = TURNS * POINTS_PER_TURN;
     let mut points = Vec::with_capacity(point_count + 1);
 
@@ -1410,17 +1410,43 @@ fn draw_vinyl_record(
         Color::RGB(dim(12), dim(12), dim(14)),
     )?;
 
-    // A real record has one continuous spiral groove rather than a stack of
-    // independent rings.
+    // A real record has one densely packed continuous spiral groove rather
+    // than a small stack of widely spaced rings.
     let label_radius = radius / 6;
+    let inner_groove_radius = label_radius + (radius / 28).max(2);
+    let outer_groove_radius = radius - 5;
     draw_spiral_groove(
         canvas,
         center_x,
         center_y,
-        radius - 5,
-        label_radius + (radius / 28).max(2),
-        Color::RGB(dim(43), dim(43), dim(47)),
+        outer_groove_radius,
+        inner_groove_radius,
+        Color::RGB(dim(38), dim(38), dim(42)),
     )?;
+
+    // Four wider-pitch bands divide the side into five plausible tracks.
+    // Darkening the groove bed and catching one edge makes each break visible
+    // without turning the record back into a bullseye.
+    let groove_span = outer_groove_radius - inner_groove_radius;
+    for track in 1..5 {
+        let break_radius = inner_groove_radius + (groove_span * track / 5);
+        for offset in -2..=2 {
+            draw_circle_outline(
+                canvas,
+                center_x,
+                center_y,
+                break_radius + offset,
+                Color::RGB(dim(14), dim(14), dim(16)),
+            )?;
+        }
+        draw_circle_outline(
+            canvas,
+            center_x,
+            center_y,
+            break_radius + 3,
+            Color::RGB(dim(30), dim(30), dim(34)),
+        )?;
+    }
 
     // The smooth runout area and raised outer lip catch a little more light.
     draw_circle_outline(
