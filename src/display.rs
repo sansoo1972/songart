@@ -1450,7 +1450,6 @@ impl<'a> StaticSceneCache<'a> {
         &self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
         ctx: &AppContext,
-        artwork_texture: Option<&Texture<'a>>,
         scene_w: u32,
         top_h: u32,
         bottom_h: u32,
@@ -1463,12 +1462,6 @@ impl<'a> StaticSceneCache<'a> {
 
         canvas.set_draw_color(metadata_background_color(ctx));
         canvas.fill_rect(Rect::new(0, top_h as i32, scene_w, bottom_h))?;
-
-        if let (Some(texture), Some(target)) = (artwork_texture, self.artwork_rect) {
-            if !ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
-                canvas.copy(texture, None, target)?;
-            }
-        }
 
         Ok(())
     }
@@ -1667,7 +1660,9 @@ pub fn run_display_loop(
 
     let mut event_pump = sdl.event_pump()?;
     let mut loaded_version: u64 = u64::MAX;
+    let mut loaded_track_identity = String::new();
     let mut artwork_texture: Option<Texture<'_>> = None;
+    let mut previous_artwork_texture: Option<Texture<'_>> = None;
     let mut circular_artwork_texture: Option<Texture<'_>> = None;
     let mut artwork_started_at = Instant::now();
     let mut visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
@@ -1846,10 +1841,16 @@ pub fn run_display_loop(
             last_vis_debug = Instant::now();
         }
 
-        if state.version != loaded_version {
+        let track_identity = format!("{}\0{}", state.title, state.artist);
+        if state.version != loaded_version && track_identity == loaded_track_identity {
+            // Metadata-only updates for the current song should rebuild text,
+            // but must not restart its artwork animation.
+            loaded_version = state.version;
+        } else if state.version != loaded_version {
             if !state.artwork_path.is_empty() && Path::new(&state.artwork_path).exists() {
                 match texture_creator.load_texture(&state.artwork_path) {
                     Ok(texture) => {
+                        previous_artwork_texture = artwork_texture.take();
                         artwork_texture = Some(texture);
                         let record_rect = compute_record_rect(scene_w, top_h);
                         let label_diameter =
@@ -1880,6 +1881,7 @@ pub fn run_display_loop(
                         visualizer_colors =
                             visualizer_colors_for_artwork(&ctx, Some(&state.artwork_path));
                         loaded_version = state.version;
+                        loaded_track_identity = track_identity.clone();
                         log_debug(
                             &ctx,
                             &format!(
@@ -1891,15 +1893,18 @@ pub fn run_display_loop(
                     Err(e) => {
                         log_error(&ctx, &format!("Renderer failed to load artwork: {e}"));
                         artwork_texture = None;
+                        previous_artwork_texture = None;
                         circular_artwork_texture = None;
                         visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
                     }
                 }
             } else {
                 artwork_texture = None;
+                previous_artwork_texture = None;
                 circular_artwork_texture = None;
                 visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
                 loaded_version = state.version;
+                loaded_track_identity = track_identity;
             }
         }
 
@@ -1969,7 +1974,6 @@ pub fn run_display_loop(
                     let _ = cache.draw_static_scene(
                         tex_canvas,
                         &ctx,
-                        artwork_texture.as_ref(),
                         scene_w,
                         top_h,
                         bottom_h,
@@ -2006,12 +2010,18 @@ pub fn run_display_loop(
         let static_target = Rect::new(offset_x, offset_y, render_w, render_h);
         canvas.copy(&static_scene_texture, None, static_target)?;
 
+        const ARTWORK_FADE_SECONDS: f32 = 1.5;
+        let artwork_elapsed = artwork_started_at.elapsed().as_secs_f32();
+        if artwork_elapsed >= ARTWORK_FADE_SECONDS {
+            previous_artwork_texture = None;
+        }
+
         if ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
             if let (Some(artwork), Some(cache)) =
-                (artwork_texture.as_ref(), static_scene_cache.as_ref())
+                (artwork_texture.as_mut(), static_scene_cache.as_ref())
             {
                 if let Some(cover_scene) = cache.artwork_rect {
-                    let elapsed = artwork_started_at.elapsed().as_secs_f32();
+                    let elapsed = artwork_elapsed;
                     let cover = Rect::new(
                         sx(cover_scene.x()),
                         sy(cover_scene.y()),
@@ -2020,7 +2030,23 @@ pub fn run_display_loop(
                     );
 
                     if elapsed < 5.0 {
+                        let fade = (elapsed / ARTWORK_FADE_SECONDS).clamp(0.0, 1.0);
+                        if let Some(previous) = previous_artwork_texture.as_mut() {
+                            let previous_scene =
+                                compute_artwork_rect(previous.query(), scene_w, top_h);
+                            let previous_target = Rect::new(
+                                sx(previous_scene.x()),
+                                sy(previous_scene.y()),
+                                sw(previous_scene.width()),
+                                sh(previous_scene.height()),
+                            );
+                            previous.set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
+                            canvas.copy(previous, None, previous_target)?;
+                            previous.set_alpha_mod(255);
+                        }
+                        artwork.set_alpha_mod((fade * 255.0).round() as u8);
                         canvas.copy(artwork, None, cover)?;
+                        artwork.set_alpha_mod(255);
                     } else {
                         let record_scene = compute_record_rect(scene_w, top_h);
                         let record = Rect::new(
@@ -2092,6 +2118,33 @@ pub fn run_display_loop(
                         )?;
                     }
                 }
+            }
+        } else if let (Some(artwork), Some(cache)) =
+            (artwork_texture.as_mut(), static_scene_cache.as_ref())
+        {
+            if let Some(cover_scene) = cache.artwork_rect {
+                let cover = Rect::new(
+                    sx(cover_scene.x()),
+                    sy(cover_scene.y()),
+                    sw(cover_scene.width()),
+                    sh(cover_scene.height()),
+                );
+                let fade = (artwork_elapsed / ARTWORK_FADE_SECONDS).clamp(0.0, 1.0);
+                if let Some(previous) = previous_artwork_texture.as_mut() {
+                    let previous_scene = compute_artwork_rect(previous.query(), scene_w, top_h);
+                    let previous_target = Rect::new(
+                        sx(previous_scene.x()),
+                        sy(previous_scene.y()),
+                        sw(previous_scene.width()),
+                        sh(previous_scene.height()),
+                    );
+                    previous.set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
+                    canvas.copy(previous, None, previous_target)?;
+                    previous.set_alpha_mod(255);
+                }
+                artwork.set_alpha_mod((fade * 255.0).round() as u8);
+                canvas.copy(artwork, None, cover)?;
+                artwork.set_alpha_mod(255);
             }
         }
 
