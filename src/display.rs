@@ -10,7 +10,7 @@ use sdl2::image::{InitFlag, LoadSurface, LoadTexture};
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::{Point, Rect};
-use sdl2::render::{Texture, TextureCreator, TextureQuery};
+use sdl2::render::{BlendMode, Texture, TextureCreator, TextureQuery};
 use sdl2::surface::Surface;
 use sdl2::video::WindowContext;
 
@@ -1341,6 +1341,62 @@ fn draw_filled_circle(
     Ok(())
 }
 
+fn draw_circle_outline(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    center_x: i32,
+    center_y: i32,
+    radius: i32,
+    color: Color,
+) -> Result<(), String> {
+    const SEGMENTS: usize = 96;
+    let mut points = Vec::with_capacity(SEGMENTS + 1);
+    for segment in 0..=SEGMENTS {
+        let angle = (segment as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+        points.push(Point::new(
+            center_x + (angle.cos() * radius as f32).round() as i32,
+            center_y + (angle.sin() * radius as f32).round() as i32,
+        ));
+    }
+    canvas.set_draw_color(color);
+    canvas.draw_lines(points.as_slice())
+}
+
+fn draw_vinyl_record(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    target: Rect,
+) -> Result<(), String> {
+    let center_x = target.x() + target.width() as i32 / 2;
+    let center_y = target.y() + target.height() as i32 / 2;
+    let radius = target.width() as i32 / 2;
+    draw_filled_circle(canvas, center_x, center_y, radius, Color::RGB(12, 12, 14))?;
+
+    // Alternating groove highlights make the record readable against a black
+    // background while remaining subtle enough to resemble pressed vinyl.
+    let label_radius = radius / 6;
+    let groove_step = (radius / 18).max(3);
+    let mut groove_radius = label_radius + groove_step;
+    let mut groove_index = 0;
+    while groove_radius < radius - 2 {
+        let shade = if groove_index % 2 == 0 { 35 } else { 25 };
+        draw_circle_outline(
+            canvas,
+            center_x,
+            center_y,
+            groove_radius,
+            Color::RGB(shade, shade, shade + 2),
+        )?;
+        groove_radius += groove_step;
+        groove_index += 1;
+    }
+    draw_circle_outline(
+        canvas,
+        center_x,
+        center_y,
+        radius - 1,
+        Color::RGB(48, 48, 52),
+    )
+}
+
 fn draw_circular_artwork(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     texture: &Texture<'_>,
@@ -1409,33 +1465,7 @@ impl<'a> StaticSceneCache<'a> {
         canvas.fill_rect(Rect::new(0, top_h as i32, scene_w, bottom_h))?;
 
         if let (Some(texture), Some(target)) = (artwork_texture, self.artwork_rect) {
-            if ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
-                let center_x = target.x() + target.width() as i32 / 2;
-                let center_y = target.y() + target.height() as i32 / 2;
-                let radius = target.width() as i32 / 2;
-                draw_filled_circle(canvas, center_x, center_y, radius, Color::RGB(16, 16, 18))?;
-
-                // A standard LP label is roughly one third of the record diameter.
-                let label_diameter = ((target.width() as f32) / 3.0).round() as u32;
-                let label = Rect::new(
-                    center_x - label_diameter as i32 / 2,
-                    center_y - label_diameter as i32 / 2,
-                    label_diameter,
-                    label_diameter,
-                );
-                draw_circular_artwork(canvas, texture, label)?;
-
-                // Preserve the familiar center spindle detail without obscuring
-                // more than a tiny portion of the cover.
-                let spindle_radius = (target.width() / 160).max(2) as i32;
-                draw_filled_circle(
-                    canvas,
-                    center_x,
-                    center_y,
-                    spindle_radius,
-                    Color::RGB(210, 210, 205),
-                )?;
-            } else {
+            if !ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
                 canvas.copy(texture, None, target)?;
             }
         }
@@ -1638,6 +1668,8 @@ pub fn run_display_loop(
     let mut event_pump = sdl.event_pump()?;
     let mut loaded_version: u64 = u64::MAX;
     let mut artwork_texture: Option<Texture<'_>> = None;
+    let mut circular_artwork_texture: Option<Texture<'_>> = None;
+    let mut artwork_started_at = Instant::now();
     let mut visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
     let mut last_canvas_size: Option<(u32, u32)> = None;
     let mut display_peak = 0.0f32;
@@ -1819,6 +1851,32 @@ pub fn run_display_loop(
                 match texture_creator.load_texture(&state.artwork_path) {
                     Ok(texture) => {
                         artwork_texture = Some(texture);
+                        let record_rect = compute_record_rect(scene_w, top_h);
+                        let label_diameter =
+                            ((record_rect.width() as f32) / 3.0).round().max(1.0) as u32;
+                        let mut circular_texture = texture_creator
+                            .create_texture_target(
+                                PixelFormatEnum::RGBA8888,
+                                label_diameter,
+                                label_diameter,
+                            )
+                            .map_err(|e| e.to_string())?;
+                        circular_texture.set_blend_mode(BlendMode::Blend);
+                        canvas
+                            .with_texture_canvas(&mut circular_texture, |label_canvas| {
+                                label_canvas.set_draw_color(Color::RGBA(0, 0, 0, 0));
+                                label_canvas.clear();
+                                if let Some(source) = artwork_texture.as_ref() {
+                                    let _ = draw_circular_artwork(
+                                        label_canvas,
+                                        source,
+                                        Rect::new(0, 0, label_diameter, label_diameter),
+                                    );
+                                }
+                            })
+                            .map_err(|e| e.to_string())?;
+                        circular_artwork_texture = Some(circular_texture);
+                        artwork_started_at = Instant::now();
                         visualizer_colors =
                             visualizer_colors_for_artwork(&ctx, Some(&state.artwork_path));
                         loaded_version = state.version;
@@ -1833,11 +1891,13 @@ pub fn run_display_loop(
                     Err(e) => {
                         log_error(&ctx, &format!("Renderer failed to load artwork: {e}"));
                         artwork_texture = None;
+                        circular_artwork_texture = None;
                         visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
                     }
                 }
             } else {
                 artwork_texture = None;
+                circular_artwork_texture = None;
                 visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
                 loaded_version = state.version;
             }
@@ -1894,13 +1954,9 @@ pub fn run_display_loop(
                 top_h,
             )?;
 
-            let artwork_rect = artwork_texture.as_ref().map(|texture| {
-                if ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
-                    compute_record_rect(scene_w, top_h)
-                } else {
-                    compute_artwork_rect(texture.query(), scene_w, top_h)
-                }
-            });
+            let artwork_rect = artwork_texture
+                .as_ref()
+                .map(|texture| compute_artwork_rect(texture.query(), scene_w, top_h));
 
             let cache = StaticSceneCache {
                 version: state.version,
@@ -1949,6 +2005,95 @@ pub fn run_display_loop(
 
         let static_target = Rect::new(offset_x, offset_y, render_w, render_h);
         canvas.copy(&static_scene_texture, None, static_target)?;
+
+        if ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
+            if let (Some(artwork), Some(cache)) =
+                (artwork_texture.as_ref(), static_scene_cache.as_ref())
+            {
+                if let Some(cover_scene) = cache.artwork_rect {
+                    let elapsed = artwork_started_at.elapsed().as_secs_f32();
+                    let cover = Rect::new(
+                        sx(cover_scene.x()),
+                        sy(cover_scene.y()),
+                        sw(cover_scene.width()),
+                        sh(cover_scene.height()),
+                    );
+
+                    if elapsed < 5.0 {
+                        canvas.copy(artwork, None, cover)?;
+                    } else {
+                        let record_scene = compute_record_rect(scene_w, top_h);
+                        let record = Rect::new(
+                            sx(record_scene.x()),
+                            sy(record_scene.y()),
+                            sw(record_scene.width()),
+                            sh(record_scene.height()),
+                        );
+                        draw_vinyl_record(&mut canvas, record)?;
+
+                        let label_diameter = record.width() / 3;
+                        let label = Rect::new(
+                            record.x() + (record.width() - label_diameter) as i32 / 2,
+                            record.y() + (record.height() - label_diameter) as i32 / 2,
+                            label_diameter,
+                            label_diameter,
+                        );
+
+                        const SHRINK_SECONDS: f32 = 2.5;
+                        let linear_progress = ((elapsed - 5.0) / SHRINK_SECONDS).clamp(0.0, 1.0);
+                        let progress =
+                            linear_progress * linear_progress * (3.0 - 2.0 * linear_progress);
+                        let interpolate = |start: i32, end: i32| {
+                            (start as f32 + (end - start) as f32 * progress).round() as i32
+                        };
+                        let interpolate_size = |start: u32, end: u32| {
+                            (start as f32 + (end as f32 - start as f32) * progress).round() as u32
+                        };
+                        let shrinking_cover = Rect::new(
+                            interpolate(cover.x(), label.x()),
+                            interpolate(cover.y(), label.y()),
+                            interpolate_size(cover.width(), label.width()),
+                            interpolate_size(cover.height(), label.height()),
+                        );
+
+                        // 33 1/3 RPM equals 200 degrees per second.
+                        let rotation = ((elapsed - 5.0) as f64 * 200.0) % 360.0;
+                        if linear_progress < 1.0 {
+                            canvas.copy_ex(
+                                artwork,
+                                None,
+                                shrinking_cover,
+                                rotation,
+                                None,
+                                false,
+                                false,
+                            )?;
+                        } else if let Some(circular) = circular_artwork_texture.as_ref() {
+                            canvas.copy_ex(
+                                circular,
+                                None,
+                                label,
+                                rotation,
+                                None,
+                                false,
+                                false,
+                            )?;
+                        }
+
+                        let center_x = record.x() + record.width() as i32 / 2;
+                        let center_y = record.y() + record.height() as i32 / 2;
+                        let spindle_radius = (record.width() / 160).max(2) as i32;
+                        draw_filled_circle(
+                            &mut canvas,
+                            center_x,
+                            center_y,
+                            spindle_radius,
+                            Color::RGB(210, 210, 205),
+                        )?;
+                    }
+                }
+            }
+        }
 
         if let Some(cache) = static_scene_cache.as_ref() {
             cache.draw_text(
