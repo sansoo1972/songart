@@ -125,6 +125,7 @@ config/songart.toml
 - `paths` defines SongRec and artwork paths
 - `display` selects the active display preset and frame timing
 - `display.colors` controls the major display-region backgrounds
+- `artwork.mode` selects the standard cover or turntable-style presentation
 - `display_presets` define scene geometry and spacing
 - `fonts` selects fixed or metadata-driven font behavior
 - `font_themes` define title/body font paths and font sizes
@@ -166,6 +167,9 @@ background = "#000000"
 artwork_background = "#000000"
 metadata_background = "#000000"
 visualizer_background = "#000000"
+
+[artwork]
+mode = "cover" # cover, turntable
 
 [display_presets.portrait]
 width = 1080

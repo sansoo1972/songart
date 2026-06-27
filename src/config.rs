@@ -13,10 +13,33 @@ pub struct AppConfig {
     pub audio: AudioConfig,
     pub paths: PathsConfig,
     pub display: DisplayConfig,
+    #[serde(default)]
+    pub artwork: ArtworkConfig,
     pub display_presets: HashMap<String, DisplayPreset>,
     pub fonts: FontsConfig,
     pub font_themes: HashMap<String, FontTheme>,
     pub visualizer: VisualizerConfig,
+}
+
+// ==============================================================================
+// Artwork
+// ==============================================================================
+
+/// Controls how album artwork is presented.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ArtworkConfig {
+    /// `cover` keeps the original rectangular presentation; `turntable` renders
+    /// the artwork as the center label of a vinyl record.
+    #[serde(default = "default_artwork_mode")]
+    pub mode: String,
+}
+
+impl Default for ArtworkConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_artwork_mode(),
+        }
+    }
 }
 
 // ==============================================================================
@@ -380,6 +403,10 @@ impl Default for VisualizerColorsConfig {
 
 fn default_black_color() -> String {
     "#000000".to_string()
+}
+
+fn default_artwork_mode() -> String {
+    "cover".to_string()
 }
 
 // Audio defaults.

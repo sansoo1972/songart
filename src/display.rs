@@ -1310,6 +1310,79 @@ fn compute_artwork_rect(query: TextureQuery, scene_w: u32, top_h: u32) -> Rect {
     Rect::new(x, y, draw_w, draw_h)
 }
 
+fn compute_record_rect(scene_w: u32, top_h: u32) -> Rect {
+    let padding = 24u32;
+    let diameter = scene_w
+        .saturating_sub(padding * 2)
+        .min(top_h.saturating_sub(padding * 2));
+    Rect::new(
+        ((scene_w - diameter) / 2) as i32,
+        ((top_h - diameter) / 2) as i32,
+        diameter,
+        diameter,
+    )
+}
+
+fn draw_filled_circle(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    center_x: i32,
+    center_y: i32,
+    radius: i32,
+    color: Color,
+) -> Result<(), String> {
+    canvas.set_draw_color(color);
+    for y in -radius..=radius {
+        let half_width = ((radius * radius - y * y) as f32).sqrt() as i32;
+        canvas.draw_line(
+            Point::new(center_x - half_width, center_y + y),
+            Point::new(center_x + half_width, center_y + y),
+        )?;
+    }
+    Ok(())
+}
+
+fn draw_circular_artwork(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    texture: &Texture<'_>,
+    target: Rect,
+) -> Result<(), String> {
+    let query = texture.query();
+    let source_size = query.width.min(query.height);
+    let source_x = (query.width - source_size) / 2;
+    let source_y = (query.height - source_size) / 2;
+    let radius = target.width() as i32 / 2;
+    let center_x = target.x() + radius;
+    let center_y = target.y() + radius;
+
+    for y in -radius..radius {
+        let half_width = ((radius * radius - y * y) as f32).sqrt() as i32;
+        let destination_width = (half_width * 2).max(1) as u32;
+        let source_row = (((y + radius) as f32 / (radius * 2) as f32)
+            * source_size as f32) as u32;
+        let source_half_width =
+            ((half_width as f32 / radius as f32) * source_size as f32 / 2.0) as u32;
+        let source_center = source_x + source_size / 2;
+        let source_width = (source_half_width * 2).max(1);
+
+        canvas.copy(
+            texture,
+            Rect::new(
+                source_center.saturating_sub(source_half_width) as i32,
+                (source_y + source_row.min(source_size - 1)) as i32,
+                source_width.min(source_size),
+                1,
+            ),
+            Rect::new(
+                center_x - half_width,
+                center_y + y,
+                destination_width,
+                1,
+            ),
+        )?;
+    }
+    Ok(())
+}
+
 struct StaticSceneCache<'a> {
     version: u64,
     text: TextCache<'a>,
@@ -1336,7 +1409,35 @@ impl<'a> StaticSceneCache<'a> {
         canvas.fill_rect(Rect::new(0, top_h as i32, scene_w, bottom_h))?;
 
         if let (Some(texture), Some(target)) = (artwork_texture, self.artwork_rect) {
-            canvas.copy(texture, None, target)?;
+            if ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
+                let center_x = target.x() + target.width() as i32 / 2;
+                let center_y = target.y() + target.height() as i32 / 2;
+                let radius = target.width() as i32 / 2;
+                draw_filled_circle(canvas, center_x, center_y, radius, Color::RGB(16, 16, 18))?;
+
+                // A standard LP label is roughly one third of the record diameter.
+                let label_diameter = ((target.width() as f32) / 3.0).round() as u32;
+                let label = Rect::new(
+                    center_x - label_diameter as i32 / 2,
+                    center_y - label_diameter as i32 / 2,
+                    label_diameter,
+                    label_diameter,
+                );
+                draw_circular_artwork(canvas, texture, label)?;
+
+                // Preserve the familiar center spindle detail without obscuring
+                // more than a tiny portion of the cover.
+                let spindle_radius = (target.width() / 160).max(2) as i32;
+                draw_filled_circle(
+                    canvas,
+                    center_x,
+                    center_y,
+                    spindle_radius,
+                    Color::RGB(210, 210, 205),
+                )?;
+            } else {
+                canvas.copy(texture, None, target)?;
+            }
         }
 
         Ok(())
@@ -1793,9 +1894,13 @@ pub fn run_display_loop(
                 top_h,
             )?;
 
-            let artwork_rect = artwork_texture
-                .as_ref()
-                .map(|texture| compute_artwork_rect(texture.query(), scene_w, top_h));
+            let artwork_rect = artwork_texture.as_ref().map(|texture| {
+                if ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
+                    compute_record_rect(scene_w, top_h)
+                } else {
+                    compute_artwork_rect(texture.query(), scene_w, top_h)
+                }
+            });
 
             let cache = StaticSceneCache {
                 version: state.version,
