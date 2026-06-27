@@ -1859,18 +1859,20 @@ pub fn run_display_loop(
         } else if state.version != loaded_version {
             if !state.artwork_path.is_empty() && Path::new(&state.artwork_path).exists() {
                 match texture_creator.load_texture(&state.artwork_path) {
-                    Ok(texture) => {
+                    Ok(mut texture) => {
+                        // Loaded JPG/PNG textures may default to BlendMode::None,
+                        // in which case alpha modulation looks like a hard cut.
+                        texture.set_blend_mode(BlendMode::Blend);
                         previous_artwork_texture = artwork_texture.take();
                         previous_circular_artwork_texture = circular_artwork_texture.take();
                         artwork_texture = Some(texture);
                         let record_rect = compute_record_rect(scene_w, top_h);
-                        let label_diameter =
-                            ((record_rect.width() as f32) / 3.0).round().max(1.0) as u32;
+                        let circular_diameter = record_rect.width().max(1);
                         let mut circular_texture = texture_creator
                             .create_texture_target(
                                 PixelFormatEnum::RGBA8888,
-                                label_diameter,
-                                label_diameter,
+                                circular_diameter,
+                                circular_diameter,
                             )
                             .map_err(|e| e.to_string())?;
                         circular_texture.set_blend_mode(BlendMode::Blend);
@@ -1882,7 +1884,7 @@ pub fn run_display_loop(
                                     let _ = draw_circular_artwork(
                                         label_canvas,
                                         source,
-                                        Rect::new(0, 0, label_diameter, label_diameter),
+                                        Rect::new(0, 0, circular_diameter, circular_diameter),
                                     );
                                 }
                             })
@@ -2090,7 +2092,6 @@ pub fn run_display_loop(
                             sw(record_scene.width()),
                             sh(record_scene.height()),
                         );
-                        draw_vinyl_record(&mut canvas, record, 1.0)?;
 
                         let label_diameter = record.width() / 3;
                         let label = Rect::new(
@@ -2100,58 +2101,69 @@ pub fn run_display_loop(
                             label_diameter,
                         );
 
+                        const CROP_SECONDS: f32 = 2.0;
                         const SHRINK_SECONDS: f32 = 2.5;
-                        let shrink_elapsed = elapsed - ARTWORK_FADE_SECONDS - 5.0;
-                        let linear_progress = (shrink_elapsed / SHRINK_SECONDS).clamp(0.0, 1.0);
-                        let progress =
-                            linear_progress * linear_progress * (3.0 - 2.0 * linear_progress);
-                        let interpolate = |start: i32, end: i32| {
-                            (start as f32 + (end - start) as f32 * progress).round() as i32
-                        };
-                        let interpolate_size = |start: u32, end: u32| {
-                            (start as f32 + (end as f32 - start as f32) * progress).round() as u32
-                        };
-                        let shrinking_cover = Rect::new(
-                            interpolate(cover.x(), label.x()),
-                            interpolate(cover.y(), label.y()),
-                            interpolate_size(cover.width(), label.width()),
-                            interpolate_size(cover.height(), label.height()),
-                        );
+                        let morph_elapsed = elapsed - ARTWORK_FADE_SECONDS - 5.0;
+                        if morph_elapsed < CROP_SECONDS {
+                            let linear_crop = (morph_elapsed / CROP_SECONDS).clamp(0.0, 1.0);
+                            let crop =
+                                linear_crop * linear_crop * (3.0 - 2.0 * linear_crop);
+                            artwork.set_alpha_mod(((1.0 - crop) * 255.0).round() as u8);
+                            canvas.copy(artwork, None, cover)?;
+                            artwork.set_alpha_mod(255);
 
-                        // 33 1/3 RPM equals 200 degrees per second.
-                        let rotation = (shrink_elapsed as f64 * 200.0) % 360.0;
-                        if linear_progress < 1.0 {
-                            canvas.copy_ex(
-                                artwork,
-                                None,
-                                shrinking_cover,
-                                rotation,
-                                None,
-                                false,
-                                false,
-                            )?;
-                        } else if let Some(circular) = circular_artwork_texture.as_ref() {
-                            canvas.copy_ex(
-                                circular,
-                                None,
-                                label,
-                                rotation,
-                                None,
-                                false,
-                                false,
+                            if let Some(circular) = circular_artwork_texture.as_mut() {
+                                circular.set_alpha_mod((crop * 255.0).round() as u8);
+                                canvas.copy(circular, None, record)?;
+                                circular.set_alpha_mod(255);
+                            }
+                        } else {
+                            draw_vinyl_record(&mut canvas, record, 1.0)?;
+
+                            let shrink_elapsed = morph_elapsed - CROP_SECONDS;
+                            let linear_progress =
+                                (shrink_elapsed / SHRINK_SECONDS).clamp(0.0, 1.0);
+                            let progress =
+                                linear_progress * linear_progress * (3.0 - 2.0 * linear_progress);
+                            let interpolate = |start: i32, end: i32| {
+                                (start as f32 + (end - start) as f32 * progress).round() as i32
+                            };
+                            let interpolate_size = |start: u32, end: u32| {
+                                (start as f32 + (end as f32 - start as f32) * progress).round()
+                                    as u32
+                            };
+                            let shrinking_disc = Rect::new(
+                                interpolate(record.x(), label.x()),
+                                interpolate(record.y(), label.y()),
+                                interpolate_size(record.width(), label.width()),
+                                interpolate_size(record.height(), label.height()),
+                            );
+
+                            // 33 1/3 RPM equals 200 degrees per second.
+                            let rotation = (shrink_elapsed as f64 * 200.0) % 360.0;
+                            if let Some(circular) = circular_artwork_texture.as_ref() {
+                                canvas.copy_ex(
+                                    circular,
+                                    None,
+                                    shrinking_disc,
+                                    rotation,
+                                    None,
+                                    false,
+                                    false,
+                                )?;
+                            }
+
+                            let center_x = record.x() + record.width() as i32 / 2;
+                            let center_y = record.y() + record.height() as i32 / 2;
+                            let spindle_radius = (record.width() / 160).max(2) as i32;
+                            draw_filled_circle(
+                                &mut canvas,
+                                center_x,
+                                center_y,
+                                spindle_radius,
+                                Color::RGB(210, 210, 205),
                             )?;
                         }
-
-                        let center_x = record.x() + record.width() as i32 / 2;
-                        let center_y = record.y() + record.height() as i32 / 2;
-                        let spindle_radius = (record.width() / 160).max(2) as i32;
-                        draw_filled_circle(
-                            &mut canvas,
-                            center_x,
-                            center_y,
-                            spindle_radius,
-                            Color::RGB(210, 210, 205),
-                        )?;
                     }
                 }
             }
