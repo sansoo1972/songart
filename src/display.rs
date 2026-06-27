@@ -1754,6 +1754,32 @@ pub fn run_display_loop(
         .create_texture_target(PixelFormatEnum::RGBA8888, scene_w, scene_h)
         .map_err(|e| e.to_string())?;
 
+    // The detailed groove geometry is expensive to redraw every frame on a
+    // Raspberry Pi. Render it once, then rotate the complete vinyl surface as
+    // a cached texture together with the album label.
+    let record_scene = compute_record_rect(scene_w, top_h);
+    let mut vinyl_texture = if ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
+        let diameter = record_scene.width().max(1);
+        let mut texture = texture_creator
+            .create_texture_target(PixelFormatEnum::RGBA8888, diameter, diameter)
+            .map_err(|e| e.to_string())?;
+        texture.set_blend_mode(BlendMode::Blend);
+        canvas
+            .with_texture_canvas(&mut texture, |vinyl_canvas| {
+                vinyl_canvas.set_draw_color(Color::RGBA(0, 0, 0, 0));
+                vinyl_canvas.clear();
+                let _ = draw_vinyl_record(
+                    vinyl_canvas,
+                    Rect::new(0, 0, diameter, diameter),
+                    1.0,
+                );
+            })
+            .map_err(|e| e.to_string())?;
+        Some(texture)
+    } else {
+        None
+    };
+
     log_info(&ctx, "Display loop started.");
 
     while running.load(Ordering::SeqCst) {
@@ -2106,7 +2132,6 @@ pub fn run_display_loop(
 
                     if elapsed < ARTWORK_FADE_SECONDS {
                         let fade = (elapsed / ARTWORK_FADE_SECONDS).clamp(0.0, 1.0);
-                        let record_scene = compute_record_rect(scene_w, top_h);
                         let record = Rect::new(
                             sx(record_scene.x()),
                             sy(record_scene.y()),
@@ -2116,7 +2141,6 @@ pub fn run_display_loop(
                         if let Some(previous_label) =
                             previous_circular_artwork_texture.as_mut()
                         {
-                            draw_vinyl_record(&mut canvas, record, 1.0 - fade)?;
                             let label_diameter = record.width() / 3;
                             let label = Rect::new(
                                 record.x() + (record.width() - label_diameter) as i32 / 2,
@@ -2124,9 +2148,22 @@ pub fn run_display_loop(
                                 label_diameter,
                                 label_diameter,
                             );
+                            let rotation = (elapsed as f64 * 200.0) % 360.0;
+                            if let Some(vinyl) = vinyl_texture.as_mut() {
+                                vinyl.set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
+                                canvas.copy_ex(
+                                    vinyl,
+                                    None,
+                                    record,
+                                    rotation,
+                                    None,
+                                    false,
+                                    false,
+                                )?;
+                                vinyl.set_alpha_mod(255);
+                            }
                             previous_label
                                 .set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
-                            let rotation = (elapsed as f64 * 200.0) % 360.0;
                             canvas.copy_ex(
                                 previous_label,
                                 None,
@@ -2144,7 +2181,6 @@ pub fn run_display_loop(
                     } else if elapsed < ARTWORK_FADE_SECONDS + 5.0 {
                         canvas.copy(artwork, None, cover)?;
                     } else {
-                        let record_scene = compute_record_rect(scene_w, top_h);
                         let record = Rect::new(
                             sx(record_scene.x()),
                             sy(record_scene.y()),
@@ -2177,8 +2213,6 @@ pub fn run_display_loop(
                                 circular.set_alpha_mod(255);
                             }
                         } else {
-                            draw_vinyl_record(&mut canvas, record, 1.0)?;
-
                             let shrink_elapsed = morph_elapsed - CROP_SECONDS;
                             let linear_progress =
                                 (shrink_elapsed / SHRINK_SECONDS).clamp(0.0, 1.0);
@@ -2200,6 +2234,17 @@ pub fn run_display_loop(
 
                             // 33 1/3 RPM equals 200 degrees per second.
                             let rotation = (shrink_elapsed as f64 * 200.0) % 360.0;
+                            if let Some(vinyl) = vinyl_texture.as_ref() {
+                                canvas.copy_ex(
+                                    vinyl,
+                                    None,
+                                    record,
+                                    rotation,
+                                    None,
+                                    false,
+                                    false,
+                                )?;
+                            }
                             if let Some(circular) = circular_artwork_texture.as_ref() {
                                 canvas.copy_ex(
                                     circular,
