@@ -424,7 +424,7 @@ fn default_buffer_seconds() -> usize {
 }
 
 fn default_recognition_window_ms() -> usize {
-    10_000
+    15_000
 }
 
 fn default_read_chunk_bytes() -> usize {
