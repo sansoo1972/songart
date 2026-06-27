@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.12.1 adds a polished oscilloscope visualizer view with a graticule grid, clipped trace area, layered trace glow, and higher-density default sampling.
+Version 0.13.0 adds an optional animated turntable artwork mode with realistic vinyl grooves, circular album labels, 33⅓ RPM rotation, and crossfades between tracks.
 
 ---
 
@@ -13,6 +13,7 @@ Version 0.12.1 adds a polished oscilloscope visualizer view with a graticule gri
 - Real-time music recognition via SongRec
 - Automatic high-resolution album artwork retrieval
 - SDL-based artwork and metadata display
+- Optional animated turntable artwork mode with realistic LP presentation
 - Real-time FFT spectrum analyzer
 - Oscilloscope audio visualizer
 - Shared rolling audio buffer for live visualization
@@ -499,15 +500,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.12.1**.
+This project is now at **0.13.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.12.1 -m "songart 0.12.1"
-git push origin v0.12.1
+git tag -a v0.13.0 -m "songart 0.13.0"
+git push origin v0.13.0
 ```
 
 ---
@@ -540,14 +541,12 @@ git push origin v0.12.1
 ## Future Improvements
 
 - Additional artwork palette tuning options
-- Optional turntable-style album artwork mode
 - Kiosk-selectable display and artwork modes
 - Further font-theme refinement
 - Artwork caching and reload optimization
 - More display presets and layout themes
 - Metadata enrichment from additional sources
 - Boot-time auto start / service mode
-- Transition effects between tracks
 - Theme-based color palettes
 - GPU-rendered visual effects
 

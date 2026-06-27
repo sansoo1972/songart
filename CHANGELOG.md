@@ -4,6 +4,20 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
+## [0.13.0] - 2026-06-26
+
+### Added
+- [#13](https://github.com/sansoo1972/songart/issues/13) Optional `turntable` artwork mode that presents album art as the center label of a 33⅓ RPM vinyl record.
+- Five-second full-cover presentation followed by a soft circular crop and animated shrink into the record label.
+- Realistic vinyl treatment with a dense continuous spiral groove, five track regions, runout detail, outer rim, and center spindle.
+- Crossfade from the outgoing spinning record into newly identified full-size artwork.
+
+### Changed
+- Artwork rendering is now performed dynamically so track transitions and turntable animation remain smooth while metadata and visualizers continue rendering.
+- The existing static `cover` artwork mode remains the default and fallback presentation.
+
+---
+
 ## [0.12.1] - 2026-06-23
 
 ### Added
