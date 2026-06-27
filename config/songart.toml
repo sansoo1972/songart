@@ -39,7 +39,8 @@ channels = 1
 buffer_seconds = 20
 
 # Amount of recent buffered audio written to WAV for SongRec.
-recognition_window_ms = 10000
+# 15 seconds improves recognition of newer indie and foreign-language music.
+recognition_window_ms = 15000
 
 # Size of read chunks from the live capture stream.
 read_chunk_bytes = 1024

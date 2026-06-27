@@ -133,6 +133,13 @@ config/songart.toml
 - `visualizer` controls FFT, spectrum, oscilloscope, and responsiveness behavior
 - `visualizer.colors` controls fixed or artwork-derived visualizer foreground colors
 
+> [!IMPORTANT]
+> Keep `audio.recognition_window_ms` at **15000 ms or longer** for reliable
+> recognition of newer indie and foreign-language music. Shorter 10-second
+> samples were less consistent in Raspberry Pi testing. A longer window can
+> delay the first identification slightly, and `audio.buffer_seconds` must be
+> long enough to contain the complete recognition window.
+
 ---
 
 ## Example Configuration
@@ -150,7 +157,7 @@ loop_delay_secs = 3
 sample_rate = 16000
 channels = 1
 buffer_seconds = 20
-recognition_window_ms = 10000
+recognition_window_ms = 15000
 read_chunk_bytes = 1024
 
 [paths]
