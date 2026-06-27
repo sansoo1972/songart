@@ -10,7 +10,7 @@ use sdl2::image::{InitFlag, LoadSurface, LoadTexture};
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::{Point, Rect};
-use sdl2::render::{Texture, TextureCreator, TextureQuery};
+use sdl2::render::{BlendMode, Texture, TextureCreator, TextureQuery};
 use sdl2::surface::Surface;
 use sdl2::video::WindowContext;
 
@@ -1310,6 +1310,203 @@ fn compute_artwork_rect(query: TextureQuery, scene_w: u32, top_h: u32) -> Rect {
     Rect::new(x, y, draw_w, draw_h)
 }
 
+fn compute_record_rect(scene_w: u32, top_h: u32) -> Rect {
+    let padding = 24u32;
+    let diameter = scene_w
+        .saturating_sub(padding * 2)
+        .min(top_h.saturating_sub(padding * 2));
+    Rect::new(
+        ((scene_w - diameter) / 2) as i32,
+        ((top_h - diameter) / 2) as i32,
+        diameter,
+        diameter,
+    )
+}
+
+fn draw_filled_circle(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    center_x: i32,
+    center_y: i32,
+    radius: i32,
+    color: Color,
+) -> Result<(), String> {
+    canvas.set_draw_color(color);
+    for y in -radius..=radius {
+        let half_width = ((radius * radius - y * y) as f32).sqrt() as i32;
+        canvas.draw_line(
+            Point::new(center_x - half_width, center_y + y),
+            Point::new(center_x + half_width, center_y + y),
+        )?;
+    }
+    Ok(())
+}
+
+fn draw_circle_outline(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    center_x: i32,
+    center_y: i32,
+    radius: i32,
+    color: Color,
+) -> Result<(), String> {
+    const SEGMENTS: usize = 96;
+    let mut points = Vec::with_capacity(SEGMENTS + 1);
+    for segment in 0..=SEGMENTS {
+        let angle = (segment as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+        points.push(Point::new(
+            center_x + (angle.cos() * radius as f32).round() as i32,
+            center_y + (angle.sin() * radius as f32).round() as i32,
+        ));
+    }
+    canvas.set_draw_color(color);
+    canvas.draw_lines(points.as_slice())
+}
+
+fn draw_spiral_groove(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    center_x: i32,
+    center_y: i32,
+    outer_radius: i32,
+    inner_radius: i32,
+    color: Color,
+) -> Result<(), String> {
+    // One continuous Archimedean spiral approximates the groove cut into an
+    // LP. Seventy-two turns keep the groove bed dense without overwhelming
+    // the Raspberry Pi renderer.
+    const TURNS: usize = 72;
+    const POINTS_PER_TURN: usize = 48;
+    let point_count = TURNS * POINTS_PER_TURN;
+    let mut points = Vec::with_capacity(point_count + 1);
+
+    for point in 0..=point_count {
+        let progress = point as f32 / point_count as f32;
+        let radius =
+            outer_radius as f32 + (inner_radius - outer_radius) as f32 * progress;
+        let angle = progress * TURNS as f32 * std::f32::consts::TAU;
+        points.push(Point::new(
+            center_x + (angle.cos() * radius).round() as i32,
+            center_y + (angle.sin() * radius).round() as i32,
+        ));
+    }
+
+    canvas.set_draw_color(color);
+    canvas.draw_lines(points.as_slice())
+}
+
+fn draw_vinyl_record(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    target: Rect,
+    opacity: f32,
+) -> Result<(), String> {
+    let opacity = opacity.clamp(0.0, 1.0);
+    let dim = |value: u8| ((value as f32 * opacity).round()) as u8;
+    let center_x = target.x() + target.width() as i32 / 2;
+    let center_y = target.y() + target.height() as i32 / 2;
+    let radius = target.width() as i32 / 2;
+    draw_filled_circle(
+        canvas,
+        center_x,
+        center_y,
+        radius,
+        Color::RGB(dim(12), dim(12), dim(14)),
+    )?;
+
+    // A real record has one densely packed continuous spiral groove rather
+    // than a small stack of widely spaced rings.
+    let label_radius = radius / 6;
+    let inner_groove_radius = label_radius + (radius / 28).max(2);
+    let outer_groove_radius = radius - 5;
+    draw_spiral_groove(
+        canvas,
+        center_x,
+        center_y,
+        outer_groove_radius,
+        inner_groove_radius,
+        Color::RGB(dim(38), dim(38), dim(42)),
+    )?;
+
+    // Four wider-pitch bands divide the side into five plausible tracks.
+    // Darkening the groove bed and catching one edge makes each break visible
+    // without turning the record back into a bullseye.
+    let groove_span = outer_groove_radius - inner_groove_radius;
+    for track in 1..5 {
+        let break_radius = inner_groove_radius + (groove_span * track / 5);
+        for offset in -2..=2 {
+            draw_circle_outline(
+                canvas,
+                center_x,
+                center_y,
+                break_radius + offset,
+                Color::RGB(dim(14), dim(14), dim(16)),
+            )?;
+        }
+        draw_circle_outline(
+            canvas,
+            center_x,
+            center_y,
+            break_radius + 3,
+            Color::RGB(dim(30), dim(30), dim(34)),
+        )?;
+    }
+
+    // The smooth runout area and raised outer lip catch a little more light.
+    draw_circle_outline(
+        canvas,
+        center_x,
+        center_y,
+        label_radius + (radius / 40).max(2),
+        Color::RGB(dim(31), dim(31), dim(35)),
+    )?;
+    draw_circle_outline(
+        canvas,
+        center_x,
+        center_y,
+        radius - 1,
+        Color::RGB(dim(48), dim(48), dim(52)),
+    )
+}
+
+fn draw_circular_artwork(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    texture: &Texture<'_>,
+    target: Rect,
+) -> Result<(), String> {
+    let query = texture.query();
+    let source_size = query.width.min(query.height);
+    let source_x = (query.width - source_size) / 2;
+    let source_y = (query.height - source_size) / 2;
+    let radius = target.width() as i32 / 2;
+    let center_x = target.x() + radius;
+    let center_y = target.y() + radius;
+
+    for y in -radius..radius {
+        let half_width = ((radius * radius - y * y) as f32).sqrt() as i32;
+        let destination_width = (half_width * 2).max(1) as u32;
+        let source_row = (((y + radius) as f32 / (radius * 2) as f32)
+            * source_size as f32) as u32;
+        let source_half_width =
+            ((half_width as f32 / radius as f32) * source_size as f32 / 2.0) as u32;
+        let source_center = source_x + source_size / 2;
+        let source_width = (source_half_width * 2).max(1);
+
+        canvas.copy(
+            texture,
+            Rect::new(
+                source_center.saturating_sub(source_half_width) as i32,
+                (source_y + source_row.min(source_size - 1)) as i32,
+                source_width.min(source_size),
+                1,
+            ),
+            Rect::new(
+                center_x - half_width,
+                center_y + y,
+                destination_width,
+                1,
+            ),
+        )?;
+    }
+    Ok(())
+}
+
 struct StaticSceneCache<'a> {
     version: u64,
     text: TextCache<'a>,
@@ -1321,7 +1518,6 @@ impl<'a> StaticSceneCache<'a> {
         &self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
         ctx: &AppContext,
-        artwork_texture: Option<&Texture<'a>>,
         scene_w: u32,
         top_h: u32,
         bottom_h: u32,
@@ -1334,10 +1530,6 @@ impl<'a> StaticSceneCache<'a> {
 
         canvas.set_draw_color(metadata_background_color(ctx));
         canvas.fill_rect(Rect::new(0, top_h as i32, scene_w, bottom_h))?;
-
-        if let (Some(texture), Some(target)) = (artwork_texture, self.artwork_rect) {
-            canvas.copy(texture, None, target)?;
-        }
 
         Ok(())
     }
@@ -1536,7 +1728,12 @@ pub fn run_display_loop(
 
     let mut event_pump = sdl.event_pump()?;
     let mut loaded_version: u64 = u64::MAX;
+    let mut loaded_track_identity = String::new();
     let mut artwork_texture: Option<Texture<'_>> = None;
+    let mut previous_artwork_texture: Option<Texture<'_>> = None;
+    let mut circular_artwork_texture: Option<Texture<'_>> = None;
+    let mut previous_circular_artwork_texture: Option<Texture<'_>> = None;
+    let mut artwork_started_at = Instant::now();
     let mut visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
     let mut last_canvas_size: Option<(u32, u32)> = None;
     let mut display_peak = 0.0f32;
@@ -1713,14 +1910,50 @@ pub fn run_display_loop(
             last_vis_debug = Instant::now();
         }
 
-        if state.version != loaded_version {
+        let track_identity = format!("{}\0{}", state.title, state.artist);
+        if state.version != loaded_version && track_identity == loaded_track_identity {
+            // Metadata-only updates for the current song should rebuild text,
+            // but must not restart its artwork animation.
+            loaded_version = state.version;
+        } else if state.version != loaded_version {
             if !state.artwork_path.is_empty() && Path::new(&state.artwork_path).exists() {
                 match texture_creator.load_texture(&state.artwork_path) {
-                    Ok(texture) => {
+                    Ok(mut texture) => {
+                        // Loaded JPG/PNG textures may default to BlendMode::None,
+                        // in which case alpha modulation looks like a hard cut.
+                        texture.set_blend_mode(BlendMode::Blend);
+                        previous_artwork_texture = artwork_texture.take();
+                        previous_circular_artwork_texture = circular_artwork_texture.take();
                         artwork_texture = Some(texture);
+                        let record_rect = compute_record_rect(scene_w, top_h);
+                        let circular_diameter = record_rect.width().max(1);
+                        let mut circular_texture = texture_creator
+                            .create_texture_target(
+                                PixelFormatEnum::RGBA8888,
+                                circular_diameter,
+                                circular_diameter,
+                            )
+                            .map_err(|e| e.to_string())?;
+                        circular_texture.set_blend_mode(BlendMode::Blend);
+                        canvas
+                            .with_texture_canvas(&mut circular_texture, |label_canvas| {
+                                label_canvas.set_draw_color(Color::RGBA(0, 0, 0, 0));
+                                label_canvas.clear();
+                                if let Some(source) = artwork_texture.as_ref() {
+                                    let _ = draw_circular_artwork(
+                                        label_canvas,
+                                        source,
+                                        Rect::new(0, 0, circular_diameter, circular_diameter),
+                                    );
+                                }
+                            })
+                            .map_err(|e| e.to_string())?;
+                        circular_artwork_texture = Some(circular_texture);
+                        artwork_started_at = Instant::now();
                         visualizer_colors =
                             visualizer_colors_for_artwork(&ctx, Some(&state.artwork_path));
                         loaded_version = state.version;
+                        loaded_track_identity = track_identity.clone();
                         log_debug(
                             &ctx,
                             &format!(
@@ -1732,13 +1965,20 @@ pub fn run_display_loop(
                     Err(e) => {
                         log_error(&ctx, &format!("Renderer failed to load artwork: {e}"));
                         artwork_texture = None;
+                        previous_artwork_texture = None;
+                        circular_artwork_texture = None;
+                        previous_circular_artwork_texture = None;
                         visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
                     }
                 }
             } else {
                 artwork_texture = None;
+                previous_artwork_texture = None;
+                circular_artwork_texture = None;
+                previous_circular_artwork_texture = None;
                 visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
                 loaded_version = state.version;
+                loaded_track_identity = track_identity;
             }
         }
 
@@ -1808,7 +2048,6 @@ pub fn run_display_loop(
                     let _ = cache.draw_static_scene(
                         tex_canvas,
                         &ctx,
-                        artwork_texture.as_ref(),
                         scene_w,
                         top_h,
                         bottom_h,
@@ -1844,6 +2083,177 @@ pub fn run_display_loop(
 
         let static_target = Rect::new(offset_x, offset_y, render_w, render_h);
         canvas.copy(&static_scene_texture, None, static_target)?;
+
+        const ARTWORK_FADE_SECONDS: f32 = 1.5;
+        let artwork_elapsed = artwork_started_at.elapsed().as_secs_f32();
+        if artwork_elapsed >= ARTWORK_FADE_SECONDS {
+            previous_artwork_texture = None;
+            previous_circular_artwork_texture = None;
+        }
+
+        if ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
+            if let (Some(artwork), Some(cache)) =
+                (artwork_texture.as_mut(), static_scene_cache.as_ref())
+            {
+                if let Some(cover_scene) = cache.artwork_rect {
+                    let elapsed = artwork_elapsed;
+                    let cover = Rect::new(
+                        sx(cover_scene.x()),
+                        sy(cover_scene.y()),
+                        sw(cover_scene.width()),
+                        sh(cover_scene.height()),
+                    );
+
+                    if elapsed < ARTWORK_FADE_SECONDS {
+                        let fade = (elapsed / ARTWORK_FADE_SECONDS).clamp(0.0, 1.0);
+                        let record_scene = compute_record_rect(scene_w, top_h);
+                        let record = Rect::new(
+                            sx(record_scene.x()),
+                            sy(record_scene.y()),
+                            sw(record_scene.width()),
+                            sh(record_scene.height()),
+                        );
+                        if let Some(previous_label) =
+                            previous_circular_artwork_texture.as_mut()
+                        {
+                            draw_vinyl_record(&mut canvas, record, 1.0 - fade)?;
+                            let label_diameter = record.width() / 3;
+                            let label = Rect::new(
+                                record.x() + (record.width() - label_diameter) as i32 / 2,
+                                record.y() + (record.height() - label_diameter) as i32 / 2,
+                                label_diameter,
+                                label_diameter,
+                            );
+                            previous_label
+                                .set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
+                            let rotation = (elapsed as f64 * 200.0) % 360.0;
+                            canvas.copy_ex(
+                                previous_label,
+                                None,
+                                label,
+                                rotation,
+                                None,
+                                false,
+                                false,
+                            )?;
+                            previous_label.set_alpha_mod(255);
+                        }
+                        artwork.set_alpha_mod((fade * 255.0).round() as u8);
+                        canvas.copy(artwork, None, cover)?;
+                        artwork.set_alpha_mod(255);
+                    } else if elapsed < ARTWORK_FADE_SECONDS + 5.0 {
+                        canvas.copy(artwork, None, cover)?;
+                    } else {
+                        let record_scene = compute_record_rect(scene_w, top_h);
+                        let record = Rect::new(
+                            sx(record_scene.x()),
+                            sy(record_scene.y()),
+                            sw(record_scene.width()),
+                            sh(record_scene.height()),
+                        );
+
+                        let label_diameter = record.width() / 3;
+                        let label = Rect::new(
+                            record.x() + (record.width() - label_diameter) as i32 / 2,
+                            record.y() + (record.height() - label_diameter) as i32 / 2,
+                            label_diameter,
+                            label_diameter,
+                        );
+
+                        const CROP_SECONDS: f32 = 2.0;
+                        const SHRINK_SECONDS: f32 = 2.5;
+                        let morph_elapsed = elapsed - ARTWORK_FADE_SECONDS - 5.0;
+                        if morph_elapsed < CROP_SECONDS {
+                            let linear_crop = (morph_elapsed / CROP_SECONDS).clamp(0.0, 1.0);
+                            let crop =
+                                linear_crop * linear_crop * (3.0 - 2.0 * linear_crop);
+                            artwork.set_alpha_mod(((1.0 - crop) * 255.0).round() as u8);
+                            canvas.copy(artwork, None, cover)?;
+                            artwork.set_alpha_mod(255);
+
+                            if let Some(circular) = circular_artwork_texture.as_mut() {
+                                circular.set_alpha_mod((crop * 255.0).round() as u8);
+                                canvas.copy(circular, None, record)?;
+                                circular.set_alpha_mod(255);
+                            }
+                        } else {
+                            draw_vinyl_record(&mut canvas, record, 1.0)?;
+
+                            let shrink_elapsed = morph_elapsed - CROP_SECONDS;
+                            let linear_progress =
+                                (shrink_elapsed / SHRINK_SECONDS).clamp(0.0, 1.0);
+                            let progress =
+                                linear_progress * linear_progress * (3.0 - 2.0 * linear_progress);
+                            let interpolate = |start: i32, end: i32| {
+                                (start as f32 + (end - start) as f32 * progress).round() as i32
+                            };
+                            let interpolate_size = |start: u32, end: u32| {
+                                (start as f32 + (end as f32 - start as f32) * progress).round()
+                                    as u32
+                            };
+                            let shrinking_disc = Rect::new(
+                                interpolate(record.x(), label.x()),
+                                interpolate(record.y(), label.y()),
+                                interpolate_size(record.width(), label.width()),
+                                interpolate_size(record.height(), label.height()),
+                            );
+
+                            // 33 1/3 RPM equals 200 degrees per second.
+                            let rotation = (shrink_elapsed as f64 * 200.0) % 360.0;
+                            if let Some(circular) = circular_artwork_texture.as_ref() {
+                                canvas.copy_ex(
+                                    circular,
+                                    None,
+                                    shrinking_disc,
+                                    rotation,
+                                    None,
+                                    false,
+                                    false,
+                                )?;
+                            }
+
+                            let center_x = record.x() + record.width() as i32 / 2;
+                            let center_y = record.y() + record.height() as i32 / 2;
+                            let spindle_radius = (record.width() / 160).max(2) as i32;
+                            draw_filled_circle(
+                                &mut canvas,
+                                center_x,
+                                center_y,
+                                spindle_radius,
+                                Color::RGB(210, 210, 205),
+                            )?;
+                        }
+                    }
+                }
+            }
+        } else if let (Some(artwork), Some(cache)) =
+            (artwork_texture.as_mut(), static_scene_cache.as_ref())
+        {
+            if let Some(cover_scene) = cache.artwork_rect {
+                let cover = Rect::new(
+                    sx(cover_scene.x()),
+                    sy(cover_scene.y()),
+                    sw(cover_scene.width()),
+                    sh(cover_scene.height()),
+                );
+                let fade = (artwork_elapsed / ARTWORK_FADE_SECONDS).clamp(0.0, 1.0);
+                if let Some(previous) = previous_artwork_texture.as_mut() {
+                    let previous_scene = compute_artwork_rect(previous.query(), scene_w, top_h);
+                    let previous_target = Rect::new(
+                        sx(previous_scene.x()),
+                        sy(previous_scene.y()),
+                        sw(previous_scene.width()),
+                        sh(previous_scene.height()),
+                    );
+                    previous.set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
+                    canvas.copy(previous, None, previous_target)?;
+                    previous.set_alpha_mod(255);
+                }
+                artwork.set_alpha_mod((fade * 255.0).round() as u8);
+                canvas.copy(artwork, None, cover)?;
+                artwork.set_alpha_mod(255);
+            }
+        }
 
         if let Some(cache) = static_scene_cache.as_ref() {
             cache.draw_text(
