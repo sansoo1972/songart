@@ -15,6 +15,7 @@ use sdl2::surface::Surface;
 use sdl2::video::WindowContext;
 
 use std::path::Path;
+use std::fs;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -1741,6 +1742,152 @@ fn visualizer_mode_from_config(mode: &str) -> VisualizerMode {
     }
 }
 
+fn cycle_option(current: &str, options: &[&str], direction: i32) -> String {
+    let index = options
+        .iter()
+        .position(|option| option.eq_ignore_ascii_case(current))
+        .unwrap_or(0) as i32;
+    let len = options.len() as i32;
+    options[(index + direction).rem_euclid(len) as usize].to_string()
+}
+
+fn save_display_modes(
+    path: &str,
+    artwork_mode: &str,
+    visualizer_mode: &str,
+) -> Result<(), String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {path}: {e}"))?;
+    let mut document = raw
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| format!("Failed to parse {path}: {e}"))?;
+    document["artwork"]["mode"] = toml_edit::value(artwork_mode);
+    document["visualizer"]["mode"] = toml_edit::value(visualizer_mode);
+
+    let backup = format!("{path}.bak");
+    let temporary = format!("{path}.tmp");
+    fs::copy(path, &backup)
+        .map_err(|e| format!("Failed to create {backup}: {e}"))?;
+    fs::write(&temporary, document.to_string())
+        .map_err(|e| format!("Failed to write {temporary}: {e}"))?;
+    fs::rename(&temporary, path)
+        .map_err(|e| format!("Failed to replace {path}: {e}"))
+}
+
+fn draw_settings_text(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    texture_creator: &TextureCreator<WindowContext>,
+    font: &sdl2::ttf::Font,
+    text: &str,
+    color: Color,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
+    let surface = font
+        .render(text)
+        .blended(color)
+        .map_err(|e| e.to_string())?;
+    let texture = texture_creator
+        .create_texture_from_surface(&surface)
+        .map_err(|e| e.to_string())?;
+    let query = texture.query();
+    canvas.copy(
+        &texture,
+        None,
+        Rect::new(x, y, query.width, query.height),
+    )
+}
+
+fn draw_settings_overlay(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    texture_creator: &TextureCreator<WindowContext>,
+    font: &sdl2::ttf::Font,
+    artwork_mode: &str,
+    visualizer_mode: &str,
+    selected: usize,
+    status: &str,
+) -> Result<(), String> {
+    let (canvas_w, canvas_h) = canvas.output_size().map_err(|e| e.to_string())?;
+    let panel_w = canvas_w.saturating_sub(80).min(760);
+    let panel_h = 360u32.min(canvas_h.saturating_sub(80));
+    let panel_x = ((canvas_w - panel_w) / 2) as i32;
+    let panel_y = ((canvas_h - panel_h) / 2) as i32;
+
+    canvas.set_blend_mode(BlendMode::Blend);
+    canvas.set_draw_color(Color::RGBA(8, 8, 10, 235));
+    canvas.fill_rect(Rect::new(panel_x, panel_y, panel_w, panel_h))?;
+    canvas.set_draw_color(Color::RGB(190, 145, 63));
+    canvas.draw_rect(Rect::new(panel_x, panel_y, panel_w, panel_h))?;
+
+    draw_settings_text(
+        canvas,
+        texture_creator,
+        font,
+        "SONGART SETTINGS",
+        Color::RGB(244, 205, 125),
+        panel_x + 32,
+        panel_y + 25,
+    )?;
+
+    for (index, line) in [
+        format!("Artwork       < {} >", artwork_mode),
+        format!("Visualizer    < {} >", visualizer_mode),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let row_y = panel_y + 95 + index as i32 * 70;
+        if selected == index {
+            canvas.set_draw_color(Color::RGBA(104, 72, 28, 180));
+            canvas.fill_rect(Rect::new(panel_x + 22, row_y - 8, panel_w - 44, 48))?;
+        }
+        draw_settings_text(
+            canvas,
+            texture_creator,
+            font,
+            line,
+            if selected == index {
+                Color::RGB(255, 225, 161)
+            } else {
+                Color::RGB(205, 196, 178)
+            },
+            panel_x + 38,
+            row_y,
+        )?;
+    }
+
+    draw_settings_text(
+        canvas,
+        texture_creator,
+        font,
+        "Up/Down select   Left/Right change   Enter apply",
+        Color::RGB(155, 150, 140),
+        panel_x + 32,
+        panel_y + panel_h as i32 - 80,
+    )?;
+    draw_settings_text(
+        canvas,
+        texture_creator,
+        font,
+        "S save   Esc cancel",
+        Color::RGB(155, 150, 140),
+        panel_x + 32,
+        panel_y + panel_h as i32 - 48,
+    )?;
+    if !status.is_empty() {
+        draw_settings_text(
+            canvas,
+            texture_creator,
+            font,
+            status,
+            Color::RGB(118, 220, 142),
+            panel_x + panel_w as i32 - 210,
+            panel_y + panel_h as i32 - 48,
+        )?;
+    }
+    Ok(())
+}
+
 fn update_smoothed_bins(smoothed: &mut [f32], raw: &[f32], rise: f32, fall: f32) {
     for (i, value) in raw.iter().enumerate() {
         if i < smoothed.len() {
@@ -1890,6 +2037,13 @@ pub fn run_display_loop(
     let bottom_h = scene_h - top_h;
 
     let mut event_pump = sdl.event_pump()?;
+    let mut runtime_artwork_mode = ctx.config.artwork.mode.clone();
+    let mut runtime_visualizer_mode = ctx.config.visualizer.mode.clone();
+    let mut settings_open = false;
+    let mut settings_selected = 0usize;
+    let mut settings_original_artwork = runtime_artwork_mode.clone();
+    let mut settings_original_visualizer = runtime_visualizer_mode.clone();
+    let mut settings_status = String::new();
     let mut loaded_version: u64 = u64::MAX;
     let mut loaded_track_identity = String::new();
     let mut artwork_texture: Option<Texture<'_>> = None;
@@ -1918,31 +2072,23 @@ pub fn run_display_loop(
         .create_texture_target(PixelFormatEnum::RGBA8888, scene_w, scene_h)
         .map_err(|e| e.to_string())?;
 
-    let vu_face_texture = if ctx
-        .config
-        .visualizer
-        .mode
-        .eq_ignore_ascii_case("analog_vu")
-    {
+    let vu_face_texture =
         match texture_creator.load_texture("assets/vu/vintage-meter-face-v2.png") {
-            Ok(texture) => Some(texture),
-            Err(e) => {
-                log_error(
-                    &ctx,
-                    &format!("Failed to load vintage VU meter face; using fallback: {e}"),
-                );
-                None
-            }
+        Ok(texture) => Some(texture),
+        Err(e) => {
+            log_error(
+                &ctx,
+                &format!("Failed to load vintage VU meter face; using fallback: {e}"),
+            );
+            None
         }
-    } else {
-        None
     };
 
     // The detailed groove geometry is expensive to redraw every frame on a
     // Raspberry Pi. Render it once, then rotate the complete vinyl surface as
     // a cached texture together with the album label.
     let record_scene = compute_record_rect(scene_w, top_h);
-    let mut vinyl_texture = if ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
+    let mut vinyl_texture = {
         let diameter = record_scene.width().max(1);
         let mut texture = texture_creator
             .create_texture_target(PixelFormatEnum::RGBA8888, diameter, diameter)
@@ -1960,8 +2106,6 @@ pub fn run_display_loop(
             })
             .map_err(|e| e.to_string())?;
         Some(texture)
-    } else {
-        None
     };
 
     log_info(&ctx, "Display loop started.");
@@ -1969,11 +2113,86 @@ pub fn run_display_loop(
     while running.load(Ordering::SeqCst) {
         for event in event_pump.poll_iter() {
             match event {
-                Event::Quit { .. }
-                | Event::KeyDown {
-                    keycode: Some(Keycode::Escape),
+                Event::Quit { .. } => running.store(false, Ordering::SeqCst),
+                Event::KeyDown {
+                    keycode: Some(key),
+                    repeat: false,
                     ..
-                } => running.store(false, Ordering::SeqCst),
+                } => {
+                    if settings_open {
+                        match key {
+                            Keycode::Escape => {
+                                runtime_artwork_mode = settings_original_artwork.clone();
+                                runtime_visualizer_mode = settings_original_visualizer.clone();
+                                settings_status.clear();
+                                settings_open = false;
+                            }
+                            Keycode::Up => {
+                                settings_selected = settings_selected.saturating_sub(1);
+                                settings_status.clear();
+                            }
+                            Keycode::Down => {
+                                settings_selected = (settings_selected + 1).min(1);
+                                settings_status.clear();
+                            }
+                            Keycode::Left | Keycode::Right => {
+                                let direction = if key == Keycode::Right { 1 } else { -1 };
+                                if settings_selected == 0 {
+                                    runtime_artwork_mode = cycle_option(
+                                        &runtime_artwork_mode,
+                                        &["cover", "turntable"],
+                                        direction,
+                                    );
+                                    artwork_started_at = Instant::now();
+                                } else {
+                                    runtime_visualizer_mode = cycle_option(
+                                        &runtime_visualizer_mode,
+                                        &["spectrum", "oscilloscope", "analog_vu"],
+                                        direction,
+                                    );
+                                }
+                                settings_status = "Preview".to_string();
+                            }
+                            Keycode::S => match save_display_modes(
+                                "config/songart.toml",
+                                &runtime_artwork_mode,
+                                &runtime_visualizer_mode,
+                            ) {
+                                Ok(()) => {
+                                    settings_original_artwork = runtime_artwork_mode.clone();
+                                    settings_original_visualizer =
+                                        runtime_visualizer_mode.clone();
+                                    settings_status = "Saved".to_string();
+                                }
+                                Err(e) => {
+                                    settings_status = "Save failed".to_string();
+                                    log_error(&ctx, &e);
+                                }
+                            },
+                            Keycode::Return | Keycode::KpEnter => {
+                                settings_status.clear();
+                                settings_open = false;
+                            }
+                            Keycode::M | Keycode::F1 => {
+                                settings_status.clear();
+                                settings_open = false;
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        match key {
+                            Keycode::M | Keycode::F1 => {
+                                settings_original_artwork = runtime_artwork_mode.clone();
+                                settings_original_visualizer = runtime_visualizer_mode.clone();
+                                settings_selected = 0;
+                                settings_status.clear();
+                                settings_open = true;
+                            }
+                            Keycode::Escape => running.store(false, Ordering::SeqCst),
+                            _ => {}
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -2111,7 +2330,7 @@ pub fn run_display_loop(
         };
 
         state.visualizer.enabled = ctx.config.visualizer.enabled;
-        state.visualizer.mode = visualizer_mode_from_config(&ctx.config.visualizer.mode);
+        state.visualizer.mode = visualizer_mode_from_config(&runtime_visualizer_mode);
         state.visualizer.frame.left_points = left_points;
         state.visualizer.frame.right_points = right_points;
 
@@ -2309,7 +2528,7 @@ pub fn run_display_loop(
             previous_circular_artwork_texture = None;
         }
 
-        if ctx.config.artwork.mode.eq_ignore_ascii_case("turntable") {
+        if runtime_artwork_mode.eq_ignore_ascii_case("turntable") {
             if let (Some(artwork), Some(cache)) =
                 (artwork_texture.as_mut(), static_scene_cache.as_ref())
             {
@@ -2528,6 +2747,18 @@ pub fn run_display_loop(
                 ctx.config.visualizer.spectrum_bar_gap,
                 state.meter.level,
                 vu_face_texture.as_ref(),
+            )?;
+        }
+
+        if settings_open {
+            draw_settings_overlay(
+                &mut canvas,
+                &texture_creator,
+                &body_font,
+                &runtime_artwork_mode,
+                &runtime_visualizer_mode,
+                settings_selected,
+                &settings_status,
             )?;
         }
 
