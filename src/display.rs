@@ -1755,6 +1755,7 @@ fn save_display_modes(
     path: &str,
     artwork_mode: &str,
     visualizer_mode: &str,
+    visualizer_gain: f32,
 ) -> Result<(), String> {
     let raw = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {path}: {e}"))?;
@@ -1763,6 +1764,7 @@ fn save_display_modes(
         .map_err(|e| format!("Failed to parse {path}: {e}"))?;
     document["artwork"]["mode"] = toml_edit::value(artwork_mode);
     document["visualizer"]["mode"] = toml_edit::value(visualizer_mode);
+    document["visualizer"]["gain"] = toml_edit::value(visualizer_gain as f64);
 
     let backup = format!("{path}.bak");
     let temporary = format!("{path}.tmp");
@@ -1804,6 +1806,7 @@ fn draw_settings_overlay(
     font: &sdl2::ttf::Font,
     artwork_mode: &str,
     visualizer_mode: &str,
+    visualizer_gain: f32,
     selected: usize,
     status: &str,
 ) -> Result<(), String> {
@@ -1829,14 +1832,22 @@ fn draw_settings_overlay(
         panel_y + 25,
     )?;
 
+    let filled = ((visualizer_gain / 8.0) * 16.0).round().clamp(1.0, 16.0) as usize;
+    let slider = format!(
+        "[{}{}] {:.2}",
+        "=".repeat(filled),
+        "-".repeat(16 - filled),
+        visualizer_gain,
+    );
     for (index, line) in [
         format!("Artwork       < {} >", artwork_mode),
         format!("Visualizer    < {} >", visualizer_mode),
+        format!("Sensitivity   {}", slider),
     ]
     .iter()
     .enumerate()
     {
-        let row_y = panel_y + 95 + index as i32 * 70;
+        let row_y = panel_y + 82 + index as i32 * 62;
         if selected == index {
             canvas.set_draw_color(Color::RGBA(104, 72, 28, 180));
             canvas.fill_rect(Rect::new(panel_x + 22, row_y - 8, panel_w - 44, 48))?;
@@ -2029,6 +2040,11 @@ pub fn run_display_loop(
         .load_font(body_font_path, body_font_size)
         .map_err(|e| format!("Failed to load body font from {}: {e}", body_font_path))?;
 
+    // Settings remain readable and visually stable regardless of song theme.
+    let settings_font = ttf_ctx
+        .load_font("assets/fonts/SyneMono-Regular.ttf", 25)
+        .map_err(|e| format!("Failed to load settings sans-serif font: {e}"))?;
+
     let mut loaded_font_theme = selected_theme;
 
     let scene_w = preset.width;
@@ -2039,10 +2055,12 @@ pub fn run_display_loop(
     let mut event_pump = sdl.event_pump()?;
     let mut runtime_artwork_mode = ctx.config.artwork.mode.clone();
     let mut runtime_visualizer_mode = ctx.config.visualizer.mode.clone();
+    let mut runtime_visualizer_gain = ctx.config.visualizer.gain;
     let mut settings_open = false;
     let mut settings_selected = 0usize;
     let mut settings_original_artwork = runtime_artwork_mode.clone();
     let mut settings_original_visualizer = runtime_visualizer_mode.clone();
+    let mut settings_original_gain = runtime_visualizer_gain;
     let mut settings_status = String::new();
     let mut loaded_version: u64 = u64::MAX;
     let mut loaded_track_identity = String::new();
@@ -2124,6 +2142,7 @@ pub fn run_display_loop(
                             Keycode::Escape => {
                                 runtime_artwork_mode = settings_original_artwork.clone();
                                 runtime_visualizer_mode = settings_original_visualizer.clone();
+                                runtime_visualizer_gain = settings_original_gain;
                                 settings_status.clear();
                                 settings_open = false;
                             }
@@ -2132,7 +2151,7 @@ pub fn run_display_loop(
                                 settings_status.clear();
                             }
                             Keycode::Down => {
-                                settings_selected = (settings_selected + 1).min(1);
+                                settings_selected = (settings_selected + 1).min(2);
                                 settings_status.clear();
                             }
                             Keycode::Left | Keycode::Right => {
@@ -2144,12 +2163,16 @@ pub fn run_display_loop(
                                         direction,
                                     );
                                     artwork_started_at = Instant::now();
-                                } else {
+                                } else if settings_selected == 1 {
                                     runtime_visualizer_mode = cycle_option(
                                         &runtime_visualizer_mode,
                                         &["spectrum", "oscilloscope", "analog_vu"],
                                         direction,
                                     );
+                                } else {
+                                    runtime_visualizer_gain =
+                                        (runtime_visualizer_gain + direction as f32 * 0.25)
+                                            .clamp(0.25, 8.0);
                                 }
                                 settings_status = "Preview".to_string();
                             }
@@ -2157,11 +2180,13 @@ pub fn run_display_loop(
                                 "config/songart.toml",
                                 &runtime_artwork_mode,
                                 &runtime_visualizer_mode,
+                                runtime_visualizer_gain,
                             ) {
                                 Ok(()) => {
                                     settings_original_artwork = runtime_artwork_mode.clone();
                                     settings_original_visualizer =
                                         runtime_visualizer_mode.clone();
+                                    settings_original_gain = runtime_visualizer_gain;
                                     settings_status = "Saved".to_string();
                                 }
                                 Err(e) => {
@@ -2184,6 +2209,7 @@ pub fn run_display_loop(
                             Keycode::M | Keycode::F1 => {
                                 settings_original_artwork = runtime_artwork_mode.clone();
                                 settings_original_visualizer = runtime_visualizer_mode.clone();
+                                settings_original_gain = runtime_visualizer_gain;
                                 settings_selected = 0;
                                 settings_status.clear();
                                 settings_open = true;
@@ -2221,7 +2247,7 @@ pub fn run_display_loop(
                 ctx.config.visualizer.point_count,
                 ctx.config.visualizer.left_y_offset,
                 ctx.config.visualizer.y_scale,
-                ctx.config.visualizer.gain,
+                runtime_visualizer_gain,
                 ctx.config.visualizer.visible_sample_count,
                 ctx.config.visualizer.max_gain,
             );
@@ -2231,7 +2257,7 @@ pub fn run_display_loop(
                 ctx.config.visualizer.point_count,
                 ctx.config.visualizer.right_y_offset,
                 ctx.config.visualizer.y_scale,
-                ctx.config.visualizer.gain,
+                runtime_visualizer_gain,
                 ctx.config.visualizer.visible_sample_count,
                 ctx.config.visualizer.max_gain,
             );
@@ -2243,7 +2269,7 @@ pub fn run_display_loop(
                 ctx.config.visualizer.spectrum_bin_count,
                 ctx.config.visualizer.spectrum_min_hz,
                 ctx.config.visualizer.spectrum_max_hz,
-                ctx.config.visualizer.gain,
+                runtime_visualizer_gain,
                 ctx.config.visualizer.max_gain,
                 ctx.config.visualizer.spectrum_log_epsilon,
                 ctx.config.visualizer.spectrum_log_scale,
@@ -2314,7 +2340,7 @@ pub fn run_display_loop(
             display_peak * 0.96
         };
 
-        let vu_target = (live_level * ctx.config.visualizer.gain).clamp(0.0, 1.4);
+        let vu_target = (live_level * runtime_visualizer_gain).clamp(0.0, 1.4);
         let vu_response = if vu_target > vu_display_level {
             0.28
         } else {
@@ -2754,9 +2780,10 @@ pub fn run_display_loop(
             draw_settings_overlay(
                 &mut canvas,
                 &texture_creator,
-                &body_font,
+                &settings_font,
                 &runtime_artwork_mode,
                 &runtime_visualizer_mode,
+                runtime_visualizer_gain,
                 settings_selected,
                 &settings_status,
             )?;
