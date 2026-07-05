@@ -1056,11 +1056,108 @@ fn vu_angle(value: f32) -> f32 {
     (-150.0 + normalized * 120.0).to_radians()
 }
 
+fn create_vu_scale_overlay<'a>(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    texture_creator: &'a TextureCreator<WindowContext>,
+    font: &sdl2::ttf::Font,
+    width: u32,
+    height: u32,
+) -> Result<Texture<'a>, String> {
+    let mut overlay = texture_creator
+        .create_texture_target(PixelFormatEnum::RGBA8888, width.max(1), height.max(1))
+        .map_err(|e| e.to_string())?;
+    overlay.set_blend_mode(BlendMode::Blend);
+
+    let pivot_x = width as f32 / 2.0;
+    let pivot_y = height as f32 - 18.0;
+    let radius = (width as f32 * 0.42).min(height as f32 * 0.82);
+    let label_radius = (radius - 38.0).max(8.0);
+    let scale_labels = [
+        ("-20", -150.0_f32),
+        ("-10", -130.0),
+        ("-7", -115.0),
+        ("-5", -100.0),
+        ("-3", -85.0),
+        ("0", -65.0),
+        ("+3", -40.0),
+    ];
+
+    let mut label_textures = Vec::new();
+    for (text, angle_degrees) in scale_labels {
+        let color = if angle_degrees >= -65.0 {
+            Color::RGB(153, 35, 25)
+        } else {
+            Color::RGB(52, 39, 24)
+        };
+        let surface = font
+            .render(text)
+            .blended(color)
+            .map_err(|e| e.to_string())?;
+        let texture = texture_creator
+            .create_texture_from_surface(&surface)
+            .map_err(|e| e.to_string())?;
+        let query = texture.query();
+        let angle = angle_degrees.to_radians();
+        let center_x = pivot_x + angle.cos() * label_radius;
+        let center_y = pivot_y + angle.sin() * label_radius;
+        let target = Rect::new(
+            (center_x - query.width as f32 / 2.0) as i32,
+            (center_y - query.height as f32 / 2.0) as i32,
+            query.width,
+            query.height,
+        );
+        label_textures.push((texture, target));
+    }
+
+    for (text, center_x, center_y, color) in [
+        ("VU", 0.50_f32, 0.57_f32, Color::RGB(53, 39, 24)),
+        ("PEAK", 0.86_f32, 0.61_f32, Color::RGB(94, 33, 24)),
+    ] {
+        let surface = font
+            .render(text)
+            .blended(color)
+            .map_err(|e| e.to_string())?;
+        let texture = texture_creator
+            .create_texture_from_surface(&surface)
+            .map_err(|e| e.to_string())?;
+        let query = texture.query();
+        label_textures.push((
+            texture,
+            Rect::new(
+                (width as f32 * center_x - query.width as f32 / 2.0) as i32,
+                (height as f32 * center_y - query.height as f32 / 2.0) as i32,
+                query.width,
+                query.height,
+            ),
+        ));
+    }
+
+    let mut draw_error = None;
+    canvas
+        .with_texture_canvas(&mut overlay, |overlay_canvas| {
+            overlay_canvas.set_draw_color(Color::RGBA(0, 0, 0, 0));
+            overlay_canvas.clear();
+            for (texture, target) in &label_textures {
+                if let Err(e) = overlay_canvas.copy(texture, None, *target) {
+                    draw_error = Some(e);
+                    break;
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+    if let Some(e) = draw_error {
+        return Err(e);
+    }
+    Ok(overlay)
+}
+
 fn draw_vu_meter(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     rect: Rect,
     level: f32,
     face_texture: Option<&Texture<'_>>,
+    scale_overlay: Option<&Texture<'_>>,
 ) -> Result<(), String> {
     let x = rect.x();
     let y = rect.y();
@@ -1122,6 +1219,30 @@ fn draw_vu_meter(
         }
     }
 
+    if let Some(texture) = scale_overlay {
+        canvas.copy(texture, None, rect)?;
+    }
+
+    // Jewel-style peak lamp: dark red glass at rest, bright core in overload.
+    let led_x = x + (w as f32 * 0.86) as i32;
+    let led_y = y + (h as f32 * 0.52) as i32;
+    let overloaded = level >= 0.70;
+    draw_filled_circle(canvas, led_x, led_y, 8, Color::RGB(65, 25, 19))?;
+    draw_filled_circle(
+        canvas,
+        led_x,
+        led_y,
+        5,
+        if overloaded {
+            Color::RGB(245, 40, 22)
+        } else {
+            Color::RGB(105, 28, 20)
+        },
+    )?;
+    if overloaded {
+        draw_filled_circle(canvas, led_x - 1, led_y - 1, 2, Color::RGB(255, 176, 105))?;
+    }
+
     let angle = vu_angle(level);
     let needle_length = radius - 9;
     let tip = Point::new(
@@ -1152,6 +1273,7 @@ fn draw_analog_vu(
     width: u32,
     height: u32,
     face_texture: Option<&Texture<'_>>,
+    scale_overlay: Option<&Texture<'_>>,
 ) -> Result<(), String> {
     canvas.set_draw_color(visualizer_background_color(ctx));
     canvas.fill_rect(Rect::new(x, y, width, height))?;
@@ -1164,6 +1286,7 @@ fn draw_analog_vu(
         Rect::new(x, y + 4, meter_width, meter_height),
         level,
         face_texture,
+        scale_overlay,
     )?;
     draw_vu_meter(
         canvas,
@@ -1175,6 +1298,7 @@ fn draw_analog_vu(
         ),
         level,
         face_texture,
+        scale_overlay,
     )
 }
 
@@ -1388,6 +1512,7 @@ fn draw_visualizer(
     bar_gap: u32,
     meter_level: f32,
     vu_face_texture: Option<&Texture<'_>>,
+    vu_scale_overlay: Option<&Texture<'_>>,
 ) -> Result<(), String> {
     match mode {
         VisualizerMode::None => Ok(()),
@@ -1412,6 +1537,7 @@ fn draw_visualizer(
                 width,
                 height,
                 vu_face_texture,
+                vu_scale_overlay,
             )
         }
         VisualizerMode::Spectrum => draw_spectrum(
@@ -1910,6 +2036,38 @@ pub fn run_display_loop(
                 log_error(
                     &ctx,
                     &format!("Failed to load vintage VU meter face; using fallback: {e}"),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let vu_scale_overlay = if ctx
+        .config
+        .visualizer
+        .mode
+        .eq_ignore_ascii_case("analog_vu")
+    {
+        let visualizer_height = ctx.config.visualizer.height.min(bottom_h.saturating_sub(8));
+        let visualizer_width =
+            scene_w.saturating_sub(ctx.config.visualizer.padding.saturating_mul(2));
+        let gap = (visualizer_width / 40).max(10);
+        let meter_width = visualizer_width.saturating_sub(gap) / 2;
+        let meter_height = visualizer_height.saturating_sub(8);
+        match create_vu_scale_overlay(
+            &mut canvas,
+            &texture_creator,
+            &body_font,
+            meter_width,
+            meter_height,
+        ) {
+            Ok(texture) => Some(texture),
+            Err(e) => {
+                log_error(
+                    &ctx,
+                    &format!("Failed to build VU scale overlay: {e}"),
                 );
                 None
             }
@@ -2508,6 +2666,7 @@ pub fn run_display_loop(
                 ctx.config.visualizer.spectrum_bar_gap,
                 state.meter.level,
                 vu_face_texture.as_ref(),
+                vu_scale_overlay.as_ref(),
             )?;
         }
 
