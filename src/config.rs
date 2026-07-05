@@ -115,6 +115,8 @@ pub struct DisplayConfig {
     pub window_title: String,
     pub fullscreen: bool,
     pub orientation: String,
+    #[serde(default = "default_display_rotation")]
+    pub rotation: String,
     pub frame_delay_ms: u64,
 
     /// Configurable colors for the major display regions.
@@ -403,6 +405,10 @@ impl Default for VisualizerColorsConfig {
 
 fn default_black_color() -> String {
     "#000000".to_string()
+}
+
+fn default_display_rotation() -> String {
+    "normal".to_string()
 }
 
 fn default_artwork_mode() -> String {

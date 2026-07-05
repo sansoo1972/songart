@@ -69,6 +69,10 @@ fullscreen = true
 # Options should match one of the [display_presets.*] sections below.
 orientation = "portrait"
 
+# Final output rotation: normal, clockwise, inverted, counter_clockwise.
+# This rotates the composed SongArt frame; it does not change OS display settings.
+rotation = "normal"
+
 # ~16 ms targets roughly 60 FPS.
 frame_delay_ms = 16
 

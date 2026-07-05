@@ -1751,12 +1751,23 @@ fn cycle_option(current: &str, options: &[&str], direction: i32) -> String {
     options[(index + direction).rem_euclid(len) as usize].to_string()
 }
 
+fn display_rotation_angle(rotation: &str) -> Option<f64> {
+    match rotation.trim().to_ascii_lowercase().as_str() {
+        "normal" | "0" => Some(0.0),
+        "clockwise" | "right" | "90" => Some(90.0),
+        "inverted" | "upside_down" | "180" => Some(180.0),
+        "counter_clockwise" | "left" | "270" => Some(270.0),
+        _ => None,
+    }
+}
+
 fn save_display_modes(
     path: &str,
     artwork_mode: &str,
     visualizer_mode: &str,
     visualizer_gain: f32,
     display_orientation: &str,
+    display_rotation: &str,
 ) -> Result<(), String> {
     let raw = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {path}: {e}"))?;
@@ -1767,6 +1778,7 @@ fn save_display_modes(
     document["visualizer"]["mode"] = toml_edit::value(visualizer_mode);
     document["visualizer"]["gain"] = toml_edit::value(visualizer_gain as f64);
     document["display"]["orientation"] = toml_edit::value(display_orientation);
+    document["display"]["rotation"] = toml_edit::value(display_rotation);
 
     let backup = format!("{path}.bak");
     let temporary = format!("{path}.tmp");
@@ -1810,6 +1822,7 @@ fn draw_settings_overlay(
     visualizer_mode: &str,
     visualizer_gain: f32,
     display_orientation: &str,
+    display_rotation: &str,
     selected: usize,
     status: &str,
 ) -> Result<(), String> {
@@ -1847,11 +1860,12 @@ fn draw_settings_overlay(
         format!("Visualizer    < {} >", visualizer_mode),
         format!("Sensitivity   {}", slider),
         format!("Orientation   < {} >", display_orientation),
+        format!("Rotation      < {} >", display_rotation),
     ]
     .iter()
     .enumerate()
     {
-        let row_y = panel_y + 70 + index as i32 * 52;
+        let row_y = panel_y + 58 + index as i32 * 46;
         if selected == index {
             canvas.set_draw_color(Color::RGBA(104, 72, 28, 180));
             canvas.fill_rect(Rect::new(panel_x + 22, row_y - 8, panel_w - 44, 48))?;
@@ -2070,12 +2084,24 @@ pub fn run_display_loop(
     let mut runtime_visualizer_mode = ctx.config.visualizer.mode.clone();
     let mut runtime_visualizer_gain = ctx.config.visualizer.gain;
     let mut runtime_display_orientation = ctx.config.display.orientation.clone();
+    let mut runtime_display_rotation = ctx.config.display.rotation.clone();
+    if display_rotation_angle(&runtime_display_rotation).is_none() {
+        log_error(
+            &ctx,
+            &format!(
+                "Invalid display.rotation '{}'; using 'normal'",
+                runtime_display_rotation
+            ),
+        );
+        runtime_display_rotation = "normal".to_string();
+    }
     let mut settings_open = false;
     let mut settings_selected = 0usize;
     let mut settings_original_artwork = runtime_artwork_mode.clone();
     let mut settings_original_visualizer = runtime_visualizer_mode.clone();
     let mut settings_original_gain = runtime_visualizer_gain;
     let mut settings_original_orientation = runtime_display_orientation.clone();
+    let mut settings_original_rotation = runtime_display_rotation.clone();
     let mut settings_status = String::new();
     let mut loaded_version: u64 = u64::MAX;
     let mut loaded_track_identity = String::new();
@@ -2102,6 +2128,9 @@ pub fn run_display_loop(
 
     let mut static_scene_cache: Option<StaticSceneCache<'_>> = None;
     let mut static_scene_texture = texture_creator
+        .create_texture_target(PixelFormatEnum::RGBA8888, scene_w, scene_h)
+        .map_err(|e| e.to_string())?;
+    let mut composed_frame_texture = texture_creator
         .create_texture_target(PixelFormatEnum::RGBA8888, scene_w, scene_h)
         .map_err(|e| e.to_string())?;
 
@@ -2160,6 +2189,8 @@ pub fn run_display_loop(
                                 runtime_visualizer_gain = settings_original_gain;
                                 runtime_display_orientation =
                                     settings_original_orientation.clone();
+                                runtime_display_rotation =
+                                    settings_original_rotation.clone();
                                 settings_status.clear();
                                 settings_open = false;
                             }
@@ -2168,7 +2199,7 @@ pub fn run_display_loop(
                                 settings_status.clear();
                             }
                             Keycode::Down => {
-                                settings_selected = (settings_selected + 1).min(3);
+                                settings_selected = (settings_selected + 1).min(4);
                                 settings_status.clear();
                             }
                             Keycode::Left | Keycode::Right => {
@@ -2190,10 +2221,21 @@ pub fn run_display_loop(
                                     runtime_visualizer_gain =
                                         (runtime_visualizer_gain + direction as f32 * 0.25)
                                             .clamp(0.25, 8.0);
-                                } else {
+                                } else if settings_selected == 3 {
                                     runtime_display_orientation = cycle_option(
                                         &runtime_display_orientation,
                                         &["portrait", "landscape"],
+                                        direction,
+                                    );
+                                } else {
+                                    runtime_display_rotation = cycle_option(
+                                        &runtime_display_rotation,
+                                        &[
+                                            "normal",
+                                            "clockwise",
+                                            "inverted",
+                                            "counter_clockwise",
+                                        ],
                                         direction,
                                     );
                                 }
@@ -2209,6 +2251,7 @@ pub fn run_display_loop(
                                 &runtime_visualizer_mode,
                                 runtime_visualizer_gain,
                                 &runtime_display_orientation,
+                                &runtime_display_rotation,
                             ) {
                                 Ok(()) => {
                                     settings_original_artwork = runtime_artwork_mode.clone();
@@ -2217,6 +2260,8 @@ pub fn run_display_loop(
                                     settings_original_gain = runtime_visualizer_gain;
                                     settings_original_orientation =
                                         runtime_display_orientation.clone();
+                                    settings_original_rotation =
+                                        runtime_display_rotation.clone();
                                     settings_status = "Saved".to_string();
                                 }
                                 Err(e) => {
@@ -2242,6 +2287,8 @@ pub fn run_display_loop(
                                 settings_original_gain = runtime_visualizer_gain;
                                 settings_original_orientation =
                                     runtime_display_orientation.clone();
+                                settings_original_rotation =
+                                    runtime_display_rotation.clone();
                                 settings_selected = 0;
                                 settings_status.clear();
                                 settings_open = true;
@@ -2558,6 +2605,12 @@ pub fn run_display_loop(
             );
         }
 
+        let mut frame_draw_result = Ok(());
+        canvas
+            .with_texture_canvas(&mut composed_frame_texture, |mut canvas| {
+                frame_draw_result = (|| -> Result<(), String> {
+        let canvas_w = scene_w;
+        let canvas_h = scene_h;
         let scale_x = (canvas_w as f32) / (scene_w as f32);
         let scale_y = (canvas_h as f32) / (scene_h as f32);
         let scene_scale = f32::min(scale_x, scale_y);
@@ -2817,11 +2870,46 @@ pub fn run_display_loop(
                 &runtime_visualizer_mode,
                 runtime_visualizer_gain,
                 &runtime_display_orientation,
+                &runtime_display_rotation,
                 settings_selected,
                 &settings_status,
             )?;
         }
 
+        Ok(())
+                })();
+            })
+            .map_err(|e| e.to_string())?;
+        frame_draw_result?;
+
+        let angle = display_rotation_angle(&runtime_display_rotation).unwrap_or(0.0);
+        let swaps_dimensions = angle == 90.0 || angle == 270.0;
+        let rotated_w = if swaps_dimensions { scene_h } else { scene_w };
+        let rotated_h = if swaps_dimensions { scene_w } else { scene_h };
+        let output_scale = f32::min(
+            canvas_w as f32 / rotated_w as f32,
+            canvas_h as f32 / rotated_h as f32,
+        );
+        let destination_w = ((scene_w as f32) * output_scale).max(1.0) as u32;
+        let destination_h = ((scene_h as f32) * output_scale).max(1.0) as u32;
+        let destination = Rect::new(
+            canvas_w as i32 / 2 - destination_w as i32 / 2,
+            canvas_h as i32 / 2 - destination_h as i32 / 2,
+            destination_w,
+            destination_h,
+        );
+
+        canvas.set_draw_color(canvas_background_color(&ctx));
+        canvas.clear();
+        canvas.copy_ex(
+            &composed_frame_texture,
+            None,
+            destination,
+            angle,
+            None,
+            false,
+            false,
+        )?;
         canvas.present();
 
         frame_counter += 1;
