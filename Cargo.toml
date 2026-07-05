@@ -1,6 +1,6 @@
 [package]
 name = "songart"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2024"
 
 [dependencies]
@@ -11,4 +11,5 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 rustfft = "6"
 ctrlc = "3.4"
 toml = "0.8"
+toml_edit = "0.22"
 chrono = { version = "0.4.44", features = ["clock"] }
