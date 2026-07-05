@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.13.0 adds an optional animated turntable artwork mode with realistic vinyl grooves, circular album labels, 33⅓ RPM rotation, and crossfades between tracks.
+Version 0.14.0 adds photorealistic dual analog VU meters inspired by illuminated 1970s hi-fi equipment, with mechanical needle ballistics and dynamic peak lamps.
 
 ---
 
@@ -16,6 +16,7 @@ Version 0.13.0 adds an optional animated turntable artwork mode with realistic v
 - Optional animated turntable artwork mode with realistic LP presentation
 - Real-time FFT spectrum analyzer
 - Oscilloscope audio visualizer
+- Photorealistic 1970s-style dual analog VU meters
 - Shared rolling audio buffer for live visualization
 - Configurable display presets for portrait and landscape layouts
 - Improved portrait layout defaults for 1080x1920 displays
@@ -33,6 +34,27 @@ Version 0.13.0 adds an optional animated turntable artwork mode with realistic v
 - Externalized runtime configuration via TOML
 - Graceful Ctrl+C shutdown handling
 - Runtime artifacts ignored by Git
+
+---
+
+## 1970s Analog VU Meters
+
+![Photorealistic 1970s-style analog VU meter](assets/vu/vintage-meter-face-v2.png)
+
+Set the visualizer independently from the artwork presentation, allowing the
+analog meters and spinning turntable to appear together:
+
+```toml
+[artwork]
+mode = "turntable"
+
+[visualizer]
+enabled = true
+mode = "analog_vu"
+```
+
+The meter face, scale, housing, and glass treatment are cached textures. SDL
+draws only the mechanical needles and peak-lamp illumination each frame.
 
 ---
 
@@ -507,15 +529,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.13.0**.
+This project is now at **0.14.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.13.0 -m "songart 0.13.0"
-git push origin v0.13.0
+git tag -a v0.14.0 -m "songart 0.14.0"
+git push origin v0.14.0
 ```
 
 ---
@@ -537,6 +559,7 @@ git push origin v0.13.0
 - Larger and more responsive spectrum visualizer working
 - Artwork-derived visualizer color palettes working
 - Oscilloscope visualizer working
+- Photorealistic analog VU visualizer working
 - Shared rolling audio analysis working
 - Renderer scene caching working
 - Metadata refresh improvements working

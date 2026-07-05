@@ -4,6 +4,22 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
+## [0.14.0] - 2026-07-05
+
+### Added
+- [#31](https://github.com/sansoo1972/songart/issues/31) Dedicated dual analog VU renderer inspired by illuminated 1970s hi-fi equipment.
+- Photorealistic aged meter faces with classic sans-serif dB markings, a red overload band, recessed housings, brass trim, and glass detail.
+- Animated mechanical needles with logarithmic level mapping, shadows, metal pivot hubs, fast rise, and damped return.
+- Dynamic jewel-style peak indicators that illuminate when the smoothed signal enters overload.
+- README preview of the vintage VU presentation.
+
+### Changed
+- `analog_vu` now uses its own renderer instead of being routed through the oscilloscope drawing path.
+- Static meter artwork is texture-backed so only needles and peak illumination require per-frame drawing.
+- Analog VU mode can run alongside the existing turntable artwork mode.
+
+---
+
 ## [0.13.0] - 2026-06-26
 
 ### Added
