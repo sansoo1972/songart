@@ -1060,76 +1060,66 @@ fn draw_vu_meter(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     rect: Rect,
     level: f32,
+    face_texture: Option<&Texture<'_>>,
 ) -> Result<(), String> {
     let x = rect.x();
     let y = rect.y();
     let w = rect.width() as i32;
     let h = rect.height() as i32;
 
-    // Deep 1970s receiver bezel with a narrow metallic inner lip.
-    canvas.set_draw_color(Color::RGB(18, 17, 15));
-    canvas.fill_rect(rect)?;
-    canvas.set_draw_color(Color::RGB(73, 67, 55));
-    canvas.draw_rect(Rect::new(x + 2, y + 2, rect.width() - 4, rect.height() - 4))?;
-    canvas.set_draw_color(Color::RGB(135, 117, 82));
-    canvas.draw_rect(Rect::new(x + 6, y + 6, rect.width() - 12, rect.height() - 12))?;
-
-    let face = Rect::new(
-        x + 10,
-        y + 10,
-        rect.width().saturating_sub(20),
-        rect.height().saturating_sub(20),
-    );
-    canvas.set_draw_color(Color::RGB(225, 184, 103));
-    canvas.fill_rect(face)?;
-
-    // Layered amber bands suggest uneven incandescent illumination.
-    let band_count = 12;
-    for band in 0..band_count {
-        let band_y = face.y() + (face.height() as i32 * band / band_count);
-        let band_h = (face.height() / band_count as u32).max(1);
-        let warmth = 210 + (band * 18 / band_count) as u8;
-        canvas.set_draw_color(Color::RGB(warmth, 172, 92));
-        canvas.fill_rect(Rect::new(face.x(), band_y, face.width(), band_h))?;
-    }
-
     let pivot_x = x + w / 2;
     let pivot_y = y + h - 18;
     let radius = ((w as f32 * 0.42).min(h as f32 * 0.82)) as i32;
 
-    // Printed scale arc.
-    let mut arc = Vec::with_capacity(97);
-    for step in 0..=96 {
-        let angle = (-150.0 + 120.0 * step as f32 / 96.0).to_radians();
-        arc.push(Point::new(
-            pivot_x + (angle.cos() * radius as f32) as i32,
-            pivot_y + (angle.sin() * radius as f32) as i32,
-        ));
-    }
-    canvas.set_draw_color(Color::RGB(43, 35, 24));
-    canvas.draw_lines(arc.as_slice())?;
+    if let Some(texture) = face_texture {
+        canvas.copy(texture, None, rect)?;
+    } else {
+        // Lightweight fallback when the photographic meter asset is missing.
+        canvas.set_draw_color(Color::RGB(18, 17, 15));
+        canvas.fill_rect(rect)?;
+        canvas.set_draw_color(Color::RGB(135, 117, 82));
+        canvas.draw_rect(Rect::new(x + 6, y + 6, rect.width() - 12, rect.height() - 12))?;
+        let face = Rect::new(
+            x + 10,
+            y + 10,
+            rect.width().saturating_sub(20),
+            rect.height().saturating_sub(20),
+        );
+        canvas.set_draw_color(Color::RGB(225, 184, 103));
+        canvas.fill_rect(face)?;
 
-    // Logarithmic scale marks; the last three enter the classic red zone.
-    for tick in 0..=12 {
-        let angle = (-150.0 + tick as f32 * 10.0).to_radians();
-        let major = tick % 2 == 0;
-        let inner = radius - if major { 20 } else { 12 };
-        let color = if tick >= 10 {
-            Color::RGB(166, 35, 25)
-        } else {
-            Color::RGB(48, 39, 27)
-        };
-        canvas.set_draw_color(color);
-        canvas.draw_line(
-            Point::new(
-                pivot_x + (angle.cos() * inner as f32) as i32,
-                pivot_y + (angle.sin() * inner as f32) as i32,
-            ),
-            Point::new(
+        let mut arc = Vec::with_capacity(97);
+        for step in 0..=96 {
+            let angle = (-150.0 + 120.0 * step as f32 / 96.0).to_radians();
+            arc.push(Point::new(
                 pivot_x + (angle.cos() * radius as f32) as i32,
                 pivot_y + (angle.sin() * radius as f32) as i32,
-            ),
-        )?;
+            ));
+        }
+        canvas.set_draw_color(Color::RGB(43, 35, 24));
+        canvas.draw_lines(arc.as_slice())?;
+
+        for tick in 0..=12 {
+            let angle = (-150.0 + tick as f32 * 10.0).to_radians();
+            let major = tick % 2 == 0;
+            let inner = radius - if major { 20 } else { 12 };
+            let color = if tick >= 10 {
+                Color::RGB(166, 35, 25)
+            } else {
+                Color::RGB(48, 39, 27)
+            };
+            canvas.set_draw_color(color);
+            canvas.draw_line(
+                Point::new(
+                    pivot_x + (angle.cos() * inner as f32) as i32,
+                    pivot_y + (angle.sin() * inner as f32) as i32,
+                ),
+                Point::new(
+                    pivot_x + (angle.cos() * radius as f32) as i32,
+                    pivot_y + (angle.sin() * radius as f32) as i32,
+                ),
+            )?;
+        }
     }
 
     let angle = vu_angle(level);
@@ -1150,17 +1140,6 @@ fn draw_vu_meter(
     draw_filled_circle(canvas, pivot_x, pivot_y, 10, Color::RGB(45, 40, 33))?;
     draw_filled_circle(canvas, pivot_x, pivot_y, 5, Color::RGB(151, 126, 78))?;
 
-    // Restrained glass reflection rather than a flat digital panel.
-    canvas.set_draw_color(Color::RGBA(255, 244, 205, 42));
-    canvas.draw_line(
-        Point::new(face.x() + 12, face.y() + 12),
-        Point::new(face.x() + face.width() as i32 / 2, face.y() + 12),
-    )?;
-    canvas.draw_line(
-        Point::new(face.x() + 12, face.y() + 13),
-        Point::new(face.x() + face.width() as i32 / 3, face.y() + 13),
-    )?;
-
     Ok(())
 }
 
@@ -1172,6 +1151,7 @@ fn draw_analog_vu(
     y: i32,
     width: u32,
     height: u32,
+    face_texture: Option<&Texture<'_>>,
 ) -> Result<(), String> {
     canvas.set_draw_color(visualizer_background_color(ctx));
     canvas.fill_rect(Rect::new(x, y, width, height))?;
@@ -1183,6 +1163,7 @@ fn draw_analog_vu(
         canvas,
         Rect::new(x, y + 4, meter_width, meter_height),
         level,
+        face_texture,
     )?;
     draw_vu_meter(
         canvas,
@@ -1193,6 +1174,7 @@ fn draw_analog_vu(
             meter_height,
         ),
         level,
+        face_texture,
     )
 }
 
@@ -1405,6 +1387,7 @@ fn draw_visualizer(
     height: u32,
     bar_gap: u32,
     meter_level: f32,
+    vu_face_texture: Option<&Texture<'_>>,
 ) -> Result<(), String> {
     match mode {
         VisualizerMode::None => Ok(()),
@@ -1420,7 +1403,16 @@ fn draw_visualizer(
             height,
         ),
         VisualizerMode::AnalogVu => {
-            draw_analog_vu(canvas, ctx, meter_level, x, y, width, height)
+            draw_analog_vu(
+                canvas,
+                ctx,
+                meter_level,
+                x,
+                y,
+                width,
+                height,
+                vu_face_texture,
+            )
         }
         VisualizerMode::Spectrum => draw_spectrum(
             canvas,
@@ -1905,6 +1897,26 @@ pub fn run_display_loop(
     let mut static_scene_texture = texture_creator
         .create_texture_target(PixelFormatEnum::RGBA8888, scene_w, scene_h)
         .map_err(|e| e.to_string())?;
+
+    let vu_face_texture = if ctx
+        .config
+        .visualizer
+        .mode
+        .eq_ignore_ascii_case("analog_vu")
+    {
+        match texture_creator.load_texture("assets/vu/vintage-meter-face.png") {
+            Ok(texture) => Some(texture),
+            Err(e) => {
+                log_error(
+                    &ctx,
+                    &format!("Failed to load vintage VU meter face; using fallback: {e}"),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // The detailed groove geometry is expensive to redraw every frame on a
     // Raspberry Pi. Render it once, then rotate the complete vinyl surface as
@@ -2495,6 +2507,7 @@ pub fn run_display_loop(
                 sh(vis_h),
                 ctx.config.visualizer.spectrum_bar_gap,
                 state.meter.level,
+                vu_face_texture.as_ref(),
             )?;
         }
 
