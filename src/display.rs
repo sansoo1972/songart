@@ -1049,6 +1049,153 @@ fn draw_oscilloscope(
     Ok(())
 }
 
+fn vu_angle(value: f32) -> f32 {
+    // Give quiet material useful travel while retaining a small overload area.
+    let db = 20.0 * value.max(0.0001).log10();
+    let normalized = ((db + 36.0) / 39.0).clamp(0.0, 1.0);
+    (-150.0 + normalized * 120.0).to_radians()
+}
+
+fn draw_vu_meter(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    rect: Rect,
+    level: f32,
+) -> Result<(), String> {
+    let x = rect.x();
+    let y = rect.y();
+    let w = rect.width() as i32;
+    let h = rect.height() as i32;
+
+    // Deep 1970s receiver bezel with a narrow metallic inner lip.
+    canvas.set_draw_color(Color::RGB(18, 17, 15));
+    canvas.fill_rect(rect)?;
+    canvas.set_draw_color(Color::RGB(73, 67, 55));
+    canvas.draw_rect(Rect::new(x + 2, y + 2, rect.width() - 4, rect.height() - 4))?;
+    canvas.set_draw_color(Color::RGB(135, 117, 82));
+    canvas.draw_rect(Rect::new(x + 6, y + 6, rect.width() - 12, rect.height() - 12))?;
+
+    let face = Rect::new(
+        x + 10,
+        y + 10,
+        rect.width().saturating_sub(20),
+        rect.height().saturating_sub(20),
+    );
+    canvas.set_draw_color(Color::RGB(225, 184, 103));
+    canvas.fill_rect(face)?;
+
+    // Layered amber bands suggest uneven incandescent illumination.
+    let band_count = 12;
+    for band in 0..band_count {
+        let band_y = face.y() + (face.height() as i32 * band / band_count);
+        let band_h = (face.height() / band_count as u32).max(1);
+        let warmth = 210 + (band * 18 / band_count) as u8;
+        canvas.set_draw_color(Color::RGB(warmth, 172, 92));
+        canvas.fill_rect(Rect::new(face.x(), band_y, face.width(), band_h))?;
+    }
+
+    let pivot_x = x + w / 2;
+    let pivot_y = y + h - 18;
+    let radius = ((w as f32 * 0.42).min(h as f32 * 0.82)) as i32;
+
+    // Printed scale arc.
+    let mut arc = Vec::with_capacity(97);
+    for step in 0..=96 {
+        let angle = (-150.0 + 120.0 * step as f32 / 96.0).to_radians();
+        arc.push(Point::new(
+            pivot_x + (angle.cos() * radius as f32) as i32,
+            pivot_y + (angle.sin() * radius as f32) as i32,
+        ));
+    }
+    canvas.set_draw_color(Color::RGB(43, 35, 24));
+    canvas.draw_lines(arc.as_slice())?;
+
+    // Logarithmic scale marks; the last three enter the classic red zone.
+    for tick in 0..=12 {
+        let angle = (-150.0 + tick as f32 * 10.0).to_radians();
+        let major = tick % 2 == 0;
+        let inner = radius - if major { 20 } else { 12 };
+        let color = if tick >= 10 {
+            Color::RGB(166, 35, 25)
+        } else {
+            Color::RGB(48, 39, 27)
+        };
+        canvas.set_draw_color(color);
+        canvas.draw_line(
+            Point::new(
+                pivot_x + (angle.cos() * inner as f32) as i32,
+                pivot_y + (angle.sin() * inner as f32) as i32,
+            ),
+            Point::new(
+                pivot_x + (angle.cos() * radius as f32) as i32,
+                pivot_y + (angle.sin() * radius as f32) as i32,
+            ),
+        )?;
+    }
+
+    let angle = vu_angle(level);
+    let needle_length = radius - 9;
+    let tip = Point::new(
+        pivot_x + (angle.cos() * needle_length as f32) as i32,
+        pivot_y + (angle.sin() * needle_length as f32) as i32,
+    );
+
+    // Offset shadow, then a tapered-looking warm black needle.
+    canvas.set_draw_color(Color::RGBA(78, 55, 30, 100));
+    canvas.draw_line(Point::new(pivot_x + 3, pivot_y + 4), Point::new(tip.x + 3, tip.y + 4))?;
+    canvas.set_draw_color(Color::RGB(42, 29, 18));
+    for offset in -1..=1 {
+        canvas.draw_line(Point::new(pivot_x + offset, pivot_y), Point::new(tip.x + offset, tip.y))?;
+    }
+
+    draw_filled_circle(canvas, pivot_x, pivot_y, 10, Color::RGB(45, 40, 33))?;
+    draw_filled_circle(canvas, pivot_x, pivot_y, 5, Color::RGB(151, 126, 78))?;
+
+    // Restrained glass reflection rather than a flat digital panel.
+    canvas.set_draw_color(Color::RGBA(255, 244, 205, 42));
+    canvas.draw_line(
+        Point::new(face.x() + 12, face.y() + 12),
+        Point::new(face.x() + face.width() as i32 / 2, face.y() + 12),
+    )?;
+    canvas.draw_line(
+        Point::new(face.x() + 12, face.y() + 13),
+        Point::new(face.x() + face.width() as i32 / 3, face.y() + 13),
+    )?;
+
+    Ok(())
+}
+
+fn draw_analog_vu(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    ctx: &AppContext,
+    level: f32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    canvas.set_draw_color(visualizer_background_color(ctx));
+    canvas.fill_rect(Rect::new(x, y, width, height))?;
+
+    let gap = (width / 40).max(10);
+    let meter_width = width.saturating_sub(gap) / 2;
+    let meter_height = height.saturating_sub(8);
+    draw_vu_meter(
+        canvas,
+        Rect::new(x, y + 4, meter_width, meter_height),
+        level,
+    )?;
+    draw_vu_meter(
+        canvas,
+        Rect::new(
+            x + meter_width as i32 + gap as i32,
+            y + 4,
+            meter_width,
+            meter_height,
+        ),
+        level,
+    )
+}
+
 fn draw_spectrum(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     ctx: &AppContext,
@@ -1257,10 +1404,11 @@ fn draw_visualizer(
     width: u32,
     height: u32,
     bar_gap: u32,
+    meter_level: f32,
 ) -> Result<(), String> {
     match mode {
         VisualizerMode::None => Ok(()),
-        VisualizerMode::Oscilloscope | VisualizerMode::AnalogVu => draw_oscilloscope(
+        VisualizerMode::Oscilloscope => draw_oscilloscope(
             canvas,
             ctx,
             colors,
@@ -1271,6 +1419,9 @@ fn draw_visualizer(
             width,
             height,
         ),
+        VisualizerMode::AnalogVu => {
+            draw_analog_vu(canvas, ctx, meter_level, x, y, width, height)
+        }
         VisualizerMode::Spectrum => draw_spectrum(
             canvas,
             ctx,
@@ -1737,6 +1888,7 @@ pub fn run_display_loop(
     let mut visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
     let mut last_canvas_size: Option<(u32, u32)> = None;
     let mut display_peak = 0.0f32;
+    let mut vu_display_level = 0.0f32;
     let mut last_vis_debug = Instant::now();
     let mut last_frame_log = Instant::now();
     let mut frame_counter: u32 = 0;
@@ -1911,7 +2063,15 @@ pub fn run_display_loop(
             display_peak * 0.96
         };
 
-        state.meter.level = live_level;
+        let vu_target = (live_level * ctx.config.visualizer.gain).clamp(0.0, 1.4);
+        let vu_response = if vu_target > vu_display_level {
+            0.28
+        } else {
+            0.055
+        };
+        vu_display_level += (vu_target - vu_display_level) * vu_response;
+
+        state.meter.level = vu_display_level;
         state.meter.peak = if ctx.config.visualizer.peak_hold {
             display_peak
         } else {
@@ -2334,6 +2494,7 @@ pub fn run_display_loop(
                 sw(vis_w_scene),
                 sh(vis_h),
                 ctx.config.visualizer.spectrum_bar_gap,
+                state.meter.level,
             )?;
         }
 
