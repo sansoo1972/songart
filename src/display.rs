@@ -465,44 +465,61 @@ fn metadata_font_theme(ctx: &AppContext, state: &SongState) -> String {
     let genre = state.genre.to_ascii_lowercase();
     let year = parse_release_year(&state.released);
 
-    // Strong era/vibe override for synth-heavy 80s music.
+    // Prefer explicit genre information over broad release-era assumptions.
     if contains_any(
         &genre,
         &["electronic", "synth", "synth-pop", "new wave", "dance"],
-    ) || matches!(year, Some(1980..=1989))
-    {
+    ) {
         return "techy".to_string();
     }
 
-    // 90s rock/alternative/grunge gets a rougher style.
-    if contains_any(&genre, &["rock", "alternative", "grunge", "punk"])
-        && matches!(year, Some(1990..=1999))
-    {
+    if contains_any(
+        &genre,
+        &["rock", "alternative", "grunge", "punk", "metal", "indie"],
+    ) {
         return "grungy".to_string();
     }
 
-    // Older music gets a retro display treatment.
-    if matches!(year, Some(0..=1979)) {
-        return "retro".to_string();
-    }
-
-    // Soundtracks, scores, classical, and orchestral music.
     if contains_any(&genre, &["classical", "soundtrack", "score", "orchestral"]) {
         return "fantasy".to_string();
     }
 
-    // Acoustic / folk / singer-songwriter / country / latin.
     if contains_any(
         &genre,
-        &["folk", "acoustic", "country", "singer-songwriter", "latin"],
+        &[
+            "folk",
+            "acoustic",
+            "country",
+            "singer-songwriter",
+            "latin",
+            "spanish",
+            "mexicano",
+            "salsa",
+            "bachata",
+            "reggaeton",
+        ],
     ) {
         return "scripted".to_string();
     }
 
-    // Modern mainstream genres.
-    if contains_any(&genre, &["pop", "r&b", "hip-hop", "rap"]) || matches!(year, Some(2000..=9999))
-    {
+    if contains_any(
+        &genre,
+        &["jazz", "blues", "soul", "funk", "disco", "oldies"],
+    ) {
+        return "retro".to_string();
+    }
+
+    if contains_any(&genre, &["pop", "r&b", "hip-hop", "rap", "urban"]) {
         return "modern".to_string();
+    }
+
+    // Use release era only when genre is absent or does not match a rule.
+    match year {
+        Some(..=1979) => return "retro".to_string(),
+        Some(1980..=1989) => return "techy".to_string(),
+        Some(1990..=1999) => return "grungy".to_string(),
+        Some(2000..) => return "modern".to_string(),
+        None => {}
     }
 
     ctx.config.fonts.fallback_theme.to_ascii_lowercase()
@@ -2462,6 +2479,18 @@ pub fn run_display_loop(
         if needs_static_rebuild {
             let (title_font_path, body_font_path, title_font_size, body_font_size, selected_theme) =
                 selected_fonts(&ctx, &state);
+
+            log_debug(
+                &ctx,
+                &format!(
+                    "Font theme evaluation: mode='{}' genre='{}' released='{}' selected='{}' loaded='{}'",
+                    ctx.config.fonts.mode,
+                    state.genre,
+                    state.released,
+                    selected_theme,
+                    loaded_font_theme
+                ),
+            );
 
             if selected_theme != loaded_font_theme {
                 log_info(
