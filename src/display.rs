@@ -1049,6 +1049,155 @@ fn draw_oscilloscope(
     Ok(())
 }
 
+fn vu_angle(value: f32) -> f32 {
+    // Give quiet material useful travel while retaining a small overload area.
+    let db = 20.0 * value.max(0.0001).log10();
+    let normalized = ((db + 36.0) / 39.0).clamp(0.0, 1.0);
+    (-150.0 + normalized * 120.0).to_radians()
+}
+
+fn draw_vu_meter(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    rect: Rect,
+    level: f32,
+    face_texture: Option<&Texture<'_>>,
+) -> Result<(), String> {
+    let x = rect.x();
+    let y = rect.y();
+    let w = rect.width() as i32;
+    let h = rect.height() as i32;
+
+    let pivot_x = x + w / 2;
+    let pivot_y = y + h - 18;
+    let radius = ((w as f32 * 0.42).min(h as f32 * 0.82)) as i32;
+
+    if let Some(texture) = face_texture {
+        canvas.copy(texture, None, rect)?;
+    } else {
+        // Lightweight fallback when the photographic meter asset is missing.
+        canvas.set_draw_color(Color::RGB(18, 17, 15));
+        canvas.fill_rect(rect)?;
+        canvas.set_draw_color(Color::RGB(135, 117, 82));
+        canvas.draw_rect(Rect::new(x + 6, y + 6, rect.width() - 12, rect.height() - 12))?;
+        let face = Rect::new(
+            x + 10,
+            y + 10,
+            rect.width().saturating_sub(20),
+            rect.height().saturating_sub(20),
+        );
+        canvas.set_draw_color(Color::RGB(225, 184, 103));
+        canvas.fill_rect(face)?;
+
+        let mut arc = Vec::with_capacity(97);
+        for step in 0..=96 {
+            let angle = (-150.0 + 120.0 * step as f32 / 96.0).to_radians();
+            arc.push(Point::new(
+                pivot_x + (angle.cos() * radius as f32) as i32,
+                pivot_y + (angle.sin() * radius as f32) as i32,
+            ));
+        }
+        canvas.set_draw_color(Color::RGB(43, 35, 24));
+        canvas.draw_lines(arc.as_slice())?;
+
+        for tick in 0..=12 {
+            let angle = (-150.0 + tick as f32 * 10.0).to_radians();
+            let major = tick % 2 == 0;
+            let inner = radius - if major { 20 } else { 12 };
+            let color = if tick >= 10 {
+                Color::RGB(166, 35, 25)
+            } else {
+                Color::RGB(48, 39, 27)
+            };
+            canvas.set_draw_color(color);
+            canvas.draw_line(
+                Point::new(
+                    pivot_x + (angle.cos() * inner as f32) as i32,
+                    pivot_y + (angle.sin() * inner as f32) as i32,
+                ),
+                Point::new(
+                    pivot_x + (angle.cos() * radius as f32) as i32,
+                    pivot_y + (angle.sin() * radius as f32) as i32,
+                ),
+            )?;
+        }
+    }
+
+    // Jewel-style peak lamp: dark red glass at rest, bright core in overload.
+    let led_x = x + (w as f32 * 0.83) as i32;
+    let led_y = y + (h as f32 * 0.65) as i32;
+    let overloaded = level >= 0.70;
+    draw_filled_circle(canvas, led_x, led_y, 8, Color::RGB(65, 25, 19))?;
+    draw_filled_circle(
+        canvas,
+        led_x,
+        led_y,
+        5,
+        if overloaded {
+            Color::RGB(245, 40, 22)
+        } else {
+            Color::RGB(105, 28, 20)
+        },
+    )?;
+    if overloaded {
+        draw_filled_circle(canvas, led_x - 1, led_y - 1, 2, Color::RGB(255, 176, 105))?;
+    }
+
+    let angle = vu_angle(level);
+    let needle_length = radius - 9;
+    let tip = Point::new(
+        pivot_x + (angle.cos() * needle_length as f32) as i32,
+        pivot_y + (angle.sin() * needle_length as f32) as i32,
+    );
+
+    // Offset shadow, then a tapered-looking warm black needle.
+    canvas.set_draw_color(Color::RGBA(78, 55, 30, 100));
+    canvas.draw_line(Point::new(pivot_x + 3, pivot_y + 4), Point::new(tip.x + 3, tip.y + 4))?;
+    canvas.set_draw_color(Color::RGB(42, 29, 18));
+    for offset in -1..=1 {
+        canvas.draw_line(Point::new(pivot_x + offset, pivot_y), Point::new(tip.x + offset, tip.y))?;
+    }
+
+    draw_filled_circle(canvas, pivot_x, pivot_y, 10, Color::RGB(45, 40, 33))?;
+    draw_filled_circle(canvas, pivot_x, pivot_y, 5, Color::RGB(151, 126, 78))?;
+
+    Ok(())
+}
+
+fn draw_analog_vu(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    ctx: &AppContext,
+    level: f32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    face_texture: Option<&Texture<'_>>,
+) -> Result<(), String> {
+    canvas.set_draw_color(visualizer_background_color(ctx));
+    canvas.fill_rect(Rect::new(x, y, width, height))?;
+
+    let gap = (width / 40).max(10);
+    let meter_width = width.saturating_sub(gap) / 2;
+    let meter_height = height.saturating_sub(8);
+    draw_vu_meter(
+        canvas,
+        Rect::new(x, y + 4, meter_width, meter_height),
+        level,
+        face_texture,
+    )?;
+    draw_vu_meter(
+        canvas,
+        Rect::new(
+            x + meter_width as i32 + gap as i32,
+            y + 4,
+            meter_width,
+            meter_height,
+        ),
+        level,
+        face_texture,
+    )
+}
+
 fn draw_spectrum(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     ctx: &AppContext,
@@ -1257,10 +1406,12 @@ fn draw_visualizer(
     width: u32,
     height: u32,
     bar_gap: u32,
+    meter_level: f32,
+    vu_face_texture: Option<&Texture<'_>>,
 ) -> Result<(), String> {
     match mode {
         VisualizerMode::None => Ok(()),
-        VisualizerMode::Oscilloscope | VisualizerMode::AnalogVu => draw_oscilloscope(
+        VisualizerMode::Oscilloscope => draw_oscilloscope(
             canvas,
             ctx,
             colors,
@@ -1271,6 +1422,18 @@ fn draw_visualizer(
             width,
             height,
         ),
+        VisualizerMode::AnalogVu => {
+            draw_analog_vu(
+                canvas,
+                ctx,
+                meter_level,
+                x,
+                y,
+                width,
+                height,
+                vu_face_texture,
+            )
+        }
         VisualizerMode::Spectrum => draw_spectrum(
             canvas,
             ctx,
@@ -1737,6 +1900,7 @@ pub fn run_display_loop(
     let mut visualizer_colors = visualizer_colors_for_artwork(&ctx, None);
     let mut last_canvas_size: Option<(u32, u32)> = None;
     let mut display_peak = 0.0f32;
+    let mut vu_display_level = 0.0f32;
     let mut last_vis_debug = Instant::now();
     let mut last_frame_log = Instant::now();
     let mut frame_counter: u32 = 0;
@@ -1753,6 +1917,26 @@ pub fn run_display_loop(
     let mut static_scene_texture = texture_creator
         .create_texture_target(PixelFormatEnum::RGBA8888, scene_w, scene_h)
         .map_err(|e| e.to_string())?;
+
+    let vu_face_texture = if ctx
+        .config
+        .visualizer
+        .mode
+        .eq_ignore_ascii_case("analog_vu")
+    {
+        match texture_creator.load_texture("assets/vu/vintage-meter-face-v2.png") {
+            Ok(texture) => Some(texture),
+            Err(e) => {
+                log_error(
+                    &ctx,
+                    &format!("Failed to load vintage VU meter face; using fallback: {e}"),
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // The detailed groove geometry is expensive to redraw every frame on a
     // Raspberry Pi. Render it once, then rotate the complete vinyl surface as
@@ -1911,7 +2095,15 @@ pub fn run_display_loop(
             display_peak * 0.96
         };
 
-        state.meter.level = live_level;
+        let vu_target = (live_level * ctx.config.visualizer.gain).clamp(0.0, 1.4);
+        let vu_response = if vu_target > vu_display_level {
+            0.28
+        } else {
+            0.055
+        };
+        vu_display_level += (vu_target - vu_display_level) * vu_response;
+
+        state.meter.level = vu_display_level;
         state.meter.peak = if ctx.config.visualizer.peak_hold {
             display_peak
         } else {
@@ -2334,6 +2526,8 @@ pub fn run_display_loop(
                 sw(vis_w_scene),
                 sh(vis_h),
                 ctx.config.visualizer.spectrum_bar_gap,
+                state.meter.level,
+                vu_face_texture.as_ref(),
             )?;
         }
 
