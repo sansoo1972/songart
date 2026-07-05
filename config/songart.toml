@@ -80,7 +80,7 @@ frame_delay_ms = 16
 [artwork]
 # "cover" shows the original rectangular artwork.
 # "turntable" places a circular crop of the artwork on an LP center label.
-mode = "cover"
+mode = "turntable"
 
 
 # ------------------------------------------------------------------------------
@@ -215,7 +215,7 @@ body_size = 22
 enabled = true
 
 # Options currently include: "spectrum", "oscilloscope", "analog_vu"
-mode = "spectrum"
+mode = "analog_vu"
 
 # Visualizer size and padding.
 height = 300
