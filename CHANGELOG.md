@@ -4,6 +4,21 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
+## [0.15.0] - 2026-07-05
+
+### Added
+- [#8](https://github.com/sansoo1972/songart/issues/8) Keyboard-accessible settings overlay for changing display options while music continues running.
+- Live artwork selection between standard cover and turntable presentation.
+- Live visualizer selection between Spectrum, Oscilloscope, and Analog VU.
+- Shared sensitivity slider that adjusts visualizer gain from `0.25` to `8.0`.
+- Safe configuration saving that preserves TOML comments, writes through a temporary file, and creates `config/songart.toml.bak`.
+
+### Changed
+- Settings use a dedicated sans-serif font and no longer inherit the active song-information theme.
+- Artwork mode, visualizer mode, and sensitivity can be previewed before saving.
+
+---
+
 ## [0.14.0] - 2026-07-05
 
 ### Added

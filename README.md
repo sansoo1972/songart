@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.14.0 adds photorealistic dual analog VU meters inspired by illuminated 1970s hi-fi equipment, with mechanical needle ballistics and dynamic peak lamps.
+Version 0.15.0 adds an in-app keyboard settings overlay for switching artwork and visualizer modes, tuning sensitivity live, and safely saving changes to `songart.toml`.
 
 ---
 
@@ -17,6 +17,7 @@ Version 0.14.0 adds photorealistic dual analog VU meters inspired by illuminated
 - Real-time FFT spectrum analyzer
 - Oscilloscope audio visualizer
 - Photorealistic 1970s-style dual analog VU meters
+- Keyboard settings overlay with live previews and safe TOML saving
 - Shared rolling audio buffer for live visualization
 - Configurable display presets for portrait and landscape layouts
 - Improved portrait layout defaults for 1080x1920 displays
@@ -55,6 +56,33 @@ mode = "analog_vu"
 
 The meter face, scale, housing, and glass treatment are cached textures. SDL
 draws only the mechanical needles and peak-lamp illumination each frame.
+
+---
+
+## Keyboard Settings Overlay
+
+Press `M` or `F1` while songart is running to open the settings overlay. Music
+recognition, artwork animation, and the active visualizer continue behind it.
+The menu always uses a dedicated sans-serif font rather than the current song
+theme.
+
+| Key | Action |
+| --- | --- |
+| `M` / `F1` | Open or close settings |
+| `Up` / `Down` | Select artwork, visualizer, or sensitivity |
+| `Left` / `Right` | Change the selected value with a live preview |
+| `Enter` | Apply for the current session without saving |
+| `S` | Save to `config/songart.toml` |
+| `Esc` | Discard unsaved changes |
+
+Available modes:
+
+- Artwork: `cover`, `turntable`
+- Visualizer: `spectrum`, `oscilloscope`, `analog_vu`
+- Sensitivity: `0.25`–`8.0`
+
+Saving preserves TOML comments, writes through a temporary file, and keeps the
+previous configuration at `config/songart.toml.bak`.
 
 ---
 
@@ -529,15 +557,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.14.0**.
+This project is now at **0.15.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.14.0 -m "songart 0.14.0"
-git push origin v0.14.0
+git tag -a v0.15.0 -m "songart 0.15.0"
+git push origin v0.15.0
 ```
 
 ---
@@ -560,6 +588,7 @@ git push origin v0.14.0
 - Artwork-derived visualizer color palettes working
 - Oscilloscope visualizer working
 - Photorealistic analog VU visualizer working
+- Keyboard settings overlay and live mode selection working
 - Shared rolling audio analysis working
 - Renderer scene caching working
 - Metadata refresh improvements working
