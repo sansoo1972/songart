@@ -1756,6 +1756,7 @@ fn save_display_modes(
     artwork_mode: &str,
     visualizer_mode: &str,
     visualizer_gain: f32,
+    display_orientation: &str,
 ) -> Result<(), String> {
     let raw = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {path}: {e}"))?;
@@ -1765,6 +1766,7 @@ fn save_display_modes(
     document["artwork"]["mode"] = toml_edit::value(artwork_mode);
     document["visualizer"]["mode"] = toml_edit::value(visualizer_mode);
     document["visualizer"]["gain"] = toml_edit::value(visualizer_gain as f64);
+    document["display"]["orientation"] = toml_edit::value(display_orientation);
 
     let backup = format!("{path}.bak");
     let temporary = format!("{path}.tmp");
@@ -1807,12 +1809,13 @@ fn draw_settings_overlay(
     artwork_mode: &str,
     visualizer_mode: &str,
     visualizer_gain: f32,
+    display_orientation: &str,
     selected: usize,
     status: &str,
 ) -> Result<(), String> {
     let (canvas_w, canvas_h) = canvas.output_size().map_err(|e| e.to_string())?;
     let panel_w = canvas_w.saturating_sub(80).min(760);
-    let panel_h = 360u32.min(canvas_h.saturating_sub(80));
+    let panel_h = 430u32.min(canvas_h.saturating_sub(80));
     let panel_x = ((canvas_w - panel_w) / 2) as i32;
     let panel_y = ((canvas_h - panel_h) / 2) as i32;
 
@@ -1843,11 +1846,12 @@ fn draw_settings_overlay(
         format!("Artwork       < {} >", artwork_mode),
         format!("Visualizer    < {} >", visualizer_mode),
         format!("Sensitivity   {}", slider),
+        format!("Orientation   < {} >", display_orientation),
     ]
     .iter()
     .enumerate()
     {
-        let row_y = panel_y + 82 + index as i32 * 62;
+        let row_y = panel_y + 70 + index as i32 * 52;
         if selected == index {
             canvas.set_draw_color(Color::RGBA(104, 72, 28, 180));
             canvas.fill_rect(Rect::new(panel_x + 22, row_y - 8, panel_w - 44, 48))?;
@@ -1874,7 +1878,16 @@ fn draw_settings_overlay(
         "Up/Down select   Left/Right change   Enter apply",
         Color::RGB(155, 150, 140),
         panel_x + 32,
-        panel_y + panel_h as i32 - 80,
+        panel_y + panel_h as i32 - 105,
+    )?;
+    draw_settings_text(
+        canvas,
+        texture_creator,
+        font,
+        "Orientation requires restart + separate OS rotation",
+        Color::RGB(155, 150, 140),
+        panel_x + 32,
+        panel_y + panel_h as i32 - 73,
     )?;
     draw_settings_text(
         canvas,
@@ -1883,7 +1896,7 @@ fn draw_settings_overlay(
         "S save   Esc cancel",
         Color::RGB(155, 150, 140),
         panel_x + 32,
-        panel_y + panel_h as i32 - 48,
+        panel_y + panel_h as i32 - 41,
     )?;
     if !status.is_empty() {
         draw_settings_text(
@@ -1893,7 +1906,7 @@ fn draw_settings_overlay(
             status,
             Color::RGB(118, 220, 142),
             panel_x + panel_w as i32 - 210,
-            panel_y + panel_h as i32 - 48,
+            panel_y + panel_h as i32 - 41,
         )?;
     }
     Ok(())
@@ -2056,11 +2069,13 @@ pub fn run_display_loop(
     let mut runtime_artwork_mode = ctx.config.artwork.mode.clone();
     let mut runtime_visualizer_mode = ctx.config.visualizer.mode.clone();
     let mut runtime_visualizer_gain = ctx.config.visualizer.gain;
+    let mut runtime_display_orientation = ctx.config.display.orientation.clone();
     let mut settings_open = false;
     let mut settings_selected = 0usize;
     let mut settings_original_artwork = runtime_artwork_mode.clone();
     let mut settings_original_visualizer = runtime_visualizer_mode.clone();
     let mut settings_original_gain = runtime_visualizer_gain;
+    let mut settings_original_orientation = runtime_display_orientation.clone();
     let mut settings_status = String::new();
     let mut loaded_version: u64 = u64::MAX;
     let mut loaded_track_identity = String::new();
@@ -2143,6 +2158,8 @@ pub fn run_display_loop(
                                 runtime_artwork_mode = settings_original_artwork.clone();
                                 runtime_visualizer_mode = settings_original_visualizer.clone();
                                 runtime_visualizer_gain = settings_original_gain;
+                                runtime_display_orientation =
+                                    settings_original_orientation.clone();
                                 settings_status.clear();
                                 settings_open = false;
                             }
@@ -2151,7 +2168,7 @@ pub fn run_display_loop(
                                 settings_status.clear();
                             }
                             Keycode::Down => {
-                                settings_selected = (settings_selected + 1).min(2);
+                                settings_selected = (settings_selected + 1).min(3);
                                 settings_status.clear();
                             }
                             Keycode::Left | Keycode::Right => {
@@ -2169,24 +2186,37 @@ pub fn run_display_loop(
                                         &["spectrum", "oscilloscope", "analog_vu"],
                                         direction,
                                     );
-                                } else {
+                                } else if settings_selected == 2 {
                                     runtime_visualizer_gain =
                                         (runtime_visualizer_gain + direction as f32 * 0.25)
                                             .clamp(0.25, 8.0);
+                                } else {
+                                    runtime_display_orientation = cycle_option(
+                                        &runtime_display_orientation,
+                                        &["portrait", "landscape"],
+                                        direction,
+                                    );
                                 }
-                                settings_status = "Preview".to_string();
+                                settings_status = if settings_selected == 3 {
+                                    "Save + restart".to_string()
+                                } else {
+                                    "Preview".to_string()
+                                };
                             }
                             Keycode::S => match save_display_modes(
                                 "config/songart.toml",
                                 &runtime_artwork_mode,
                                 &runtime_visualizer_mode,
                                 runtime_visualizer_gain,
+                                &runtime_display_orientation,
                             ) {
                                 Ok(()) => {
                                     settings_original_artwork = runtime_artwork_mode.clone();
                                     settings_original_visualizer =
                                         runtime_visualizer_mode.clone();
                                     settings_original_gain = runtime_visualizer_gain;
+                                    settings_original_orientation =
+                                        runtime_display_orientation.clone();
                                     settings_status = "Saved".to_string();
                                 }
                                 Err(e) => {
@@ -2210,6 +2240,8 @@ pub fn run_display_loop(
                                 settings_original_artwork = runtime_artwork_mode.clone();
                                 settings_original_visualizer = runtime_visualizer_mode.clone();
                                 settings_original_gain = runtime_visualizer_gain;
+                                settings_original_orientation =
+                                    runtime_display_orientation.clone();
                                 settings_selected = 0;
                                 settings_status.clear();
                                 settings_open = true;
@@ -2784,6 +2816,7 @@ pub fn run_display_loop(
                 &runtime_artwork_mode,
                 &runtime_visualizer_mode,
                 runtime_visualizer_gain,
+                &runtime_display_orientation,
                 settings_selected,
                 &settings_status,
             )?;
