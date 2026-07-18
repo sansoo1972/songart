@@ -410,15 +410,21 @@ mode = "metadata"
 fallback_theme = "simple"
 ```
 
-In metadata mode, `songart` chooses a font theme based on song genre and release year. Current built-in behavior includes:
+In metadata mode, `songart` chooses a font theme based on song genre first, then release year when genre is unknown or does not match a rule. Current built-in behavior includes:
 
-- 1980s, electronic, synth, synth-pop, new wave, dance → `techy`
-- 1990s rock, alternative, grunge, punk → `grungy`
-- pre-1980 releases → `retro`
-- classical, soundtrack, score, orchestral → `fantasy`
-- folk, acoustic, country, singer-songwriter, latin → `scripted`
-- pop, R&B, hip-hop, rap, 2000+ releases → `modern`
-- unknown or unmatched metadata → `fallback_theme`
+- electronic, synth, synth-pop, new wave, dance -> `techy`
+- rock, alternative, grunge, punk, metal, indie -> `grungy`
+- classical, soundtrack, score, orchestral -> `fantasy`
+- folk, acoustic, country, singer-songwriter, latin, spanish, mexicano, salsa, bachata, reggaeton -> `scripted`
+- jazz, blues, soul, funk, disco, oldies -> `retro`
+- pop, R&B, hip-hop, rap, urban -> `modern`
+- unmatched pre-1980 releases -> `retro`
+- unmatched 1980s releases -> `techy`
+- unmatched 1990s releases -> `grungy`
+- unmatched 2000+ releases -> `modern`
+- unknown or unmatched metadata -> `fallback_theme`
+
+On each track change, the display logs the font mode, genre, release value, selected theme, and currently loaded theme. When the selected theme changes, title and body fonts are reloaded before rebuilding the now-playing text cache. The keyboard settings overlay always uses its dedicated fixed font.
 
 Available theme names can include:
 

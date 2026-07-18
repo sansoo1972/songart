@@ -461,9 +461,9 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| value.contains(needle))
 }
 
-fn metadata_font_theme(ctx: &AppContext, state: &SongState) -> String {
-    let genre = state.genre.to_ascii_lowercase();
-    let year = parse_release_year(&state.released);
+fn metadata_font_theme_name(genre: &str, released: &str, fallback_theme: &str) -> String {
+    let genre = genre.to_ascii_lowercase();
+    let year = parse_release_year(released);
 
     // Prefer explicit genre information over broad release-era assumptions.
     if contains_any(
@@ -522,13 +522,17 @@ fn metadata_font_theme(ctx: &AppContext, state: &SongState) -> String {
         None => {}
     }
 
-    ctx.config.fonts.fallback_theme.to_ascii_lowercase()
+    fallback_theme.to_ascii_lowercase()
+}
+
+fn metadata_font_theme(ctx: &AppContext, state: &SongState) -> String {
+    metadata_font_theme_name(&state.genre, &state.released, &ctx.config.fonts.fallback_theme)
 }
 
 fn selected_font_theme(ctx: &AppContext, state: &SongState) -> String {
-    match ctx.config.fonts.mode.to_ascii_lowercase().as_str() {
+    match ctx.config.fonts.mode.trim().to_ascii_lowercase().as_str() {
         "metadata" => metadata_font_theme(ctx, state),
-        _ => ctx.config.fonts.theme.to_ascii_lowercase(),
+        _ => ctx.config.fonts.theme.trim().to_ascii_lowercase(),
     }
 }
 
@@ -1873,7 +1877,7 @@ impl DisplayRotation {
 
 #[cfg(test)]
 mod tests {
-    use super::{scene_layout, DisplayRotation};
+    use super::{metadata_font_theme_name, scene_layout, DisplayRotation};
     use crate::config::DisplayPreset;
 
     #[test]
@@ -1908,6 +1912,42 @@ mod tests {
     #[test]
     fn display_rotation_rejects_unknown_values() {
         assert_eq!(DisplayRotation::parse("sideways"), None);
+    }
+
+    #[test]
+    fn metadata_font_theme_prefers_genre_over_release_year() {
+        assert_eq!(
+            metadata_font_theme_name("Rock", "2019-03-01", "simple"),
+            "grungy"
+        );
+        assert_eq!(
+            metadata_font_theme_name("Latin Pop", "1984", "simple"),
+            "scripted"
+        );
+    }
+
+    #[test]
+    fn metadata_font_theme_covers_representative_rules() {
+        let cases = [
+            ("Electronic", "2024", "techy"),
+            ("Alternative Rock", "2024", "grungy"),
+            ("Film Score", "2024", "fantasy"),
+            ("Singer-Songwriter", "2024", "scripted"),
+            ("Jazz", "2024", "retro"),
+            ("Hip-Hop", "1974", "modern"),
+            ("Unknown", "1974", "retro"),
+            ("Unknown", "1984", "techy"),
+            ("Unknown", "1994", "grungy"),
+            ("Unknown", "2004", "modern"),
+            ("Unknown", "Unknown", "simple"),
+        ];
+
+        for (genre, released, expected) in cases {
+            assert_eq!(
+                metadata_font_theme_name(genre, released, "simple"),
+                expected
+            );
+        }
     }
 
     #[test]
