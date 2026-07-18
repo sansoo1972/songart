@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.15.0 adds an in-app keyboard settings overlay for switching artwork and visualizer modes, tuning sensitivity live, and safely saving changes to `songart.toml`.
+Version 0.16.0 adds application-level display rotation, a landscape side layout for rotated displays, and more reliable metadata-driven font theme changes.
 
 ---
 
@@ -20,6 +20,8 @@ Version 0.15.0 adds an in-app keyboard settings overlay for switching artwork an
 - Keyboard settings overlay with live previews and safe TOML saving
 - Shared rolling audio buffer for live visualization
 - Configurable display presets for portrait and landscape layouts
+- Application-level SDL output rotation independent of logical layout orientation
+- Landscape side layout with artwork on the right, metadata on the left, and the visualizer beneath metadata
 - Improved portrait layout defaults for 1080x1920 displays
 - Theme-based typography with separate title and body fonts
 - Metadata-driven font theme selection by genre and release year
@@ -257,8 +259,14 @@ fallback_theme = "simple"
 
 [font_themes.techy]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
-body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
 title_size = 36
+body_size = 24
+
+[font_themes.modern]
+title = "/home/admin/projects/songart/assets/fonts/Megrim-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+title_size = 42
 body_size = 24
 
 [font_themes.scripted]
@@ -410,15 +418,25 @@ mode = "metadata"
 fallback_theme = "simple"
 ```
 
-In metadata mode, `songart` chooses a font theme based on song genre and release year. Current built-in behavior includes:
+In metadata mode, `songart` chooses a font theme based on song genre first, then release year when genre is unknown or does not match a rule. Current built-in behavior includes:
 
-- 1980s, electronic, synth, synth-pop, new wave, dance → `techy`
-- 1990s rock, alternative, grunge, punk → `grungy`
-- pre-1980 releases → `retro`
-- classical, soundtrack, score, orchestral → `fantasy`
-- folk, acoustic, country, singer-songwriter, latin → `scripted`
-- pop, R&B, hip-hop, rap, 2000+ releases → `modern`
-- unknown or unmatched metadata → `fallback_theme`
+- electronic, synth, synth-pop, new wave, dance -> `techy`
+- rock, alternative, grunge, punk, metal, indie -> `grungy`
+- classical, soundtrack, score, orchestral -> `fantasy`
+- folk, acoustic, country, singer-songwriter, latin, spanish, mexicano, salsa, bachata, reggaeton -> `scripted`
+- jazz, blues, soul, funk, disco, oldies -> `retro`
+- pop, R&B, hip-hop, rap, urban -> `modern`
+- unmatched pre-1980 releases -> `retro`
+- unmatched 1980s releases -> `techy`
+- unmatched 1990s releases -> `grungy`
+- unmatched 2000+ releases -> `modern`
+- unknown or unmatched metadata -> `fallback_theme`
+
+On each track change, the display logs the font mode, genre, release value, selected theme, and currently loaded theme. When the selected theme changes, title and body fonts are reloaded before rebuilding the now-playing text cache. The keyboard settings overlay always uses its dedicated fixed font.
+
+The bundled presets intentionally use visibly different title fonts so changes are easy to confirm on the display.
+
+If `fonts.mode` contains an invalid value, `songart` logs a warning and uses metadata-driven selection instead of silently pinning the display to the fixed theme.
 
 Available theme names can include:
 
@@ -584,15 +602,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.15.0**.
+This project is now at **0.16.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.15.0 -m "songart 0.15.0"
-git push origin v0.15.0
+git tag -a v0.16.0 -m "songart 0.16.0"
+git push origin v0.16.0
 ```
 
 ---
@@ -616,6 +634,8 @@ git push origin v0.15.0
 - Oscilloscope visualizer working
 - Photorealistic analog VU visualizer working
 - Keyboard settings overlay and live mode selection working
+- Application-level display rotation working on Raspberry Pi
+- Metadata-driven font theme switching verified on Raspberry Pi
 - Shared rolling audio analysis working
 - Renderer scene caching working
 - Metadata refresh improvements working

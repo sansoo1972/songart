@@ -4,16 +4,20 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
-## [Unreleased]
+## [0.16.0] - 2026-07-18
 
 ### Added
 - [#35](https://github.com/sansoo1972/songart/issues/35) Application-level SDL output rotation with `display.rotation` values `normal`, `clockwise`, `inverted`, and `counter_clockwise`.
 - F1 settings overlay controls for saving display orientation and output rotation.
+- [#34](https://github.com/sansoo1972/songart/issues/34) Font-theme diagnostics log metadata inputs, selected theme, and loaded theme on text cache rebuilds.
 
 ### Changed
 - SongArt now renders the logical scene to an off-screen texture and applies final output rotation once when presenting the composed frame.
 - Windowed startup dimensions are swapped for 90-degree and 270-degree output rotations while preserving logical layout presets.
 - Landscape layout now places album artwork on the right with metadata on the left and the visualizer beneath the metadata column.
+- Metadata-driven font selection now prefers explicit genre matches before broad release-year fallback rules, making theme changes more predictable across tracks.
+- Bundled `modern` and `techy` font presets now use more distinct font pairings so metadata theme changes are visibly obvious.
+- Invalid `fonts.mode` values now log a warning and fall back to metadata selection instead of silently using the fixed theme.
 
 ---
 

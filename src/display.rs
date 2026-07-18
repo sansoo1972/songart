@@ -461,58 +461,110 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| value.contains(needle))
 }
 
-fn metadata_font_theme(ctx: &AppContext, state: &SongState) -> String {
-    let genre = state.genre.to_ascii_lowercase();
-    let year = parse_release_year(&state.released);
+fn metadata_font_theme_name(genre: &str, released: &str, fallback_theme: &str) -> String {
+    let genre = genre.to_ascii_lowercase();
+    let year = parse_release_year(released);
 
-    // Strong era/vibe override for synth-heavy 80s music.
+    // Prefer explicit genre information over broad release-era assumptions.
     if contains_any(
         &genre,
         &["electronic", "synth", "synth-pop", "new wave", "dance"],
-    ) || matches!(year, Some(1980..=1989))
-    {
+    ) {
         return "techy".to_string();
     }
 
-    // 90s rock/alternative/grunge gets a rougher style.
-    if contains_any(&genre, &["rock", "alternative", "grunge", "punk"])
-        && matches!(year, Some(1990..=1999))
-    {
+    if contains_any(
+        &genre,
+        &["rock", "alternative", "grunge", "punk", "metal", "indie"],
+    ) {
         return "grungy".to_string();
     }
 
-    // Older music gets a retro display treatment.
-    if matches!(year, Some(0..=1979)) {
-        return "retro".to_string();
-    }
-
-    // Soundtracks, scores, classical, and orchestral music.
     if contains_any(&genre, &["classical", "soundtrack", "score", "orchestral"]) {
         return "fantasy".to_string();
     }
 
-    // Acoustic / folk / singer-songwriter / country / latin.
     if contains_any(
         &genre,
-        &["folk", "acoustic", "country", "singer-songwriter", "latin"],
+        &[
+            "folk",
+            "acoustic",
+            "country",
+            "singer-songwriter",
+            "latin",
+            "spanish",
+            "mexicano",
+            "salsa",
+            "bachata",
+            "reggaeton",
+        ],
     ) {
         return "scripted".to_string();
     }
 
-    // Modern mainstream genres.
-    if contains_any(&genre, &["pop", "r&b", "hip-hop", "rap"]) || matches!(year, Some(2000..=9999))
-    {
+    if contains_any(
+        &genre,
+        &["jazz", "blues", "soul", "funk", "disco", "oldies"],
+    ) {
+        return "retro".to_string();
+    }
+
+    if contains_any(&genre, &["pop", "r&b", "hip-hop", "rap", "urban"]) {
         return "modern".to_string();
     }
 
-    ctx.config.fonts.fallback_theme.to_ascii_lowercase()
+    // Use release era only when genre is absent or does not match a rule.
+    match year {
+        Some(..=1979) => return "retro".to_string(),
+        Some(1980..=1989) => return "techy".to_string(),
+        Some(1990..=1999) => return "grungy".to_string(),
+        Some(2000..) => return "modern".to_string(),
+        None => {}
+    }
+
+    fallback_theme.to_ascii_lowercase()
+}
+
+fn selected_font_theme_name(
+    font_mode: &str,
+    fixed_theme: &str,
+    genre: &str,
+    released: &str,
+    fallback_theme: &str,
+) -> (String, bool) {
+    match font_mode.trim().to_ascii_lowercase().as_str() {
+        "fixed" => (fixed_theme.trim().to_ascii_lowercase(), false),
+        "metadata" => (
+            metadata_font_theme_name(genre, released, fallback_theme),
+            false,
+        ),
+        _ => (
+            metadata_font_theme_name(genre, released, fallback_theme),
+            true,
+        ),
+    }
 }
 
 fn selected_font_theme(ctx: &AppContext, state: &SongState) -> String {
-    match ctx.config.fonts.mode.to_ascii_lowercase().as_str() {
-        "metadata" => metadata_font_theme(ctx, state),
-        _ => ctx.config.fonts.theme.to_ascii_lowercase(),
+    let (theme, invalid_mode) = selected_font_theme_name(
+        &ctx.config.fonts.mode,
+        &ctx.config.fonts.theme,
+        &state.genre,
+        &state.released,
+        &ctx.config.fonts.fallback_theme,
+    );
+
+    if invalid_mode {
+        log_error(
+            ctx,
+            &format!(
+                "Invalid fonts.mode '{}'; using metadata font selection",
+                ctx.config.fonts.mode
+            ),
+        );
     }
+
+    theme
 }
 
 fn selected_fonts<'a>(
@@ -1856,7 +1908,7 @@ impl DisplayRotation {
 
 #[cfg(test)]
 mod tests {
-    use super::{scene_layout, DisplayRotation};
+    use super::{metadata_font_theme_name, scene_layout, selected_font_theme_name, DisplayRotation};
     use crate::config::DisplayPreset;
 
     #[test]
@@ -1891,6 +1943,60 @@ mod tests {
     #[test]
     fn display_rotation_rejects_unknown_values() {
         assert_eq!(DisplayRotation::parse("sideways"), None);
+    }
+
+    #[test]
+    fn metadata_font_theme_prefers_genre_over_release_year() {
+        assert_eq!(
+            metadata_font_theme_name("Rock", "2019-03-01", "simple"),
+            "grungy"
+        );
+        assert_eq!(
+            metadata_font_theme_name("Latin Pop", "1984", "simple"),
+            "scripted"
+        );
+    }
+
+    #[test]
+    fn metadata_font_theme_covers_representative_rules() {
+        let cases = [
+            ("Electronic", "2024", "techy"),
+            ("Alternative Rock", "2024", "grungy"),
+            ("Film Score", "2024", "fantasy"),
+            ("Singer-Songwriter", "2024", "scripted"),
+            ("Jazz", "2024", "retro"),
+            ("Hip-Hop", "1974", "modern"),
+            ("Unknown", "1974", "retro"),
+            ("Unknown", "1984", "techy"),
+            ("Unknown", "1994", "grungy"),
+            ("Unknown", "2004", "modern"),
+            ("Unknown", "Unknown", "simple"),
+        ];
+
+        for (genre, released, expected) in cases {
+            assert_eq!(
+                metadata_font_theme_name(genre, released, "simple"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn selected_font_theme_honors_fixed_mode() {
+        let (theme, invalid_mode) =
+            selected_font_theme_name(" fixed ", " Scripted ", "Pop", "2024", "simple");
+
+        assert_eq!(theme, "scripted");
+        assert!(!invalid_mode);
+    }
+
+    #[test]
+    fn selected_font_theme_recovers_from_invalid_mode_with_metadata() {
+        let (theme, invalid_mode) =
+            selected_font_theme_name("analog_vu", "scripted", "Pop", "1998", "simple");
+
+        assert_eq!(theme, "modern");
+        assert!(invalid_mode);
     }
 
     #[test]
@@ -2244,7 +2350,13 @@ pub fn run_display_loop(
     let (title_font_path, body_font_path, title_font_size, body_font_size, selected_theme) =
         selected_fonts(&ctx, &initial_state);
 
-    log_info(&ctx, &format!("Selected font theme: {}", selected_theme));
+    log_info(
+        &ctx,
+        &format!(
+            "Selected font theme '{}' title_font='{}' body_font='{}' title_size={} body_size={}",
+            selected_theme, title_font_path, body_font_path, title_font_size, body_font_size
+        ),
+    );
 
     let mut title_font = ttf_ctx
         .load_font(title_font_path, title_font_size)
@@ -2727,12 +2839,31 @@ pub fn run_display_loop(
             let (title_font_path, body_font_path, title_font_size, body_font_size, selected_theme) =
                 selected_fonts(&ctx, &state);
 
+            log_debug(
+                &ctx,
+                &format!(
+                    "Font theme evaluation: mode='{}' genre='{}' released='{}' selected='{}' loaded='{}'",
+                    ctx.config.fonts.mode,
+                    state.genre,
+                    state.released,
+                    selected_theme,
+                    loaded_font_theme
+                ),
+            );
+
             if selected_theme != loaded_font_theme {
                 log_info(
                     &ctx,
                     &format!(
-                        "Changing font theme from '{}' to '{}' for genre='{}' released='{}'",
-                        loaded_font_theme, selected_theme, state.genre, state.released
+                        "Changing font theme from '{}' to '{}' for genre='{}' released='{}' title_font='{}' body_font='{}' title_size={} body_size={}",
+                        loaded_font_theme,
+                        selected_theme,
+                        state.genre,
+                        state.released,
+                        title_font_path,
+                        body_font_path,
+                        title_font_size,
+                        body_font_size
                     ),
                 );
 
