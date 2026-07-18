@@ -4,6 +4,19 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
+## [Unreleased]
+
+### Added
+- [#35](https://github.com/sansoo1972/songart/issues/35) Application-level SDL output rotation with `display.rotation` values `normal`, `clockwise`, `inverted`, and `counter_clockwise`.
+- F1 settings overlay controls for saving display orientation and output rotation.
+
+### Changed
+- SongArt now renders the logical scene to an off-screen texture and applies final output rotation once when presenting the composed frame.
+- Windowed startup dimensions are swapped for 90-degree and 270-degree output rotations while preserving logical layout presets.
+- Landscape layout now places album artwork on the right with metadata on the left and the visualizer beneath the metadata column.
+
+---
+
 ## [0.15.0] - 2026-07-05
 
 ### Added
