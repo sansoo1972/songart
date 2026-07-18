@@ -218,6 +218,7 @@ artwork_file = "/home/admin/projects/songart/current.jpg"
 window_title = "songart"
 fullscreen = true
 orientation = "portrait"
+rotation = "normal"
 frame_delay_ms = 16
 
 [display.colors]
@@ -341,6 +342,9 @@ The selected preset controls:
 - metadata panel origin
 - title/body/detail line spacing
 
+`orientation` controls the logical SongArt layout. It does not rotate the physical display output.
+Portrait keeps artwork in the top region with metadata and the visualizer below it. Landscape uses a side-by-side composition: metadata on the left, the visualizer underneath that metadata column, and album artwork on the right.
+
 For best fullscreen quality, the selected preset should match the native display resolution. For example, a portrait 1080x1920 display should use:
 
 ```toml
@@ -348,6 +352,29 @@ For best fullscreen quality, the selected preset should match the native display
 width = 1080
 height = 1920
 ```
+
+### Rotate the final output
+
+Use `display.rotation` when the monitor is mounted physically rotated and you want SongArt to rotate the composed SDL frame itself:
+
+```toml
+[display]
+orientation = "portrait"
+rotation = "clockwise"
+```
+
+Supported canonical values:
+
+- `normal`
+- `clockwise`
+- `inverted`
+- `counter_clockwise`
+
+Friendly aliases are also accepted: `0`, `90`, `180`, `270`, `right`, `left`, and `upside_down`. Missing values default to `normal`.
+
+For 90-degree and 270-degree rotations, SongArt swaps the requested physical window dimensions while keeping the selected display preset as the logical scene size. In fullscreen desktop mode, the rotated frame is centered and scaled to the actual SDL output without clipping.
+
+The F1 settings overlay can select and save output rotation. Restart SongArt after saving orientation or rotation changes so startup window sizing and fullscreen placement use the new value.
 
 ### Configure region backgrounds
 
