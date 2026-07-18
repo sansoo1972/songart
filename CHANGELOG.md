@@ -17,6 +17,7 @@ All notable changes to `songart` will be documented in this file.
 - Landscape layout now places album artwork on the right with metadata on the left and the visualizer beneath the metadata column.
 - Metadata-driven font selection now prefers explicit genre matches before broad release-year fallback rules, making theme changes more predictable across tracks.
 - Bundled `modern` and `techy` font presets now use more distinct font pairings so metadata theme changes are visibly obvious.
+- Invalid `fonts.mode` values now log a warning and fall back to metadata selection instead of silently using the fixed theme.
 
 ---
 

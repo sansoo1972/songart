@@ -525,15 +525,46 @@ fn metadata_font_theme_name(genre: &str, released: &str, fallback_theme: &str) -
     fallback_theme.to_ascii_lowercase()
 }
 
-fn metadata_font_theme(ctx: &AppContext, state: &SongState) -> String {
-    metadata_font_theme_name(&state.genre, &state.released, &ctx.config.fonts.fallback_theme)
+fn selected_font_theme_name(
+    font_mode: &str,
+    fixed_theme: &str,
+    genre: &str,
+    released: &str,
+    fallback_theme: &str,
+) -> (String, bool) {
+    match font_mode.trim().to_ascii_lowercase().as_str() {
+        "fixed" => (fixed_theme.trim().to_ascii_lowercase(), false),
+        "metadata" => (
+            metadata_font_theme_name(genre, released, fallback_theme),
+            false,
+        ),
+        _ => (
+            metadata_font_theme_name(genre, released, fallback_theme),
+            true,
+        ),
+    }
 }
 
 fn selected_font_theme(ctx: &AppContext, state: &SongState) -> String {
-    match ctx.config.fonts.mode.trim().to_ascii_lowercase().as_str() {
-        "metadata" => metadata_font_theme(ctx, state),
-        _ => ctx.config.fonts.theme.trim().to_ascii_lowercase(),
+    let (theme, invalid_mode) = selected_font_theme_name(
+        &ctx.config.fonts.mode,
+        &ctx.config.fonts.theme,
+        &state.genre,
+        &state.released,
+        &ctx.config.fonts.fallback_theme,
+    );
+
+    if invalid_mode {
+        log_error(
+            ctx,
+            &format!(
+                "Invalid fonts.mode '{}'; using metadata font selection",
+                ctx.config.fonts.mode
+            ),
+        );
     }
+
+    theme
 }
 
 fn selected_fonts<'a>(
@@ -1877,7 +1908,7 @@ impl DisplayRotation {
 
 #[cfg(test)]
 mod tests {
-    use super::{metadata_font_theme_name, scene_layout, DisplayRotation};
+    use super::{metadata_font_theme_name, scene_layout, selected_font_theme_name, DisplayRotation};
     use crate::config::DisplayPreset;
 
     #[test]
@@ -1948,6 +1979,24 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn selected_font_theme_honors_fixed_mode() {
+        let (theme, invalid_mode) =
+            selected_font_theme_name(" fixed ", " Scripted ", "Pop", "2024", "simple");
+
+        assert_eq!(theme, "scripted");
+        assert!(!invalid_mode);
+    }
+
+    #[test]
+    fn selected_font_theme_recovers_from_invalid_mode_with_metadata() {
+        let (theme, invalid_mode) =
+            selected_font_theme_name("analog_vu", "scripted", "Pop", "1998", "simple");
+
+        assert_eq!(theme, "modern");
+        assert!(invalid_mode);
     }
 
     #[test]

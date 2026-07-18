@@ -434,6 +434,8 @@ On each track change, the display logs the font mode, genre, release value, sele
 
 The bundled presets intentionally use visibly different title fonts so changes are easy to confirm on the display.
 
+If `fonts.mode` contains an invalid value, `songart` logs a warning and uses metadata-driven selection instead of silently pinning the display to the fixed theme.
+
 Available theme names can include:
 
 - `modern`
