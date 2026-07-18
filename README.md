@@ -343,6 +343,7 @@ The selected preset controls:
 - title/body/detail line spacing
 
 `orientation` controls the logical SongArt layout. It does not rotate the physical display output.
+Portrait keeps artwork in the top region with metadata and the visualizer below it. Landscape uses a side-by-side composition: metadata on the left, the visualizer underneath that metadata column, and album artwork on the right.
 
 For best fullscreen quality, the selected preset should match the native display resolution. For example, a portrait 1080x1920 display should use:
 

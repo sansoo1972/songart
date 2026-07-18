@@ -562,6 +562,62 @@ fn selected_display_preset<'a>(ctx: &'a AppContext) -> Option<&'a DisplayPreset>
 }
 
 // ==============================================================================
+// Scene Layout
+// ==============================================================================
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SceneLayout {
+    artwork_region: Rect,
+    metadata_region: Rect,
+    visualizer_region: Rect,
+}
+
+fn scene_layout(preset: &DisplayPreset) -> SceneLayout {
+    if preset.width > preset.height {
+        let outer_padding = 40u32;
+        let gap = 36u32;
+        let left_w = ((preset.width as f32) * 0.43) as u32;
+        let right_x = outer_padding + left_w + gap;
+        let right_w = preset
+            .width
+            .saturating_sub(right_x)
+            .saturating_sub(outer_padding);
+        let visualizer_h = 320u32.min(preset.height.saturating_sub(outer_padding * 2 + gap));
+        let metadata_h = preset
+            .height
+            .saturating_sub(outer_padding * 2 + gap + visualizer_h);
+
+        SceneLayout {
+            metadata_region: Rect::new(
+                outer_padding as i32,
+                outer_padding as i32,
+                left_w,
+                metadata_h,
+            ),
+            visualizer_region: Rect::new(
+                outer_padding as i32,
+                (outer_padding + metadata_h + gap) as i32,
+                left_w,
+                visualizer_h,
+            ),
+            artwork_region: Rect::new(
+                right_x as i32,
+                outer_padding as i32,
+                right_w,
+                preset.height - outer_padding * 2,
+            ),
+        }
+    } else {
+        let top_h = ((preset.height as f32) * preset.top_panel_ratio) as u32;
+        SceneLayout {
+            artwork_region: Rect::new(0, 0, preset.width, top_h),
+            metadata_region: Rect::new(0, top_h as i32, preset.width, preset.height - top_h),
+            visualizer_region: Rect::new(0, top_h as i32, preset.width, preset.height - top_h),
+        }
+    }
+}
+
+// ==============================================================================
 // Cached Text
 // ==============================================================================
 
@@ -747,13 +803,14 @@ fn build_text_cache<'a>(
     body_font: &sdl2::ttf::Font,
     state: &SongState,
     preset: &DisplayPreset,
-    top_h: u32,
+    layout: &SceneLayout,
 ) -> Result<TextCache<'a>, String> {
-    let panel_x = preset.panel_x;
-    let mut panel_y = (top_h as i32) + preset.panel_y;
-    let viewport_width = preset
-        .width
-        .saturating_sub((panel_x as u32).saturating_mul(2));
+    let panel_x = layout.metadata_region.x() + preset.panel_x;
+    let mut panel_y = layout.metadata_region.y() + preset.panel_y;
+    let viewport_width = layout
+        .metadata_region
+        .width()
+        .saturating_sub((preset.panel_x as u32).saturating_mul(2));
 
     let title_line = if state.title.trim().is_empty() {
         "Waiting for music...".to_string()
@@ -1456,32 +1513,33 @@ fn draw_visualizer(
 // Static Scene Drawing
 // ==============================================================================
 
-fn compute_artwork_rect(query: TextureQuery, scene_w: u32, top_h: u32) -> Rect {
+fn compute_artwork_rect(query: TextureQuery, region: Rect) -> Rect {
     let art_w = query.width as f32;
     let art_h = query.height as f32;
 
     let padding = 24.0;
-    let max_w = (scene_w as f32) - padding * 2.0;
-    let max_h = (top_h as f32) - padding * 2.0;
+    let max_w = (region.width() as f32) - padding * 2.0;
+    let max_h = (region.height() as f32) - padding * 2.0;
 
     let scale = f32::min(max_w / art_w, max_h / art_h);
     let draw_w = (art_w * scale) as u32;
     let draw_h = (art_h * scale) as u32;
 
-    let x = ((scene_w - draw_w) / 2) as i32;
-    let y = ((top_h - draw_h) / 2) as i32;
+    let x = region.x() + ((region.width() - draw_w) / 2) as i32;
+    let y = region.y() + ((region.height() - draw_h) / 2) as i32;
 
     Rect::new(x, y, draw_w, draw_h)
 }
 
-fn compute_record_rect(scene_w: u32, top_h: u32) -> Rect {
+fn compute_record_rect(region: Rect) -> Rect {
     let padding = 24u32;
-    let diameter = scene_w
+    let diameter = region
+        .width()
         .saturating_sub(padding * 2)
-        .min(top_h.saturating_sub(padding * 2));
+        .min(region.height().saturating_sub(padding * 2));
     Rect::new(
-        ((scene_w - diameter) / 2) as i32,
-        ((top_h - diameter) / 2) as i32,
+        region.x() + ((region.width() - diameter) / 2) as i32,
+        region.y() + ((region.height() - diameter) / 2) as i32,
         diameter,
         diameter,
     )
@@ -1682,18 +1740,21 @@ impl<'a> StaticSceneCache<'a> {
         &self,
         canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
         ctx: &AppContext,
-        scene_w: u32,
-        top_h: u32,
-        bottom_h: u32,
+        layout: &SceneLayout,
     ) -> Result<(), String> {
         canvas.set_draw_color(canvas_background_color(ctx));
         canvas.clear();
 
         canvas.set_draw_color(artwork_background_color(ctx));
-        canvas.fill_rect(Rect::new(0, 0, scene_w, top_h))?;
+        canvas.fill_rect(layout.artwork_region)?;
 
         canvas.set_draw_color(metadata_background_color(ctx));
-        canvas.fill_rect(Rect::new(0, top_h as i32, scene_w, bottom_h))?;
+        canvas.fill_rect(layout.metadata_region)?;
+
+        if layout.visualizer_region != layout.metadata_region {
+            canvas.set_draw_color(visualizer_background_color(ctx));
+            canvas.fill_rect(layout.visualizer_region)?;
+        }
 
         Ok(())
     }
@@ -1795,7 +1856,8 @@ impl DisplayRotation {
 
 #[cfg(test)]
 mod tests {
-    use super::DisplayRotation;
+    use super::{scene_layout, DisplayRotation};
+    use crate::config::DisplayPreset;
 
     #[test]
     fn display_rotation_accepts_canonical_values_and_aliases() {
@@ -1829,6 +1891,48 @@ mod tests {
     #[test]
     fn display_rotation_rejects_unknown_values() {
         assert_eq!(DisplayRotation::parse("sideways"), None);
+    }
+
+    #[test]
+    fn landscape_layout_places_artwork_right_and_visualizer_under_metadata() {
+        let preset = DisplayPreset {
+            width: 1920,
+            height: 1080,
+            top_panel_ratio: 0.72,
+            panel_x: 40,
+            panel_y: 28,
+            title_line_spacing: 46,
+            body_line_spacing: 34,
+            detail_line_spacing: 40,
+        };
+
+        let layout = scene_layout(&preset);
+
+        assert!(layout.artwork_region.x() > layout.metadata_region.x());
+        assert_eq!(layout.metadata_region.x(), layout.visualizer_region.x());
+        assert_eq!(layout.metadata_region.width(), layout.visualizer_region.width());
+        assert!(layout.visualizer_region.y() > layout.metadata_region.y());
+    }
+
+    #[test]
+    fn portrait_layout_preserves_top_artwork_region() {
+        let preset = DisplayPreset {
+            width: 1080,
+            height: 1920,
+            top_panel_ratio: 0.66,
+            panel_x: 48,
+            panel_y: 36,
+            title_line_spacing: 52,
+            body_line_spacing: 38,
+            detail_line_spacing: 44,
+        };
+
+        let layout = scene_layout(&preset);
+
+        assert_eq!(layout.artwork_region.x(), 0);
+        assert_eq!(layout.artwork_region.y(), 0);
+        assert_eq!(layout.artwork_region.width(), preset.width);
+        assert!(layout.metadata_region.y() > layout.artwork_region.y());
     }
 }
 
@@ -2159,8 +2263,7 @@ pub fn run_display_loop(
 
     let scene_w = preset.width;
     let scene_h = preset.height;
-    let top_h = ((scene_h as f32) * preset.top_panel_ratio) as u32;
-    let bottom_h = scene_h - top_h;
+    let layout = scene_layout(preset);
 
     let mut event_pump = sdl.event_pump()?;
     let mut runtime_artwork_mode = ctx.config.artwork.mode.clone();
@@ -2231,7 +2334,7 @@ pub fn run_display_loop(
     // The detailed groove geometry is expensive to redraw every frame on a
     // Raspberry Pi. Render it once, then rotate the complete vinyl surface as
     // a cached texture together with the album label.
-    let record_scene = compute_record_rect(scene_w, top_h);
+    let record_scene = compute_record_rect(layout.artwork_region);
     let mut vinyl_texture = {
         let diameter = record_scene.width().max(1);
         let mut texture = texture_creator
@@ -2549,7 +2652,7 @@ pub fn run_display_loop(
                         previous_artwork_texture = artwork_texture.take();
                         previous_circular_artwork_texture = circular_artwork_texture.take();
                         artwork_texture = Some(texture);
-                        let record_rect = compute_record_rect(scene_w, top_h);
+                        let record_rect = compute_record_rect(layout.artwork_region);
                         let circular_diameter = record_rect.width().max(1);
                         let mut circular_texture = texture_creator
                             .create_texture_target(
@@ -2654,12 +2757,12 @@ pub fn run_display_loop(
                 &body_font,
                 &state,
                 preset,
-                top_h,
+                &layout,
             )?;
 
             let artwork_rect = artwork_texture
                 .as_ref()
-                .map(|texture| compute_artwork_rect(texture.query(), scene_w, top_h));
+                .map(|texture| compute_artwork_rect(texture.query(), layout.artwork_region));
 
             let cache = StaticSceneCache {
                 version: state.version,
@@ -2669,13 +2772,7 @@ pub fn run_display_loop(
 
             canvas
                 .with_texture_canvas(&mut static_scene_texture, |tex_canvas| {
-                    let _ = cache.draw_static_scene(
-                        tex_canvas,
-                        &ctx,
-                        scene_w,
-                        top_h,
-                        bottom_h,
-                    );
+                    let _ = cache.draw_static_scene(tex_canvas, &ctx, &layout);
                 })
                 .map_err(|e| e.to_string())?;
 
@@ -2887,7 +2984,8 @@ pub fn run_display_loop(
                 );
                 let fade = (artwork_elapsed / ARTWORK_FADE_SECONDS).clamp(0.0, 1.0);
                 if let Some(previous) = previous_artwork_texture.as_mut() {
-                    let previous_scene = compute_artwork_rect(previous.query(), scene_w, top_h);
+                    let previous_scene =
+                        compute_artwork_rect(previous.query(), layout.artwork_region);
                     let previous_target = Rect::new(
                         sx(previous_scene.x()),
                         sy(previous_scene.y()),
@@ -2915,12 +3013,21 @@ pub fn run_display_loop(
         }
 
         if ctx.config.visualizer.enabled && state.visualizer.enabled {
-            let vis_h = ctx.config.visualizer.height.min(bottom_h.saturating_sub(8));
-
-            let vis_y_scene =
-                (scene_h as i32) - (vis_h as i32) - (ctx.config.visualizer.padding as i32);
-            let vis_x_scene = ctx.config.visualizer.padding as i32;
-            let vis_w_scene = scene_w.saturating_sub(ctx.config.visualizer.padding * 2);
+            let padding = ctx.config.visualizer.padding;
+            let vis_h = ctx
+                .config
+                .visualizer
+                .height
+                .min(layout.visualizer_region.height().saturating_sub(padding * 2));
+            let vis_x_scene = layout.visualizer_region.x() + padding as i32;
+            let vis_y_scene = layout.visualizer_region.y()
+                + layout.visualizer_region.height() as i32
+                - vis_h as i32
+                - padding as i32;
+            let vis_w_scene = layout
+                .visualizer_region
+                .width()
+                .saturating_sub(padding * 2);
 
             draw_visualizer(
                 &mut canvas,

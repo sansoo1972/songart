@@ -13,6 +13,7 @@ All notable changes to `songart` will be documented in this file.
 ### Changed
 - SongArt now renders the logical scene to an off-screen texture and applies final output rotation once when presenting the composed frame.
 - Windowed startup dimensions are swapped for 90-degree and 270-degree output rotations while preserving logical layout presets.
+- Landscape layout now places album artwork on the right with metadata on the left and the visualizer beneath the metadata column.
 
 ---
 

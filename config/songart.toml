@@ -133,6 +133,8 @@ detail_line_spacing = 44
 # ------------------------------------------------------------------------------
 
 [display_presets.landscape]
+# Landscape uses a side-by-side composition:
+# metadata on the left, visualizer beneath it, artwork on the right.
 width = 1920
 height = 1080
 
