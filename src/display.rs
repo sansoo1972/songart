@@ -1751,13 +1751,84 @@ fn cycle_option(current: &str, options: &[&str], direction: i32) -> String {
     options[(index + direction).rem_euclid(len) as usize].to_string()
 }
 
-fn display_rotation_angle(rotation: &str) -> Option<f64> {
-    match rotation.trim().to_ascii_lowercase().as_str() {
-        "normal" | "0" => Some(0.0),
-        "clockwise" | "right" | "90" => Some(90.0),
-        "inverted" | "upside_down" | "180" => Some(180.0),
-        "counter_clockwise" | "left" | "270" => Some(270.0),
-        _ => None,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DisplayRotation {
+    Normal,
+    Clockwise,
+    Inverted,
+    CounterClockwise,
+}
+
+impl DisplayRotation {
+    fn parse(rotation: &str) -> Option<Self> {
+        match rotation.trim().to_ascii_lowercase().as_str() {
+            "normal" | "0" => Some(Self::Normal),
+            "clockwise" | "right" | "90" => Some(Self::Clockwise),
+            "inverted" | "upside_down" | "180" => Some(Self::Inverted),
+            "counter_clockwise" | "left" | "270" => Some(Self::CounterClockwise),
+            _ => None,
+        }
+    }
+
+    fn angle(self) -> f64 {
+        match self {
+            Self::Normal => 0.0,
+            Self::Clockwise => 90.0,
+            Self::Inverted => 180.0,
+            Self::CounterClockwise => 270.0,
+        }
+    }
+
+    fn swaps_dimensions(self) -> bool {
+        matches!(self, Self::Clockwise | Self::CounterClockwise)
+    }
+
+    fn canonical(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Clockwise => "clockwise",
+            Self::Inverted => "inverted",
+            Self::CounterClockwise => "counter_clockwise",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DisplayRotation;
+
+    #[test]
+    fn display_rotation_accepts_canonical_values_and_aliases() {
+        let cases = [
+            ("normal", DisplayRotation::Normal, 0.0, false),
+            ("0", DisplayRotation::Normal, 0.0, false),
+            ("clockwise", DisplayRotation::Clockwise, 90.0, true),
+            ("right", DisplayRotation::Clockwise, 90.0, true),
+            ("90", DisplayRotation::Clockwise, 90.0, true),
+            ("inverted", DisplayRotation::Inverted, 180.0, false),
+            ("upside_down", DisplayRotation::Inverted, 180.0, false),
+            ("180", DisplayRotation::Inverted, 180.0, false),
+            (
+                "counter_clockwise",
+                DisplayRotation::CounterClockwise,
+                270.0,
+                true,
+            ),
+            ("left", DisplayRotation::CounterClockwise, 270.0, true),
+            ("270", DisplayRotation::CounterClockwise, 270.0, true),
+        ];
+
+        for (input, expected, angle, swaps_dimensions) in cases {
+            let rotation = DisplayRotation::parse(input).unwrap();
+            assert_eq!(rotation, expected);
+            assert_eq!(rotation.angle(), angle);
+            assert_eq!(rotation.swaps_dimensions(), swaps_dimensions);
+        }
+    }
+
+    #[test]
+    fn display_rotation_rejects_unknown_values() {
+        assert_eq!(DisplayRotation::parse("sideways"), None);
     }
 }
 
@@ -1898,7 +1969,7 @@ fn draw_settings_overlay(
         canvas,
         texture_creator,
         font,
-        "Orientation requires restart + separate OS rotation",
+        "Saved orientation/rotation take full effect after restart",
         Color::RGB(155, 150, 140),
         panel_x + 32,
         panel_y + panel_h as i32 - 73,
@@ -2022,11 +2093,23 @@ pub fn run_display_loop(
 
     let preset = selected_display_preset(&ctx)
         .ok_or_else(|| format!("Unknown display preset: {}", ctx.config.display.orientation))?;
+    let configured_rotation =
+        DisplayRotation::parse(&ctx.config.display.rotation).unwrap_or(DisplayRotation::Normal);
+    let window_w = if configured_rotation.swaps_dimensions() {
+        preset.height
+    } else {
+        preset.width
+    };
+    let window_h = if configured_rotation.swaps_dimensions() {
+        preset.width
+    } else {
+        preset.height
+    };
 
     let mut window_builder = video.window(
         &ctx.config.display.window_title,
-        preset.width,
-        preset.height,
+        window_w,
+        window_h,
     );
     window_builder.position_centered();
 
@@ -2084,16 +2167,15 @@ pub fn run_display_loop(
     let mut runtime_visualizer_mode = ctx.config.visualizer.mode.clone();
     let mut runtime_visualizer_gain = ctx.config.visualizer.gain;
     let mut runtime_display_orientation = ctx.config.display.orientation.clone();
-    let mut runtime_display_rotation = ctx.config.display.rotation.clone();
-    if display_rotation_angle(&runtime_display_rotation).is_none() {
+    let mut runtime_display_rotation = configured_rotation.canonical().to_string();
+    if DisplayRotation::parse(&ctx.config.display.rotation).is_none() {
         log_error(
             &ctx,
             &format!(
                 "Invalid display.rotation '{}'; using 'normal'",
-                runtime_display_rotation
+                ctx.config.display.rotation
             ),
         );
-        runtime_display_rotation = "normal".to_string();
     }
     let mut settings_open = false;
     let mut settings_selected = 0usize;
@@ -2239,7 +2321,7 @@ pub fn run_display_loop(
                                         direction,
                                     );
                                 }
-                                settings_status = if settings_selected == 3 {
+                                settings_status = if settings_selected >= 3 {
                                     "Save + restart".to_string()
                                 } else {
                                     "Preview".to_string()
@@ -2882,10 +2964,19 @@ pub fn run_display_loop(
             .map_err(|e| e.to_string())?;
         frame_draw_result?;
 
-        let angle = display_rotation_angle(&runtime_display_rotation).unwrap_or(0.0);
-        let swaps_dimensions = angle == 90.0 || angle == 270.0;
-        let rotated_w = if swaps_dimensions { scene_h } else { scene_w };
-        let rotated_h = if swaps_dimensions { scene_w } else { scene_h };
+        let output_rotation =
+            DisplayRotation::parse(&runtime_display_rotation).unwrap_or(DisplayRotation::Normal);
+        let angle = output_rotation.angle();
+        let rotated_w = if output_rotation.swaps_dimensions() {
+            scene_h
+        } else {
+            scene_w
+        };
+        let rotated_h = if output_rotation.swaps_dimensions() {
+            scene_w
+        } else {
+            scene_h
+        };
         let output_scale = f32::min(
             canvas_w as f32 / rotated_w as f32,
             canvas_h as f32 / rotated_h as f32,
