@@ -16,6 +16,7 @@ All notable changes to `songart` will be documented in this file.
 - Windowed startup dimensions are swapped for 90-degree and 270-degree output rotations while preserving logical layout presets.
 - Landscape layout now places album artwork on the right with metadata on the left and the visualizer beneath the metadata column.
 - Metadata-driven font selection now prefers explicit genre matches before broad release-year fallback rules, making theme changes more predictable across tracks.
+- Bundled `modern` and `techy` font presets now use more distinct font pairings so metadata theme changes are visibly obvious.
 
 ---
 

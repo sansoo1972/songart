@@ -171,9 +171,9 @@ fallback_theme = "simple"
 # ------------------------------------------------------------------------------
 
 [font_themes.modern]
-title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
-body = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
-title_size = 34
+title = "/home/admin/projects/songart/assets/fonts/Megrim-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+title_size = 42
 body_size = 24
 
 [font_themes.simple]
@@ -190,7 +190,7 @@ body_size = 24
 
 [font_themes.techy]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
-body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
 title_size = 36
 body_size = 24
 

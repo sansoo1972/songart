@@ -257,8 +257,14 @@ fallback_theme = "simple"
 
 [font_themes.techy]
 title = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
-body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/Orbitron-VariableFont_wght.ttf"
 title_size = 36
+body_size = 24
+
+[font_themes.modern]
+title = "/home/admin/projects/songart/assets/fonts/Megrim-Regular.ttf"
+body = "/home/admin/projects/songart/assets/fonts/SyneMono-Regular.ttf"
+title_size = 42
 body_size = 24
 
 [font_themes.scripted]
@@ -425,6 +431,8 @@ In metadata mode, `songart` chooses a font theme based on song genre first, then
 - unknown or unmatched metadata -> `fallback_theme`
 
 On each track change, the display logs the font mode, genre, release value, selected theme, and currently loaded theme. When the selected theme changes, title and body fonts are reloaded before rebuilding the now-playing text cache. The keyboard settings overlay always uses its dedicated fixed font.
+
+The bundled presets intentionally use visibly different title fonts so changes are easy to confirm on the display.
 
 Available theme names can include:
 

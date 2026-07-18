@@ -2301,7 +2301,13 @@ pub fn run_display_loop(
     let (title_font_path, body_font_path, title_font_size, body_font_size, selected_theme) =
         selected_fonts(&ctx, &initial_state);
 
-    log_info(&ctx, &format!("Selected font theme: {}", selected_theme));
+    log_info(
+        &ctx,
+        &format!(
+            "Selected font theme '{}' title_font='{}' body_font='{}' title_size={} body_size={}",
+            selected_theme, title_font_path, body_font_path, title_font_size, body_font_size
+        ),
+    );
 
     let mut title_font = ttf_ctx
         .load_font(title_font_path, title_font_size)
@@ -2800,8 +2806,15 @@ pub fn run_display_loop(
                 log_info(
                     &ctx,
                     &format!(
-                        "Changing font theme from '{}' to '{}' for genre='{}' released='{}'",
-                        loaded_font_theme, selected_theme, state.genre, state.released
+                        "Changing font theme from '{}' to '{}' for genre='{}' released='{}' title_font='{}' body_font='{}' title_size={} body_size={}",
+                        loaded_font_theme,
+                        selected_theme,
+                        state.genre,
+                        state.released,
+                        title_font_path,
+                        body_font_path,
+                        title_font_size,
+                        body_font_size
                     ),
                 );
 
