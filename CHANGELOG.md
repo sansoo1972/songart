@@ -4,7 +4,7 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
-## [Unreleased]
+## [0.16.0] - 2026-07-18
 
 ### Added
 - [#35](https://github.com/sansoo1972/songart/issues/35) Application-level SDL output rotation with `display.rotation` values `normal`, `clockwise`, `inverted`, and `counter_clockwise`.

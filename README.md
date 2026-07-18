@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.15.0 adds an in-app keyboard settings overlay for switching artwork and visualizer modes, tuning sensitivity live, and safely saving changes to `songart.toml`.
+Version 0.16.0 adds application-level display rotation, a landscape side layout for rotated displays, and more reliable metadata-driven font theme changes.
 
 ---
 
@@ -20,6 +20,8 @@ Version 0.15.0 adds an in-app keyboard settings overlay for switching artwork an
 - Keyboard settings overlay with live previews and safe TOML saving
 - Shared rolling audio buffer for live visualization
 - Configurable display presets for portrait and landscape layouts
+- Application-level SDL output rotation independent of logical layout orientation
+- Landscape side layout with artwork on the right, metadata on the left, and the visualizer beneath metadata
 - Improved portrait layout defaults for 1080x1920 displays
 - Theme-based typography with separate title and body fonts
 - Metadata-driven font theme selection by genre and release year
@@ -600,15 +602,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.15.0**.
+This project is now at **0.16.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.15.0 -m "songart 0.15.0"
-git push origin v0.15.0
+git tag -a v0.16.0 -m "songart 0.16.0"
+git push origin v0.16.0
 ```
 
 ---
@@ -632,6 +634,8 @@ git push origin v0.15.0
 - Oscilloscope visualizer working
 - Photorealistic analog VU visualizer working
 - Keyboard settings overlay and live mode selection working
+- Application-level display rotation working on Raspberry Pi
+- Metadata-driven font theme switching verified on Raspberry Pi
 - Shared rolling audio analysis working
 - Renderer scene caching working
 - Metadata refresh improvements working
