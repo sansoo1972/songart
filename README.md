@@ -71,7 +71,7 @@ theme.
 | Key | Action |
 | --- | --- |
 | `M` / `F1` | Open or close settings |
-| `Up` / `Down` | Select artwork, visualizer, or sensitivity |
+| `Up` / `Down` | Select a visible setting row |
 | `Left` / `Right` | Change the selected value with a live preview |
 | `Enter` | Apply for the current session without saving |
 | `S` | Save to `config/songart.toml` |
@@ -81,7 +81,13 @@ Available modes:
 
 - Artwork: `cover`, `turntable`
 - Visualizer: `spectrum`, `oscilloscope`, `analog_vu`
+- Spectrum: `full`, `top_only`, `segmented`
 - Sensitivity: `0.25`–`8.0`
+
+The overlay only shows controls that apply to the active visualizer. Spectrum
+style is hidden for Oscilloscope and Analog VU, and the segmented rows, row
+height, row gap, column gap, and inactive LED toggle appear only when Spectrum
+is set to `segmented`.
 
 Saving preserves TOML comments, writes through a temporary file, and keeps the
 previous configuration at `config/songart.toml.bak`.
@@ -514,7 +520,8 @@ hue_bucket_count = 12
 ```
 
 Set `render_style = "full"` or `render_style = "top_only"` to use the non-segmented Spectrum styles.
-The F1 settings overlay can also switch Spectrum style between `full`, `top_only`, and `segmented`, then save the selection to `config/songart.toml`.
+The F1 settings overlay can switch Spectrum style between `full`, `top_only`, and `segmented`, then save the selection to `config/songart.toml`.
+When `segmented` is active, the overlay also exposes segment row count, row height, row gap, column gap, and inactive LED visibility.
 Segmented rows are distributed across the full analyzer height so level response matches `top_only` while keeping each illuminated row thin.
 
 Set `mode = "oscilloscope"` to render the live oscilloscope view. `point_count`,
