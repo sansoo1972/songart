@@ -1321,6 +1321,7 @@ fn draw_spectrum(
     width: u32,
     height: u32,
     bar_gap: u32,
+    spectrum_style: &str,
 ) -> Result<(), String> {
     canvas.set_draw_color(visualizer_background_color(ctx));
     canvas.fill_rect(Rect::new(x, y, width, height))?;
@@ -1339,13 +1340,7 @@ fn draw_spectrum(
         return Ok(());
     }
 
-    if ctx
-        .config
-        .visualizer
-        .spectrum
-        .render_style
-        .eq_ignore_ascii_case("segmented")
-    {
+    if spectrum_style.eq_ignore_ascii_case("segmented") {
         return draw_segmented_spectrum(
             canvas,
             ctx,
@@ -1362,12 +1357,7 @@ fn draw_spectrum(
 
     let total_gap = bar_gap.saturating_mul(count.saturating_sub(1));
     let bar_w = (width.saturating_sub(total_gap) / count).max(1);
-    let top_only = ctx
-        .config
-        .visualizer
-        .spectrum
-        .render_style
-        .eq_ignore_ascii_case("top_only");
+    let top_only = spectrum_style.eq_ignore_ascii_case("top_only");
     let upper_h = if top_only { height } else { half_h };
     let baseline_y = if top_only {
         y + (height as i32)
@@ -1400,7 +1390,7 @@ fn draw_spectrum(
             bar_w,
             bar_h,
             true,
-            &ctx.config.visualizer.spectrum.render_style,
+            spectrum_style,
             ctx.config.visualizer.spectrum.top_only_height_ratio,
         ) {
             canvas.fill_rect(rect)?;
@@ -1425,7 +1415,7 @@ fn draw_spectrum(
                 bar_w,
                 bar_h,
                 false,
-                &ctx.config.visualizer.spectrum.render_style,
+                spectrum_style,
                 ctx.config.visualizer.spectrum.top_only_height_ratio,
             ) {
                 canvas.fill_rect(rect)?;
@@ -1677,6 +1667,7 @@ fn draw_visualizer(
     bar_gap: u32,
     meter_level: f32,
     vu_face_texture: Option<&Texture<'_>>,
+    spectrum_style: &str,
 ) -> Result<(), String> {
     match mode {
         VisualizerMode::None => Ok(()),
@@ -1716,6 +1707,7 @@ fn draw_visualizer(
             width,
             height,
             bar_gap,
+            spectrum_style,
         ),
     }
 }
@@ -2231,6 +2223,7 @@ fn save_display_modes(
     path: &str,
     artwork_mode: &str,
     visualizer_mode: &str,
+    spectrum_style: &str,
     visualizer_gain: f32,
     display_orientation: &str,
     display_rotation: &str,
@@ -2242,6 +2235,7 @@ fn save_display_modes(
         .map_err(|e| format!("Failed to parse {path}: {e}"))?;
     document["artwork"]["mode"] = toml_edit::value(artwork_mode);
     document["visualizer"]["mode"] = toml_edit::value(visualizer_mode);
+    document["visualizer"]["spectrum"]["render_style"] = toml_edit::value(spectrum_style);
     document["visualizer"]["gain"] = toml_edit::value(visualizer_gain as f64);
     document["display"]["orientation"] = toml_edit::value(display_orientation);
     document["display"]["rotation"] = toml_edit::value(display_rotation);
@@ -2286,6 +2280,7 @@ fn draw_settings_overlay(
     font: &sdl2::ttf::Font,
     artwork_mode: &str,
     visualizer_mode: &str,
+    spectrum_style: &str,
     visualizer_gain: f32,
     display_orientation: &str,
     display_rotation: &str,
@@ -2294,7 +2289,7 @@ fn draw_settings_overlay(
 ) -> Result<(), String> {
     let (canvas_w, canvas_h) = canvas.output_size().map_err(|e| e.to_string())?;
     let panel_w = canvas_w.saturating_sub(80).min(760);
-    let panel_h = 430u32.min(canvas_h.saturating_sub(80));
+    let panel_h = 470u32.min(canvas_h.saturating_sub(80));
     let panel_x = ((canvas_w - panel_w) / 2) as i32;
     let panel_y = ((canvas_h - panel_h) / 2) as i32;
 
@@ -2324,6 +2319,7 @@ fn draw_settings_overlay(
     for (index, line) in [
         format!("Artwork       < {} >", artwork_mode),
         format!("Visualizer    < {} >", visualizer_mode),
+        format!("Spectrum      < {} >", spectrum_style),
         format!("Sensitivity   {}", slider),
         format!("Orientation   < {} >", display_orientation),
         format!("Rotation      < {} >", display_rotation),
@@ -2331,7 +2327,7 @@ fn draw_settings_overlay(
     .iter()
     .enumerate()
     {
-        let row_y = panel_y + 58 + index as i32 * 46;
+        let row_y = panel_y + 58 + index as i32 * 43;
         if selected == index {
             canvas.set_draw_color(Color::RGBA(104, 72, 28, 180));
             canvas.fill_rect(Rect::new(panel_x + 22, row_y - 8, panel_w - 44, 48))?;
@@ -2565,6 +2561,7 @@ pub fn run_display_loop(
     let mut event_pump = sdl.event_pump()?;
     let mut runtime_artwork_mode = ctx.config.artwork.mode.clone();
     let mut runtime_visualizer_mode = ctx.config.visualizer.mode.clone();
+    let mut runtime_spectrum_style = ctx.config.visualizer.spectrum.render_style.clone();
     let mut runtime_visualizer_gain = ctx.config.visualizer.gain;
     let mut runtime_display_orientation = ctx.config.display.orientation.clone();
     let mut runtime_display_rotation = configured_rotation.canonical().to_string();
@@ -2581,6 +2578,7 @@ pub fn run_display_loop(
     let mut settings_selected = 0usize;
     let mut settings_original_artwork = runtime_artwork_mode.clone();
     let mut settings_original_visualizer = runtime_visualizer_mode.clone();
+    let mut settings_original_spectrum_style = runtime_spectrum_style.clone();
     let mut settings_original_gain = runtime_visualizer_gain;
     let mut settings_original_orientation = runtime_display_orientation.clone();
     let mut settings_original_rotation = runtime_display_rotation.clone();
@@ -2668,6 +2666,8 @@ pub fn run_display_loop(
                             Keycode::Escape => {
                                 runtime_artwork_mode = settings_original_artwork.clone();
                                 runtime_visualizer_mode = settings_original_visualizer.clone();
+                                runtime_spectrum_style =
+                                    settings_original_spectrum_style.clone();
                                 runtime_visualizer_gain = settings_original_gain;
                                 runtime_display_orientation =
                                     settings_original_orientation.clone();
@@ -2681,7 +2681,7 @@ pub fn run_display_loop(
                                 settings_status.clear();
                             }
                             Keycode::Down => {
-                                settings_selected = (settings_selected + 1).min(4);
+                                settings_selected = (settings_selected + 1).min(5);
                                 settings_status.clear();
                             }
                             Keycode::Left | Keycode::Right => {
@@ -2700,10 +2700,16 @@ pub fn run_display_loop(
                                         direction,
                                     );
                                 } else if settings_selected == 2 {
+                                    runtime_spectrum_style = cycle_option(
+                                        &runtime_spectrum_style,
+                                        &["full", "top_only", "segmented"],
+                                        direction,
+                                    );
+                                } else if settings_selected == 3 {
                                     runtime_visualizer_gain =
                                         (runtime_visualizer_gain + direction as f32 * 0.25)
                                             .clamp(0.25, 8.0);
-                                } else if settings_selected == 3 {
+                                } else if settings_selected == 4 {
                                     runtime_display_orientation = cycle_option(
                                         &runtime_display_orientation,
                                         &["portrait", "landscape"],
@@ -2721,7 +2727,7 @@ pub fn run_display_loop(
                                         direction,
                                     );
                                 }
-                                settings_status = if settings_selected >= 3 {
+                                settings_status = if settings_selected >= 4 {
                                     "Save + restart".to_string()
                                 } else {
                                     "Preview".to_string()
@@ -2731,6 +2737,7 @@ pub fn run_display_loop(
                                 "config/songart.toml",
                                 &runtime_artwork_mode,
                                 &runtime_visualizer_mode,
+                                &runtime_spectrum_style,
                                 runtime_visualizer_gain,
                                 &runtime_display_orientation,
                                 &runtime_display_rotation,
@@ -2739,6 +2746,8 @@ pub fn run_display_loop(
                                     settings_original_artwork = runtime_artwork_mode.clone();
                                     settings_original_visualizer =
                                         runtime_visualizer_mode.clone();
+                                    settings_original_spectrum_style =
+                                        runtime_spectrum_style.clone();
                                     settings_original_gain = runtime_visualizer_gain;
                                     settings_original_orientation =
                                         runtime_display_orientation.clone();
@@ -2766,6 +2775,8 @@ pub fn run_display_loop(
                             Keycode::M | Keycode::F1 => {
                                 settings_original_artwork = runtime_artwork_mode.clone();
                                 settings_original_visualizer = runtime_visualizer_mode.clone();
+                                settings_original_spectrum_style =
+                                    runtime_spectrum_style.clone();
                                 settings_original_gain = runtime_visualizer_gain;
                                 settings_original_orientation =
                                     runtime_display_orientation.clone();
@@ -2860,12 +2871,7 @@ pub fn run_display_loop(
         if ctx.config.visualizer.peaks.enabled {
             let hold = Duration::from_millis(ctx.config.visualizer.peaks.hold_ms);
             let should_drop = last_spectrum_peak_drop.elapsed() >= hold;
-            let top_only = ctx
-                .config
-                .visualizer
-                .spectrum
-                .render_style
-                .eq_ignore_ascii_case("top_only");
+            let top_only = runtime_spectrum_style.eq_ignore_ascii_case("top_only");
             let peak_scale = if top_only {
                 ctx.config.visualizer.height.max(1)
             } else {
@@ -3363,6 +3369,7 @@ pub fn run_display_loop(
                 ctx.config.visualizer.spectrum_bar_gap,
                 state.meter.level,
                 vu_face_texture.as_ref(),
+                &runtime_spectrum_style,
             )?;
         }
 
@@ -3373,6 +3380,7 @@ pub fn run_display_loop(
                 &settings_font,
                 &runtime_artwork_mode,
                 &runtime_visualizer_mode,
+                &runtime_spectrum_style,
                 runtime_visualizer_gain,
                 &runtime_display_orientation,
                 &runtime_display_rotation,

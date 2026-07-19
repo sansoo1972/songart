@@ -8,6 +8,7 @@ All notable changes to `songart` will be documented in this file.
 
 ### Added
 - [#39](https://github.com/sansoo1972/songart/issues/39) Optional segmented LED-style Spectrum analyzer rendering with lit active levels, configurable row thickness, configurable row/column gaps, and optional dim inactive rows.
+- F1 settings overlay selection for Spectrum render style: `full`, `top_only`, and `segmented`.
 
 ---
 
