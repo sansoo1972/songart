@@ -314,6 +314,9 @@ pub struct VisualizerSpectrumConfig {
     #[serde(default = "default_segment_gap")]
     pub segment_gap: u32,
 
+    #[serde(default = "default_segment_column_gap")]
+    pub segment_column_gap: u32,
+
     #[serde(default = "default_segment_inactive_alpha")]
     pub segment_inactive_alpha: u8,
 }
@@ -325,6 +328,7 @@ impl Default for VisualizerSpectrumConfig {
             top_only_height_ratio: default_top_only_height_ratio(),
             segment_rows: default_segment_rows(),
             segment_gap: default_segment_gap(),
+            segment_column_gap: default_segment_column_gap(),
             segment_inactive_alpha: default_segment_inactive_alpha(),
         }
     }
@@ -562,6 +566,10 @@ fn default_segment_rows() -> u32 {
 
 fn default_segment_gap() -> u32 {
     2
+}
+
+fn default_segment_column_gap() -> u32 {
+    8
 }
 
 fn default_segment_inactive_alpha() -> u8 {

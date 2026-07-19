@@ -489,6 +489,7 @@ render_style = "full"        # full, top_only, segmented
 top_only_height_ratio = 0.35 # visible portion of each active bar in top_only mode
 segment_rows = 24            # stacked LED rows in segmented mode
 segment_gap = 2              # pixels between segmented rows
+segment_column_gap = 8       # pixels between segmented columns
 segment_inactive_alpha = 36  # dim inactive LED row opacity
 
 [visualizer.peaks]
@@ -509,6 +510,8 @@ min_saturation = 0.25
 palette_size = 6
 hue_bucket_count = 12
 ```
+
+Set `render_style = "full"` or `render_style = "top_only"` to use the non-segmented Spectrum styles.
 
 Set `mode = "oscilloscope"` to render the live oscilloscope view. `point_count`,
 `visible_sample_count`, `left_y_offset`, `right_y_offset`, `gain`, `max_gain`,

@@ -7,7 +7,7 @@ All notable changes to `songart` will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- [#39](https://github.com/sansoo1972/songart/issues/39) Optional segmented LED-style Spectrum analyzer rendering with dim inactive rows and lit active levels.
+- [#39](https://github.com/sansoo1972/songart/issues/39) Optional segmented LED-style Spectrum analyzer rendering with dim inactive rows, lit active levels, and configurable row/column gaps.
 
 ---
 

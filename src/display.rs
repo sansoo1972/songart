@@ -1520,14 +1520,15 @@ fn draw_segmented_spectrum(
     y: i32,
     width: u32,
     height: u32,
-    bar_gap: u32,
+    _bar_gap: u32,
 ) -> Result<(), String> {
     let count = bins.len() as u32;
     if count == 0 || height == 0 {
         return Ok(());
     }
 
-    let total_gap = bar_gap.saturating_mul(count.saturating_sub(1));
+    let column_gap = ctx.config.visualizer.spectrum.segment_column_gap;
+    let total_gap = column_gap.saturating_mul(count.saturating_sub(1));
     let bar_w = (width.saturating_sub(total_gap) / count).max(1);
     let rows = ctx.config.visualizer.spectrum.segment_rows.clamp(4, 96);
     let segment_gap = ctx.config.visualizer.spectrum.segment_gap.min(height / rows.max(1));
@@ -1543,7 +1544,7 @@ fn draw_segmented_spectrum(
 
     for (i, value) in bins.iter().enumerate() {
         let i_u32 = i as u32;
-        let bar_x = x + ((i_u32 * (bar_w + bar_gap)) as i32);
+        let bar_x = x + ((i_u32 * (bar_w + column_gap)) as i32);
         let color = palette_color_at(&colors.palette, i, count as usize);
         let active_rows = ((*value).clamp(0.0, 1.0) * rows as f32).ceil() as u32;
 
@@ -1585,7 +1586,7 @@ fn draw_segmented_spectrum(
             }
 
             let i_u32 = i as u32;
-            let bar_x = x + ((i_u32 * (bar_w + bar_gap)) as i32);
+            let bar_x = x + ((i_u32 * (bar_w + column_gap)) as i32);
             canvas.set_draw_color(if ctx.config.visualizer.peaks.use_bar_color {
                 palette_color_at(&colors.palette, i, count as usize)
             } else {
