@@ -485,8 +485,11 @@ gain = 1.0
 max_gain = 8.0
 
 [visualizer.spectrum]
-render_style = "full"        # full, top_only
+render_style = "full"        # full, top_only, segmented
 top_only_height_ratio = 0.35 # visible portion of each active bar in top_only mode
+segment_rows = 24            # stacked LED rows in segmented mode
+segment_gap = 2              # pixels between segmented rows
+segment_inactive_alpha = 36  # dim inactive LED row opacity
 
 [visualizer.peaks]
 enabled = false
@@ -520,7 +523,7 @@ Current implementation:
 - Log-spaced frequency bins
 - Spectrum smoothing
 - Spectrum attack tuning
-- Mirrored full-spectrum rendering or full-height top-only spectrum rendering
+- Mirrored full-spectrum, full-height top-only, or segmented LED-style spectrum rendering
 - Optional peak hold/drop-off markers
 - Noise floor and contrast controls
 - Shared rolling audio analysis buffer

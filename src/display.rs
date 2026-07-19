@@ -1339,6 +1339,27 @@ fn draw_spectrum(
         return Ok(());
     }
 
+    if ctx
+        .config
+        .visualizer
+        .spectrum
+        .render_style
+        .eq_ignore_ascii_case("segmented")
+    {
+        return draw_segmented_spectrum(
+            canvas,
+            ctx,
+            colors,
+            upper_bins,
+            upper_peaks,
+            x,
+            y,
+            width,
+            height,
+            bar_gap,
+        );
+    }
+
     let total_gap = bar_gap.saturating_mul(count.saturating_sub(1));
     let bar_w = (width.saturating_sub(total_gap) / count).max(1);
     let top_only = ctx
@@ -1461,6 +1482,123 @@ fn draw_spectrum(
                 let marker_y = y + (half_h as i32) + (peak_h as i32) - (peak_marker_h as i32);
                 canvas.fill_rect(Rect::new(bar_x, marker_y, bar_w, peak_marker_h))?;
             }
+        }
+    }
+
+    Ok(())
+}
+
+fn dim_segment_color(color: Color, alpha: u8) -> Color {
+    Color::RGBA(
+        (color.r as f32 * 0.45).round() as u8,
+        (color.g as f32 * 0.45).round() as u8,
+        (color.b as f32 * 0.45).round() as u8,
+        alpha,
+    )
+}
+
+fn segmented_row_rect(
+    bar_x: i32,
+    bottom_y: i32,
+    bar_w: u32,
+    row: u32,
+    segment_h: u32,
+    segment_gap: u32,
+) -> Rect {
+    let step = segment_h + segment_gap;
+    let row_bottom = bottom_y - (row.saturating_mul(step) as i32);
+    Rect::new(bar_x, row_bottom - segment_h as i32, bar_w, segment_h)
+}
+
+fn draw_segmented_spectrum(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    ctx: &AppContext,
+    colors: &VisualizerDrawColors,
+    bins: &[f32],
+    peaks: &[f32],
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    bar_gap: u32,
+) -> Result<(), String> {
+    let count = bins.len() as u32;
+    if count == 0 || height == 0 {
+        return Ok(());
+    }
+
+    let total_gap = bar_gap.saturating_mul(count.saturating_sub(1));
+    let bar_w = (width.saturating_sub(total_gap) / count).max(1);
+    let rows = ctx.config.visualizer.spectrum.segment_rows.clamp(4, 96);
+    let segment_gap = ctx.config.visualizer.spectrum.segment_gap.min(height / rows.max(1));
+    let total_row_gap = segment_gap.saturating_mul(rows.saturating_sub(1));
+    let segment_h = height.saturating_sub(total_row_gap) / rows;
+    if segment_h == 0 {
+        return Ok(());
+    }
+
+    canvas.set_blend_mode(BlendMode::Blend);
+    let bottom_y = y + height as i32;
+    let inactive_alpha = ctx.config.visualizer.spectrum.segment_inactive_alpha;
+
+    for (i, value) in bins.iter().enumerate() {
+        let i_u32 = i as u32;
+        let bar_x = x + ((i_u32 * (bar_w + bar_gap)) as i32);
+        let color = palette_color_at(&colors.palette, i, count as usize);
+        let active_rows = ((*value).clamp(0.0, 1.0) * rows as f32).ceil() as u32;
+
+        canvas.set_draw_color(dim_segment_color(color, inactive_alpha));
+        for row in 0..rows {
+            canvas.fill_rect(segmented_row_rect(
+                bar_x,
+                bottom_y,
+                bar_w,
+                row,
+                segment_h,
+                segment_gap,
+            ))?;
+        }
+
+        canvas.set_draw_color(color);
+        for row in 0..active_rows.min(rows) {
+            canvas.fill_rect(segmented_row_rect(
+                bar_x,
+                bottom_y,
+                bar_w,
+                row,
+                segment_h,
+                segment_gap,
+            ))?;
+        }
+    }
+
+    if ctx.config.visualizer.peaks.enabled {
+        let peak_color = parse_hex_color(
+            &ctx.config.visualizer.peaks.color,
+            Color::RGB(255, 255, 255),
+        );
+
+        for (i, value) in peaks.iter().take(count as usize).enumerate() {
+            let peak_row = ((*value).clamp(0.0, 1.0) * rows as f32).ceil() as u32;
+            if peak_row == 0 {
+                continue;
+            }
+
+            let i_u32 = i as u32;
+            let bar_x = x + ((i_u32 * (bar_w + bar_gap)) as i32);
+            canvas.set_draw_color(if ctx.config.visualizer.peaks.use_bar_color {
+                palette_color_at(&colors.palette, i, count as usize)
+            } else {
+                peak_color
+            });
+            canvas.fill_rect(segmented_row_rect(
+                bar_x,
+                bottom_y,
+                bar_w,
+                peak_row.saturating_sub(1).min(rows - 1),
+                segment_h,
+                segment_gap,
+            ))?;
         }
     }
 
@@ -1908,7 +2046,10 @@ impl DisplayRotation {
 
 #[cfg(test)]
 mod tests {
-    use super::{metadata_font_theme_name, scene_layout, selected_font_theme_name, DisplayRotation};
+    use super::{
+        metadata_font_theme_name, scene_layout, segmented_row_rect, selected_font_theme_name,
+        DisplayRotation,
+    };
     use crate::config::DisplayPreset;
 
     #[test]
@@ -1997,6 +2138,19 @@ mod tests {
 
         assert_eq!(theme, "modern");
         assert!(invalid_mode);
+    }
+
+    #[test]
+    fn segmented_rows_stack_upward_with_gaps() {
+        let first = segmented_row_rect(10, 100, 20, 0, 4, 2);
+        let second = segmented_row_rect(10, 100, 20, 1, 4, 2);
+
+        assert_eq!(first.x(), 10);
+        assert_eq!(first.y(), 96);
+        assert_eq!(first.width(), 20);
+        assert_eq!(first.height(), 4);
+        assert_eq!(second.y(), 90);
+        assert_eq!(first.y() - (second.y() + second.height() as i32), 2);
     }
 
     #[test]

@@ -307,12 +307,17 @@ spectrum_contrast = 1.45
 # ------------------------------------------------------------------------------
 
 [visualizer.spectrum]
-# Options: "full", "top_only"
+# Options: "full", "top_only", "segmented"
 # render_style = "full"
-render_style = "top_only"
+render_style = "segmented"
 
 # When render_style = "top_only", use the full analyzer height and draw this
 top_only_height_ratio = 0.99
+
+# When render_style = "segmented", draw stacked LED-style level rows.
+segment_rows = 24
+segment_gap = 2
+segment_inactive_alpha = 36
 
 
 # ------------------------------------------------------------------------------
