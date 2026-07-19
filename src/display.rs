@@ -1493,17 +1493,24 @@ fn segmented_row_rect(
     bar_w: u32,
     row: u32,
     segment_h: u32,
-    segment_gap: u32,
+    row_step: f32,
 ) -> Rect {
-    let step = segment_h + segment_gap;
-    let row_bottom = bottom_y - (row.saturating_mul(step) as i32);
+    let row_bottom = bottom_y - ((row as f32) * row_step).round() as i32;
     Rect::new(bar_x, row_bottom - segment_h as i32, bar_w, segment_h)
 }
 
-fn segmented_stack_bottom_y(y: i32, height: u32, rows: u32, segment_h: u32, segment_gap: u32) -> i32 {
-    let total_row_gap = segment_gap.saturating_mul(rows.saturating_sub(1));
-    let stack_h = rows.saturating_mul(segment_h).saturating_add(total_row_gap);
-    y + ((height + stack_h) / 2) as i32
+fn segmented_row_step(height: u32, rows: u32, segment_h: u32, segment_gap: u32) -> f32 {
+    if rows <= 1 {
+        return segment_h.max(1) as f32;
+    }
+
+    let fit_step = height.saturating_sub(segment_h) as f32 / rows.saturating_sub(1) as f32;
+    let min_step = segment_h.saturating_add(segment_gap) as f32;
+    if min_step * rows.saturating_sub(1) as f32 + segment_h as f32 <= height as f32 {
+        fit_step.max(min_step)
+    } else {
+        fit_step.max(1.0)
+    }
 }
 
 fn draw_segmented_spectrum(
@@ -1546,7 +1553,8 @@ fn draw_segmented_spectrum(
     }
 
     canvas.set_blend_mode(BlendMode::Blend);
-    let bottom_y = segmented_stack_bottom_y(y, height, rows, segment_h, segment_gap);
+    let bottom_y = y + height as i32;
+    let row_step = segmented_row_step(height, rows, segment_h, segment_gap);
     let inactive_alpha = ctx.config.visualizer.spectrum.segment_inactive_alpha;
     let draw_inactive = ctx.config.visualizer.spectrum.segment_inactive;
 
@@ -1565,7 +1573,7 @@ fn draw_segmented_spectrum(
                     bar_w,
                     row,
                     segment_h,
-                    segment_gap,
+                    row_step,
                 ))?;
             }
         }
@@ -1578,7 +1586,7 @@ fn draw_segmented_spectrum(
                 bar_w,
                 row,
                 segment_h,
-                segment_gap,
+                row_step,
             ))?;
         }
     }
@@ -1608,7 +1616,7 @@ fn draw_segmented_spectrum(
                 bar_w,
                 peak_row.saturating_sub(1).min(rows - 1),
                 segment_h,
-                segment_gap,
+                row_step,
             ))?;
         }
     }
@@ -2060,7 +2068,7 @@ impl DisplayRotation {
 #[cfg(test)]
 mod tests {
     use super::{
-        metadata_font_theme_name, scene_layout, segmented_row_rect, segmented_stack_bottom_y,
+        metadata_font_theme_name, scene_layout, segmented_row_rect, segmented_row_step,
         selected_font_theme_name, DisplayRotation,
     };
     use crate::config::DisplayPreset;
@@ -2155,8 +2163,8 @@ mod tests {
 
     #[test]
     fn segmented_rows_stack_upward_with_gaps() {
-        let first = segmented_row_rect(10, 100, 20, 0, 4, 2);
-        let second = segmented_row_rect(10, 100, 20, 1, 4, 2);
+        let first = segmented_row_rect(10, 100, 20, 0, 4, 6.0);
+        let second = segmented_row_rect(10, 100, 20, 1, 4, 6.0);
 
         assert_eq!(first.x(), 10);
         assert_eq!(first.y(), 96);
@@ -2167,13 +2175,14 @@ mod tests {
     }
 
     #[test]
-    fn segmented_stack_can_be_thinner_than_region_and_stays_centered() {
-        let bottom_y = segmented_stack_bottom_y(10, 100, 24, 3, 2);
-        let top_row = segmented_row_rect(0, bottom_y, 10, 23, 3, 2);
-        let bottom_row = segmented_row_rect(0, bottom_y, 10, 0, 3, 2);
+    fn segmented_rows_span_full_region_with_thin_segments() {
+        let row_step = segmented_row_step(100, 24, 3, 2);
+        let bottom_y = 110;
+        let top_row = segmented_row_rect(0, bottom_y, 10, 23, 3, row_step);
+        let bottom_row = segmented_row_rect(0, bottom_y, 10, 0, 3, row_step);
 
-        assert_eq!(top_row.y(), 20);
-        assert_eq!(bottom_row.y() + bottom_row.height() as i32, 100);
+        assert_eq!(top_row.y(), 10);
+        assert_eq!(bottom_row.y() + bottom_row.height() as i32, 110);
     }
 
     #[test]

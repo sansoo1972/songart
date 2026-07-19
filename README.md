@@ -515,6 +515,7 @@ hue_bucket_count = 12
 
 Set `render_style = "full"` or `render_style = "top_only"` to use the non-segmented Spectrum styles.
 The F1 settings overlay can also switch Spectrum style between `full`, `top_only`, and `segmented`, then save the selection to `config/songart.toml`.
+Segmented rows are distributed across the full analyzer height so level response matches `top_only` while keeping each illuminated row thin.
 
 Set `mode = "oscilloscope"` to render the live oscilloscope view. `point_count`,
 `visible_sample_count`, `left_y_offset`, `right_y_offset`, `gain`, `max_gain`,
