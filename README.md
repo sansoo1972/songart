@@ -488,8 +488,10 @@ max_gain = 8.0
 render_style = "full"        # full, top_only, segmented
 top_only_height_ratio = 0.35 # visible portion of each active bar in top_only mode
 segment_rows = 24            # stacked LED rows in segmented mode
+segment_height = 3           # pixel thickness of each segmented row
 segment_gap = 2              # pixels between segmented rows
 segment_column_gap = 8       # pixels between segmented columns
+segment_inactive = false     # draw dim unlit rows behind active rows
 segment_inactive_alpha = 36  # dim inactive LED row opacity
 
 [visualizer.peaks]

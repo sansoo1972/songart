@@ -1510,6 +1510,12 @@ fn segmented_row_rect(
     Rect::new(bar_x, row_bottom - segment_h as i32, bar_w, segment_h)
 }
 
+fn segmented_stack_bottom_y(y: i32, height: u32, rows: u32, segment_h: u32, segment_gap: u32) -> i32 {
+    let total_row_gap = segment_gap.saturating_mul(rows.saturating_sub(1));
+    let stack_h = rows.saturating_mul(segment_h).saturating_add(total_row_gap);
+    y + ((height + stack_h) / 2) as i32
+}
+
 fn draw_segmented_spectrum(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     ctx: &AppContext,
@@ -1531,16 +1537,28 @@ fn draw_segmented_spectrum(
     let total_gap = column_gap.saturating_mul(count.saturating_sub(1));
     let bar_w = (width.saturating_sub(total_gap) / count).max(1);
     let rows = ctx.config.visualizer.spectrum.segment_rows.clamp(4, 96);
-    let segment_gap = ctx.config.visualizer.spectrum.segment_gap.min(height / rows.max(1));
+    let segment_gap = ctx
+        .config
+        .visualizer
+        .spectrum
+        .segment_gap
+        .min(height / rows.max(1));
     let total_row_gap = segment_gap.saturating_mul(rows.saturating_sub(1));
-    let segment_h = height.saturating_sub(total_row_gap) / rows;
+    let max_segment_h = height.saturating_sub(total_row_gap) / rows;
+    let segment_h = ctx
+        .config
+        .visualizer
+        .spectrum
+        .segment_height
+        .clamp(1, max_segment_h.max(1));
     if segment_h == 0 {
         return Ok(());
     }
 
     canvas.set_blend_mode(BlendMode::Blend);
-    let bottom_y = y + height as i32;
+    let bottom_y = segmented_stack_bottom_y(y, height, rows, segment_h, segment_gap);
     let inactive_alpha = ctx.config.visualizer.spectrum.segment_inactive_alpha;
+    let draw_inactive = ctx.config.visualizer.spectrum.segment_inactive;
 
     for (i, value) in bins.iter().enumerate() {
         let i_u32 = i as u32;
@@ -1548,16 +1566,18 @@ fn draw_segmented_spectrum(
         let color = palette_color_at(&colors.palette, i, count as usize);
         let active_rows = ((*value).clamp(0.0, 1.0) * rows as f32).ceil() as u32;
 
-        canvas.set_draw_color(dim_segment_color(color, inactive_alpha));
-        for row in 0..rows {
-            canvas.fill_rect(segmented_row_rect(
-                bar_x,
-                bottom_y,
-                bar_w,
-                row,
-                segment_h,
-                segment_gap,
-            ))?;
+        if draw_inactive {
+            canvas.set_draw_color(dim_segment_color(color, inactive_alpha));
+            for row in 0..rows {
+                canvas.fill_rect(segmented_row_rect(
+                    bar_x,
+                    bottom_y,
+                    bar_w,
+                    row,
+                    segment_h,
+                    segment_gap,
+                ))?;
+            }
         }
 
         canvas.set_draw_color(color);
@@ -2048,8 +2068,8 @@ impl DisplayRotation {
 #[cfg(test)]
 mod tests {
     use super::{
-        metadata_font_theme_name, scene_layout, segmented_row_rect, selected_font_theme_name,
-        DisplayRotation,
+        metadata_font_theme_name, scene_layout, segmented_row_rect, segmented_stack_bottom_y,
+        selected_font_theme_name, DisplayRotation,
     };
     use crate::config::DisplayPreset;
 
@@ -2152,6 +2172,16 @@ mod tests {
         assert_eq!(first.height(), 4);
         assert_eq!(second.y(), 90);
         assert_eq!(first.y() - (second.y() + second.height() as i32), 2);
+    }
+
+    #[test]
+    fn segmented_stack_can_be_thinner_than_region_and_stays_centered() {
+        let bottom_y = segmented_stack_bottom_y(10, 100, 24, 3, 2);
+        let top_row = segmented_row_rect(0, bottom_y, 10, 23, 3, 2);
+        let bottom_row = segmented_row_rect(0, bottom_y, 10, 0, 3, 2);
+
+        assert_eq!(top_row.y(), 20);
+        assert_eq!(bottom_row.y() + bottom_row.height() as i32, 100);
     }
 
     #[test]
