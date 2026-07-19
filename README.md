@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.16.0 adds application-level display rotation, a landscape side layout for rotated displays, and more reliable metadata-driven font theme changes.
+Version 0.17.0 adds an optional segmented LED-style Spectrum analyzer and contextual F1 menu controls for Spectrum and segmented display tuning.
 
 ---
 
@@ -32,6 +32,7 @@ Version 0.16.0 adds application-level display rotation, a landscape side layout 
   - metadata background
   - visualizer background
 - Configurable spectrum analyzer responsiveness and scaling
+- Optional segmented LED-style spectrum analyzer with menu-controlled rows, row height, row gap, column gap, and inactive LED visibility
 - Artwork-derived visualizer color palettes with fixed/fallback color support
 - Human-readable timestamped logging with configurable log levels
 - Externalized runtime configuration via TOML
@@ -71,7 +72,7 @@ theme.
 | Key | Action |
 | --- | --- |
 | `M` / `F1` | Open or close settings |
-| `Up` / `Down` | Select artwork, visualizer, or sensitivity |
+| `Up` / `Down` | Select a visible setting row |
 | `Left` / `Right` | Change the selected value with a live preview |
 | `Enter` | Apply for the current session without saving |
 | `S` | Save to `config/songart.toml` |
@@ -81,7 +82,13 @@ Available modes:
 
 - Artwork: `cover`, `turntable`
 - Visualizer: `spectrum`, `oscilloscope`, `analog_vu`
+- Spectrum: `full`, `top_only`, `segmented`
 - Sensitivity: `0.25`–`8.0`
+
+The overlay only shows controls that apply to the active visualizer. Spectrum
+style is hidden for Oscilloscope and Analog VU, and the segmented rows, row
+height, row gap, column gap, and inactive LED toggle appear only when Spectrum
+is set to `segmented`.
 
 Saving preserves TOML comments, writes through a temporary file, and keeps the
 previous configuration at `config/songart.toml.bak`.
@@ -485,8 +492,14 @@ gain = 1.0
 max_gain = 8.0
 
 [visualizer.spectrum]
-render_style = "full"        # full, top_only
+render_style = "full"        # full, top_only, segmented
 top_only_height_ratio = 0.35 # visible portion of each active bar in top_only mode
+segment_rows = 24            # stacked LED rows in segmented mode
+segment_height = 3           # pixel thickness of each segmented row
+segment_gap = 2              # pixels between segmented rows
+segment_column_gap = 8       # pixels between segmented columns
+segment_inactive = false     # draw dim unlit rows behind active rows
+segment_inactive_alpha = 36  # dim inactive LED row opacity
 
 [visualizer.peaks]
 enabled = false
@@ -507,6 +520,11 @@ palette_size = 6
 hue_bucket_count = 12
 ```
 
+Set `render_style = "full"` or `render_style = "top_only"` to use the non-segmented Spectrum styles.
+The F1 settings overlay can switch Spectrum style between `full`, `top_only`, and `segmented`, then save the selection to `config/songart.toml`.
+When `segmented` is active, the overlay also exposes segment row count, row height, row gap, column gap, and inactive LED visibility.
+Segmented rows are distributed across the full analyzer height so level response matches `top_only` while keeping each illuminated row thin.
+
 Set `mode = "oscilloscope"` to render the live oscilloscope view. `point_count`,
 `visible_sample_count`, `left_y_offset`, `right_y_offset`, `gain`, `max_gain`,
 and `y_scale` tune its trace density, time window, placement, and amplitude.
@@ -520,7 +538,7 @@ Current implementation:
 - Log-spaced frequency bins
 - Spectrum smoothing
 - Spectrum attack tuning
-- Mirrored full-spectrum rendering or full-height top-only spectrum rendering
+- Mirrored full-spectrum, full-height top-only, or segmented LED-style spectrum rendering
 - Optional peak hold/drop-off markers
 - Noise floor and contrast controls
 - Shared rolling audio analysis buffer
@@ -602,15 +620,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.16.0**.
+This project is now at **0.17.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.16.0 -m "songart 0.16.0"
-git push origin v0.16.0
+git tag -a v0.17.0 -m "songart 0.17.0"
+git push origin v0.17.0
 ```
 
 ---

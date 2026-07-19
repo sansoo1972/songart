@@ -299,6 +299,7 @@ pub struct VisualizerConfig {
 /// `render_style` accepts:
 /// - `full`: draw each bar from the baseline outward
 /// - `top_only`: draw only the outer/top segment of each active bar
+/// - `segmented`: draw stacked LED-style level rows from bottom upward
 #[derive(Debug, Deserialize, Clone)]
 pub struct VisualizerSpectrumConfig {
     #[serde(default = "default_spectrum_render_style")]
@@ -306,6 +307,24 @@ pub struct VisualizerSpectrumConfig {
 
     #[serde(default = "default_top_only_height_ratio")]
     pub top_only_height_ratio: f32,
+
+    #[serde(default = "default_segment_rows")]
+    pub segment_rows: u32,
+
+    #[serde(default = "default_segment_height")]
+    pub segment_height: u32,
+
+    #[serde(default = "default_segment_gap")]
+    pub segment_gap: u32,
+
+    #[serde(default = "default_segment_column_gap")]
+    pub segment_column_gap: u32,
+
+    #[serde(default = "default_segment_inactive")]
+    pub segment_inactive: bool,
+
+    #[serde(default = "default_segment_inactive_alpha")]
+    pub segment_inactive_alpha: u8,
 }
 
 impl Default for VisualizerSpectrumConfig {
@@ -313,6 +332,12 @@ impl Default for VisualizerSpectrumConfig {
         Self {
             render_style: default_spectrum_render_style(),
             top_only_height_ratio: default_top_only_height_ratio(),
+            segment_rows: default_segment_rows(),
+            segment_height: default_segment_height(),
+            segment_gap: default_segment_gap(),
+            segment_column_gap: default_segment_column_gap(),
+            segment_inactive: default_segment_inactive(),
+            segment_inactive_alpha: default_segment_inactive_alpha(),
         }
     }
 }
@@ -541,6 +566,30 @@ fn default_spectrum_render_style() -> String {
 
 fn default_top_only_height_ratio() -> f32 {
     0.35
+}
+
+fn default_segment_rows() -> u32 {
+    24
+}
+
+fn default_segment_height() -> u32 {
+    3
+}
+
+fn default_segment_gap() -> u32 {
+    2
+}
+
+fn default_segment_column_gap() -> u32 {
+    8
+}
+
+fn default_segment_inactive() -> bool {
+    false
+}
+
+fn default_segment_inactive_alpha() -> u8 {
+    36
 }
 
 fn default_peak_hold_ms() -> u64 {

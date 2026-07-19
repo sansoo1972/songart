@@ -1,4 +1,4 @@
-use crate::audio::{build_oscilloscope_points, compute_rms, SharedAudioBuffer};
+use crate::audio::{SharedAudioBuffer, build_oscilloscope_points, compute_rms};
 use crate::config::DisplayPreset;
 use crate::fft::compute_spectrum_bins;
 use crate::logging::{log_debug, log_error, log_info};
@@ -14,11 +14,11 @@ use sdl2::render::{BlendMode, Texture, TextureCreator, TextureQuery};
 use sdl2::surface::Surface;
 use sdl2::video::WindowContext;
 
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -143,6 +143,74 @@ impl VisualizerDrawColors {
     }
 }
 
+#[derive(Clone, Debug)]
+struct RuntimeSpectrumSettings {
+    render_style: String,
+    segment_rows: u32,
+    segment_height: u32,
+    segment_gap: u32,
+    segment_column_gap: u32,
+    segment_inactive: bool,
+}
+
+impl RuntimeSpectrumSettings {
+    fn from_config(ctx: &AppContext) -> Self {
+        let spectrum = &ctx.config.visualizer.spectrum;
+        Self {
+            render_style: spectrum.render_style.clone(),
+            segment_rows: spectrum.segment_rows,
+            segment_height: spectrum.segment_height,
+            segment_gap: spectrum.segment_gap,
+            segment_column_gap: spectrum.segment_column_gap,
+            segment_inactive: spectrum.segment_inactive,
+        }
+    }
+
+    fn segmented(&self) -> bool {
+        self.render_style.eq_ignore_ascii_case("segmented")
+    }
+
+    fn top_only(&self) -> bool {
+        self.render_style.eq_ignore_ascii_case("top_only")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SettingsRow {
+    Artwork,
+    Visualizer,
+    SpectrumStyle,
+    SegmentRows,
+    SegmentHeight,
+    SegmentGap,
+    SegmentColumnGap,
+    SegmentInactive,
+    Sensitivity,
+    Orientation,
+    Rotation,
+}
+
+fn settings_rows(visualizer_mode: &str, spectrum: &RuntimeSpectrumSettings) -> Vec<SettingsRow> {
+    let mut rows = vec![SettingsRow::Artwork, SettingsRow::Visualizer];
+
+    if visualizer_mode.eq_ignore_ascii_case("spectrum") {
+        rows.push(SettingsRow::SpectrumStyle);
+
+        if spectrum.segmented() {
+            rows.push(SettingsRow::SegmentRows);
+            rows.push(SettingsRow::SegmentHeight);
+            rows.push(SettingsRow::SegmentGap);
+            rows.push(SettingsRow::SegmentColumnGap);
+            rows.push(SettingsRow::SegmentInactive);
+        }
+    }
+
+    rows.push(SettingsRow::Sensitivity);
+    rows.push(SettingsRow::Orientation);
+    rows.push(SettingsRow::Rotation);
+    rows
+}
+
 #[derive(Clone, Copy)]
 struct ArtworkColorCandidate {
     color: Color,
@@ -197,11 +265,7 @@ fn rgb_saturation(r: u8, g: u8, b: u8) -> f32 {
     let max = r.max(g).max(b) as f32;
     let min = r.min(g).min(b) as f32;
 
-    if max <= 0.0 {
-        0.0
-    } else {
-        (max - min) / max
-    }
+    if max <= 0.0 { 0.0 } else { (max - min) / max }
 }
 
 fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
@@ -224,11 +288,7 @@ fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
         60.0 * (((rf - gf) / delta) + 4.0)
     };
 
-    if hue < 0.0 {
-        hue + 360.0
-    } else {
-        hue
-    }
+    if hue < 0.0 { hue + 360.0 } else { hue }
 }
 
 fn hue_distance(a: f32, b: f32) -> f32 {
@@ -1188,7 +1248,12 @@ fn draw_vu_meter(
         canvas.set_draw_color(Color::RGB(18, 17, 15));
         canvas.fill_rect(rect)?;
         canvas.set_draw_color(Color::RGB(135, 117, 82));
-        canvas.draw_rect(Rect::new(x + 6, y + 6, rect.width() - 12, rect.height() - 12))?;
+        canvas.draw_rect(Rect::new(
+            x + 6,
+            y + 6,
+            rect.width() - 12,
+            rect.height() - 12,
+        ))?;
         let face = Rect::new(
             x + 10,
             y + 10,
@@ -1261,10 +1326,16 @@ fn draw_vu_meter(
 
     // Offset shadow, then a tapered-looking warm black needle.
     canvas.set_draw_color(Color::RGBA(78, 55, 30, 100));
-    canvas.draw_line(Point::new(pivot_x + 3, pivot_y + 4), Point::new(tip.x + 3, tip.y + 4))?;
+    canvas.draw_line(
+        Point::new(pivot_x + 3, pivot_y + 4),
+        Point::new(tip.x + 3, tip.y + 4),
+    )?;
     canvas.set_draw_color(Color::RGB(42, 29, 18));
     for offset in -1..=1 {
-        canvas.draw_line(Point::new(pivot_x + offset, pivot_y), Point::new(tip.x + offset, tip.y))?;
+        canvas.draw_line(
+            Point::new(pivot_x + offset, pivot_y),
+            Point::new(tip.x + offset, tip.y),
+        )?;
     }
 
     draw_filled_circle(canvas, pivot_x, pivot_y, 10, Color::RGB(45, 40, 33))?;
@@ -1321,6 +1392,7 @@ fn draw_spectrum(
     width: u32,
     height: u32,
     bar_gap: u32,
+    spectrum: &RuntimeSpectrumSettings,
 ) -> Result<(), String> {
     canvas.set_draw_color(visualizer_background_color(ctx));
     canvas.fill_rect(Rect::new(x, y, width, height))?;
@@ -1339,14 +1411,25 @@ fn draw_spectrum(
         return Ok(());
     }
 
+    if spectrum.segmented() {
+        return draw_segmented_spectrum(
+            canvas,
+            ctx,
+            colors,
+            upper_bins,
+            upper_peaks,
+            x,
+            y,
+            width,
+            height,
+            bar_gap,
+            spectrum,
+        );
+    }
+
     let total_gap = bar_gap.saturating_mul(count.saturating_sub(1));
     let bar_w = (width.saturating_sub(total_gap) / count).max(1);
-    let top_only = ctx
-        .config
-        .visualizer
-        .spectrum
-        .render_style
-        .eq_ignore_ascii_case("top_only");
+    let top_only = spectrum.top_only();
     let upper_h = if top_only { height } else { half_h };
     let baseline_y = if top_only {
         y + (height as i32)
@@ -1379,7 +1462,7 @@ fn draw_spectrum(
             bar_w,
             bar_h,
             true,
-            &ctx.config.visualizer.spectrum.render_style,
+            &spectrum.render_style,
             ctx.config.visualizer.spectrum.top_only_height_ratio,
         ) {
             canvas.fill_rect(rect)?;
@@ -1404,7 +1487,7 @@ fn draw_spectrum(
                 bar_w,
                 bar_h,
                 false,
-                &ctx.config.visualizer.spectrum.render_style,
+                &spectrum.render_style,
                 ctx.config.visualizer.spectrum.top_only_height_ratio,
             ) {
                 canvas.fill_rect(rect)?;
@@ -1467,6 +1550,133 @@ fn draw_spectrum(
     Ok(())
 }
 
+fn dim_segment_color(color: Color, alpha: u8) -> Color {
+    Color::RGBA(
+        (color.r as f32 * 0.45).round() as u8,
+        (color.g as f32 * 0.45).round() as u8,
+        (color.b as f32 * 0.45).round() as u8,
+        alpha,
+    )
+}
+
+fn segmented_row_rect(
+    bar_x: i32,
+    bottom_y: i32,
+    bar_w: u32,
+    row: u32,
+    segment_h: u32,
+    row_step: f32,
+) -> Rect {
+    let row_bottom = bottom_y - ((row as f32) * row_step).round() as i32;
+    Rect::new(bar_x, row_bottom - segment_h as i32, bar_w, segment_h)
+}
+
+fn segmented_row_step(height: u32, rows: u32, segment_h: u32, segment_gap: u32) -> f32 {
+    if rows <= 1 {
+        return segment_h.max(1) as f32;
+    }
+
+    let fit_step = height.saturating_sub(segment_h) as f32 / rows.saturating_sub(1) as f32;
+    let min_step = segment_h.saturating_add(segment_gap) as f32;
+    if min_step * rows.saturating_sub(1) as f32 + segment_h as f32 <= height as f32 {
+        fit_step.max(min_step)
+    } else {
+        fit_step.max(1.0)
+    }
+}
+
+fn draw_segmented_spectrum(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    ctx: &AppContext,
+    colors: &VisualizerDrawColors,
+    bins: &[f32],
+    peaks: &[f32],
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    _bar_gap: u32,
+    spectrum: &RuntimeSpectrumSettings,
+) -> Result<(), String> {
+    let count = bins.len() as u32;
+    if count == 0 || height == 0 {
+        return Ok(());
+    }
+
+    let column_gap = spectrum.segment_column_gap;
+    let total_gap = column_gap.saturating_mul(count.saturating_sub(1));
+    let bar_w = (width.saturating_sub(total_gap) / count).max(1);
+    let rows = spectrum.segment_rows.clamp(4, 96);
+    let segment_gap = spectrum.segment_gap.min(height / rows.max(1));
+    let total_row_gap = segment_gap.saturating_mul(rows.saturating_sub(1));
+    let max_segment_h = height.saturating_sub(total_row_gap) / rows;
+    let segment_h = spectrum.segment_height.clamp(1, max_segment_h.max(1));
+    if segment_h == 0 {
+        return Ok(());
+    }
+
+    canvas.set_blend_mode(BlendMode::Blend);
+    let bottom_y = y + height as i32;
+    let row_step = segmented_row_step(height, rows, segment_h, segment_gap);
+    let inactive_alpha = ctx.config.visualizer.spectrum.segment_inactive_alpha;
+    let draw_inactive = spectrum.segment_inactive;
+
+    for (i, value) in bins.iter().enumerate() {
+        let i_u32 = i as u32;
+        let bar_x = x + ((i_u32 * (bar_w + column_gap)) as i32);
+        let color = palette_color_at(&colors.palette, i, count as usize);
+        let active_rows = ((*value).clamp(0.0, 1.0) * rows as f32).ceil() as u32;
+
+        if draw_inactive {
+            canvas.set_draw_color(dim_segment_color(color, inactive_alpha));
+            for row in 0..rows {
+                canvas.fill_rect(segmented_row_rect(
+                    bar_x, bottom_y, bar_w, row, segment_h, row_step,
+                ))?;
+            }
+        }
+
+        canvas.set_draw_color(color);
+        for row in 0..active_rows.min(rows) {
+            canvas.fill_rect(segmented_row_rect(
+                bar_x, bottom_y, bar_w, row, segment_h, row_step,
+            ))?;
+        }
+    }
+
+    if ctx.config.visualizer.peaks.enabled {
+        let peak_color = parse_hex_color(
+            &ctx.config.visualizer.peaks.color,
+            Color::RGB(255, 255, 255),
+        );
+
+        for (i, value) in peaks.iter().take(count as usize).enumerate() {
+            let peak_row = ((*value).clamp(0.0, 1.0) * rows as f32).ceil() as u32;
+            if peak_row == 0 {
+                continue;
+            }
+
+            let i_u32 = i as u32;
+            let bar_x = x + ((i_u32 * (bar_w + column_gap)) as i32);
+            canvas.set_draw_color(if ctx.config.visualizer.peaks.use_bar_color {
+                palette_color_at(&colors.palette, i, count as usize)
+            } else {
+                peak_color
+            });
+            canvas.fill_rect(segmented_row_rect(
+                bar_x,
+                bottom_y,
+                bar_w,
+                peak_row.saturating_sub(1).min(rows - 1),
+                segment_h,
+                row_step,
+            ))?;
+        }
+    }
+
+    Ok(())
+}
+
 fn spectrum_bar_rect(
     bar_x: i32,
     baseline_y: i32,
@@ -1518,6 +1728,7 @@ fn draw_visualizer(
     bar_gap: u32,
     meter_level: f32,
     vu_face_texture: Option<&Texture<'_>>,
+    spectrum: &RuntimeSpectrumSettings,
 ) -> Result<(), String> {
     match mode {
         VisualizerMode::None => Ok(()),
@@ -1532,18 +1743,16 @@ fn draw_visualizer(
             width,
             height,
         ),
-        VisualizerMode::AnalogVu => {
-            draw_analog_vu(
-                canvas,
-                ctx,
-                meter_level,
-                x,
-                y,
-                width,
-                height,
-                vu_face_texture,
-            )
-        }
+        VisualizerMode::AnalogVu => draw_analog_vu(
+            canvas,
+            ctx,
+            meter_level,
+            x,
+            y,
+            width,
+            height,
+            vu_face_texture,
+        ),
         VisualizerMode::Spectrum => draw_spectrum(
             canvas,
             ctx,
@@ -1557,6 +1766,7 @@ fn draw_visualizer(
             width,
             height,
             bar_gap,
+            spectrum,
         ),
     }
 }
@@ -1653,8 +1863,7 @@ fn draw_spiral_groove(
 
     for point in 0..=point_count {
         let progress = point as f32 / point_count as f32;
-        let radius =
-            outer_radius as f32 + (inner_radius - outer_radius) as f32 * progress;
+        let radius = outer_radius as f32 + (inner_radius - outer_radius) as f32 * progress;
         let angle = progress * TURNS as f32 * std::f32::consts::TAU;
         points.push(Point::new(
             center_x + (angle.cos() * radius).round() as i32,
@@ -1755,8 +1964,7 @@ fn draw_circular_artwork(
     for y in -radius..radius {
         let half_width = ((radius * radius - y * y) as f32).sqrt() as i32;
         let destination_width = (half_width * 2).max(1) as u32;
-        let source_row = (((y + radius) as f32 / (radius * 2) as f32)
-            * source_size as f32) as u32;
+        let source_row = (((y + radius) as f32 / (radius * 2) as f32) * source_size as f32) as u32;
         let source_half_width =
             ((half_width as f32 / radius as f32) * source_size as f32 / 2.0) as u32;
         let source_center = source_x + source_size / 2;
@@ -1770,12 +1978,7 @@ fn draw_circular_artwork(
                 source_width.min(source_size),
                 1,
             ),
-            Rect::new(
-                center_x - half_width,
-                center_y + y,
-                destination_width,
-                1,
-            ),
+            Rect::new(center_x - half_width, center_y + y, destination_width, 1),
         )?;
     }
     Ok(())
@@ -1908,7 +2111,10 @@ impl DisplayRotation {
 
 #[cfg(test)]
 mod tests {
-    use super::{metadata_font_theme_name, scene_layout, selected_font_theme_name, DisplayRotation};
+    use super::{
+        DisplayRotation, metadata_font_theme_name, scene_layout, segmented_row_rect,
+        segmented_row_step, selected_font_theme_name,
+    };
     use crate::config::DisplayPreset;
 
     #[test]
@@ -2000,6 +2206,30 @@ mod tests {
     }
 
     #[test]
+    fn segmented_rows_stack_upward_with_gaps() {
+        let first = segmented_row_rect(10, 100, 20, 0, 4, 6.0);
+        let second = segmented_row_rect(10, 100, 20, 1, 4, 6.0);
+
+        assert_eq!(first.x(), 10);
+        assert_eq!(first.y(), 96);
+        assert_eq!(first.width(), 20);
+        assert_eq!(first.height(), 4);
+        assert_eq!(second.y(), 90);
+        assert_eq!(first.y() - (second.y() + second.height() as i32), 2);
+    }
+
+    #[test]
+    fn segmented_rows_span_full_region_with_thin_segments() {
+        let row_step = segmented_row_step(100, 24, 3, 2);
+        let bottom_y = 110;
+        let top_row = segmented_row_rect(0, bottom_y, 10, 23, 3, row_step);
+        let bottom_row = segmented_row_rect(0, bottom_y, 10, 0, 3, row_step);
+
+        assert_eq!(top_row.y(), 10);
+        assert_eq!(bottom_row.y() + bottom_row.height() as i32, 110);
+    }
+
+    #[test]
     fn landscape_layout_places_artwork_right_and_visualizer_under_metadata() {
         let preset = DisplayPreset {
             width: 1920,
@@ -2016,7 +2246,10 @@ mod tests {
 
         assert!(layout.artwork_region.x() > layout.metadata_region.x());
         assert_eq!(layout.metadata_region.x(), layout.visualizer_region.x());
-        assert_eq!(layout.metadata_region.width(), layout.visualizer_region.width());
+        assert_eq!(
+            layout.metadata_region.width(),
+            layout.visualizer_region.width()
+        );
         assert!(layout.visualizer_region.y() > layout.metadata_region.y());
     }
 
@@ -2046,29 +2279,38 @@ fn save_display_modes(
     path: &str,
     artwork_mode: &str,
     visualizer_mode: &str,
+    spectrum: &RuntimeSpectrumSettings,
     visualizer_gain: f32,
     display_orientation: &str,
     display_rotation: &str,
 ) -> Result<(), String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {path}: {e}"))?;
+    let raw = fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
     let mut document = raw
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| format!("Failed to parse {path}: {e}"))?;
     document["artwork"]["mode"] = toml_edit::value(artwork_mode);
     document["visualizer"]["mode"] = toml_edit::value(visualizer_mode);
+    document["visualizer"]["spectrum"]["render_style"] = toml_edit::value(&spectrum.render_style);
+    document["visualizer"]["spectrum"]["segment_rows"] =
+        toml_edit::value(spectrum.segment_rows as i64);
+    document["visualizer"]["spectrum"]["segment_height"] =
+        toml_edit::value(spectrum.segment_height as i64);
+    document["visualizer"]["spectrum"]["segment_gap"] =
+        toml_edit::value(spectrum.segment_gap as i64);
+    document["visualizer"]["spectrum"]["segment_column_gap"] =
+        toml_edit::value(spectrum.segment_column_gap as i64);
+    document["visualizer"]["spectrum"]["segment_inactive"] =
+        toml_edit::value(spectrum.segment_inactive);
     document["visualizer"]["gain"] = toml_edit::value(visualizer_gain as f64);
     document["display"]["orientation"] = toml_edit::value(display_orientation);
     document["display"]["rotation"] = toml_edit::value(display_rotation);
 
     let backup = format!("{path}.bak");
     let temporary = format!("{path}.tmp");
-    fs::copy(path, &backup)
-        .map_err(|e| format!("Failed to create {backup}: {e}"))?;
+    fs::copy(path, &backup).map_err(|e| format!("Failed to create {backup}: {e}"))?;
     fs::write(&temporary, document.to_string())
         .map_err(|e| format!("Failed to write {temporary}: {e}"))?;
-    fs::rename(&temporary, path)
-        .map_err(|e| format!("Failed to replace {path}: {e}"))
+    fs::rename(&temporary, path).map_err(|e| format!("Failed to replace {path}: {e}"))
 }
 
 fn draw_settings_text(
@@ -2088,11 +2330,7 @@ fn draw_settings_text(
         .create_texture_from_surface(&surface)
         .map_err(|e| e.to_string())?;
     let query = texture.query();
-    canvas.copy(
-        &texture,
-        None,
-        Rect::new(x, y, query.width, query.height),
-    )
+    canvas.copy(&texture, None, Rect::new(x, y, query.width, query.height))
 }
 
 fn draw_settings_overlay(
@@ -2101,6 +2339,7 @@ fn draw_settings_overlay(
     font: &sdl2::ttf::Font,
     artwork_mode: &str,
     visualizer_mode: &str,
+    spectrum: &RuntimeSpectrumSettings,
     visualizer_gain: f32,
     display_orientation: &str,
     display_rotation: &str,
@@ -2108,8 +2347,11 @@ fn draw_settings_overlay(
     status: &str,
 ) -> Result<(), String> {
     let (canvas_w, canvas_h) = canvas.output_size().map_err(|e| e.to_string())?;
+    let rows = settings_rows(visualizer_mode, spectrum);
     let panel_w = canvas_w.saturating_sub(80).min(760);
-    let panel_h = 430u32.min(canvas_h.saturating_sub(80));
+    let row_spacing = 36i32;
+    let panel_h = (190 + rows.len() as u32 * row_spacing as u32)
+        .min(canvas_h.saturating_sub(80).max(1));
     let panel_x = ((canvas_w - panel_w) / 2) as i32;
     let panel_y = ((canvas_h - panel_h) / 2) as i32;
 
@@ -2136,20 +2378,42 @@ fn draw_settings_overlay(
         "-".repeat(16 - filled),
         visualizer_gain,
     );
-    for (index, line) in [
-        format!("Artwork       < {} >", artwork_mode),
-        format!("Visualizer    < {} >", visualizer_mode),
-        format!("Sensitivity   {}", slider),
-        format!("Orientation   < {} >", display_orientation),
-        format!("Rotation      < {} >", display_rotation),
-    ]
-    .iter()
-    .enumerate()
-    {
-        let row_y = panel_y + 58 + index as i32 * 46;
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|row| match row {
+            SettingsRow::Artwork => format!("Artwork       < {} >", artwork_mode),
+            SettingsRow::Visualizer => format!("Visualizer    < {} >", visualizer_mode),
+            SettingsRow::SpectrumStyle => format!("Spectrum      < {} >", spectrum.render_style),
+            SettingsRow::SegmentRows => format!("Segments      < {} >", spectrum.segment_rows),
+            SettingsRow::SegmentHeight => format!("Segment H     < {} >", spectrum.segment_height),
+            SettingsRow::SegmentGap => format!("Row Gap       < {} >", spectrum.segment_gap),
+            SettingsRow::SegmentColumnGap => {
+                format!("Column Gap    < {} >", spectrum.segment_column_gap)
+            }
+            SettingsRow::SegmentInactive => format!(
+                "Inactive LEDs < {} >",
+                if spectrum.segment_inactive {
+                    "on"
+                } else {
+                    "off"
+                }
+            ),
+            SettingsRow::Sensitivity => format!("Sensitivity   {}", slider),
+            SettingsRow::Orientation => format!("Orientation   < {} >", display_orientation),
+            SettingsRow::Rotation => format!("Rotation      < {} >", display_rotation),
+        })
+        .collect();
+
+    for (index, line) in lines.iter().enumerate() {
+        let row_y = panel_y + 58 + index as i32 * row_spacing;
         if selected == index {
             canvas.set_draw_color(Color::RGBA(104, 72, 28, 180));
-            canvas.fill_rect(Rect::new(panel_x + 22, row_y - 8, panel_w - 44, 48))?;
+            canvas.fill_rect(Rect::new(
+                panel_x + 22,
+                row_y - 6,
+                panel_w - 44,
+                row_spacing as u32,
+            ))?;
         }
         draw_settings_text(
             canvas,
@@ -2316,11 +2580,7 @@ pub fn run_display_loop(
         preset.height
     };
 
-    let mut window_builder = video.window(
-        &ctx.config.display.window_title,
-        window_w,
-        window_h,
-    );
+    let mut window_builder = video.window(&ctx.config.display.window_title, window_w, window_h);
     window_builder.position_centered();
 
     let window = if ctx.config.display.fullscreen {
@@ -2380,6 +2640,7 @@ pub fn run_display_loop(
     let mut event_pump = sdl.event_pump()?;
     let mut runtime_artwork_mode = ctx.config.artwork.mode.clone();
     let mut runtime_visualizer_mode = ctx.config.visualizer.mode.clone();
+    let mut runtime_spectrum = RuntimeSpectrumSettings::from_config(&ctx);
     let mut runtime_visualizer_gain = ctx.config.visualizer.gain;
     let mut runtime_display_orientation = ctx.config.display.orientation.clone();
     let mut runtime_display_rotation = configured_rotation.canonical().to_string();
@@ -2396,6 +2657,7 @@ pub fn run_display_loop(
     let mut settings_selected = 0usize;
     let mut settings_original_artwork = runtime_artwork_mode.clone();
     let mut settings_original_visualizer = runtime_visualizer_mode.clone();
+    let mut settings_original_spectrum = runtime_spectrum.clone();
     let mut settings_original_gain = runtime_visualizer_gain;
     let mut settings_original_orientation = runtime_display_orientation.clone();
     let mut settings_original_rotation = runtime_display_rotation.clone();
@@ -2431,8 +2693,8 @@ pub fn run_display_loop(
         .create_texture_target(PixelFormatEnum::RGBA8888, scene_w, scene_h)
         .map_err(|e| e.to_string())?;
 
-    let vu_face_texture =
-        match texture_creator.load_texture("assets/vu/vintage-meter-face-v2.png") {
+    let vu_face_texture = match texture_creator.load_texture("assets/vu/vintage-meter-face-v2.png")
+    {
         Ok(texture) => Some(texture),
         Err(e) => {
             log_error(
@@ -2457,11 +2719,7 @@ pub fn run_display_loop(
             .with_texture_canvas(&mut texture, |vinyl_canvas| {
                 vinyl_canvas.set_draw_color(Color::RGBA(0, 0, 0, 0));
                 vinyl_canvas.clear();
-                let _ = draw_vinyl_record(
-                    vinyl_canvas,
-                    Rect::new(0, 0, diameter, diameter),
-                    1.0,
-                );
+                let _ = draw_vinyl_record(vinyl_canvas, Rect::new(0, 0, diameter, diameter), 1.0);
             })
             .map_err(|e| e.to_string())?;
         Some(texture)
@@ -2483,11 +2741,10 @@ pub fn run_display_loop(
                             Keycode::Escape => {
                                 runtime_artwork_mode = settings_original_artwork.clone();
                                 runtime_visualizer_mode = settings_original_visualizer.clone();
+                                runtime_spectrum = settings_original_spectrum.clone();
                                 runtime_visualizer_gain = settings_original_gain;
-                                runtime_display_orientation =
-                                    settings_original_orientation.clone();
-                                runtime_display_rotation =
-                                    settings_original_rotation.clone();
+                                runtime_display_orientation = settings_original_orientation.clone();
+                                runtime_display_rotation = settings_original_rotation.clone();
                                 settings_status.clear();
                                 settings_open = false;
                             }
@@ -2496,47 +2753,112 @@ pub fn run_display_loop(
                                 settings_status.clear();
                             }
                             Keycode::Down => {
-                                settings_selected = (settings_selected + 1).min(4);
+                                let row_count =
+                                    settings_rows(&runtime_visualizer_mode, &runtime_spectrum)
+                                        .len();
+                                settings_selected =
+                                    (settings_selected + 1).min(row_count.saturating_sub(1));
                                 settings_status.clear();
                             }
                             Keycode::Left | Keycode::Right => {
                                 let direction = if key == Keycode::Right { 1 } else { -1 };
-                                if settings_selected == 0 {
-                                    runtime_artwork_mode = cycle_option(
-                                        &runtime_artwork_mode,
-                                        &["cover", "turntable"],
-                                        direction,
-                                    );
-                                    artwork_started_at = Instant::now();
-                                } else if settings_selected == 1 {
-                                    runtime_visualizer_mode = cycle_option(
-                                        &runtime_visualizer_mode,
-                                        &["spectrum", "oscilloscope", "analog_vu"],
-                                        direction,
-                                    );
-                                } else if settings_selected == 2 {
-                                    runtime_visualizer_gain =
-                                        (runtime_visualizer_gain + direction as f32 * 0.25)
+                                let rows =
+                                    settings_rows(&runtime_visualizer_mode, &runtime_spectrum);
+                                let selected_row = rows
+                                    .get(settings_selected)
+                                    .copied()
+                                    .unwrap_or(SettingsRow::Artwork);
+
+                                match selected_row {
+                                    SettingsRow::Artwork => {
+                                        runtime_artwork_mode = cycle_option(
+                                            &runtime_artwork_mode,
+                                            &["cover", "turntable"],
+                                            direction,
+                                        );
+                                        artwork_started_at = Instant::now();
+                                    }
+                                    SettingsRow::Visualizer => {
+                                        runtime_visualizer_mode = cycle_option(
+                                            &runtime_visualizer_mode,
+                                            &["spectrum", "oscilloscope", "analog_vu"],
+                                            direction,
+                                        );
+                                    }
+                                    SettingsRow::SpectrumStyle => {
+                                        runtime_spectrum.render_style = cycle_option(
+                                            &runtime_spectrum.render_style,
+                                            &["full", "top_only", "segmented"],
+                                            direction,
+                                        );
+                                    }
+                                    SettingsRow::SegmentRows => {
+                                        runtime_spectrum.segment_rows = ((runtime_spectrum
+                                            .segment_rows
+                                            as i32)
+                                            + direction * 2)
+                                            .clamp(4, 96)
+                                            as u32;
+                                    }
+                                    SettingsRow::SegmentHeight => {
+                                        runtime_spectrum.segment_height =
+                                            ((runtime_spectrum.segment_height as i32) + direction)
+                                                .clamp(1, 24)
+                                                as u32;
+                                    }
+                                    SettingsRow::SegmentGap => {
+                                        runtime_spectrum.segment_gap =
+                                            ((runtime_spectrum.segment_gap as i32) + direction)
+                                                .clamp(0, 24)
+                                                as u32;
+                                    }
+                                    SettingsRow::SegmentColumnGap => {
+                                        runtime_spectrum.segment_column_gap =
+                                            ((runtime_spectrum.segment_column_gap as i32)
+                                                + direction)
+                                                .clamp(0, 80)
+                                                as u32;
+                                    }
+                                    SettingsRow::SegmentInactive => {
+                                        runtime_spectrum.segment_inactive =
+                                            !runtime_spectrum.segment_inactive;
+                                    }
+                                    SettingsRow::Sensitivity => {
+                                        runtime_visualizer_gain = (runtime_visualizer_gain
+                                            + direction as f32 * 0.25)
                                             .clamp(0.25, 8.0);
-                                } else if settings_selected == 3 {
-                                    runtime_display_orientation = cycle_option(
-                                        &runtime_display_orientation,
-                                        &["portrait", "landscape"],
-                                        direction,
-                                    );
-                                } else {
-                                    runtime_display_rotation = cycle_option(
-                                        &runtime_display_rotation,
-                                        &[
-                                            "normal",
-                                            "clockwise",
-                                            "inverted",
-                                            "counter_clockwise",
-                                        ],
-                                        direction,
-                                    );
+                                    }
+                                    SettingsRow::Orientation => {
+                                        runtime_display_orientation = cycle_option(
+                                            &runtime_display_orientation,
+                                            &["portrait", "landscape"],
+                                            direction,
+                                        );
+                                    }
+                                    SettingsRow::Rotation => {
+                                        runtime_display_rotation = cycle_option(
+                                            &runtime_display_rotation,
+                                            &[
+                                                "normal",
+                                                "clockwise",
+                                                "inverted",
+                                                "counter_clockwise",
+                                            ],
+                                            direction,
+                                        );
+                                    }
                                 }
-                                settings_status = if settings_selected >= 3 {
+
+                                let row_count =
+                                    settings_rows(&runtime_visualizer_mode, &runtime_spectrum)
+                                        .len();
+                                settings_selected =
+                                    settings_selected.min(row_count.saturating_sub(1));
+
+                                settings_status = if matches!(
+                                    selected_row,
+                                    SettingsRow::Orientation | SettingsRow::Rotation
+                                ) {
                                     "Save + restart".to_string()
                                 } else {
                                     "Preview".to_string()
@@ -2546,19 +2868,19 @@ pub fn run_display_loop(
                                 "config/songart.toml",
                                 &runtime_artwork_mode,
                                 &runtime_visualizer_mode,
+                                &runtime_spectrum,
                                 runtime_visualizer_gain,
                                 &runtime_display_orientation,
                                 &runtime_display_rotation,
                             ) {
                                 Ok(()) => {
                                     settings_original_artwork = runtime_artwork_mode.clone();
-                                    settings_original_visualizer =
-                                        runtime_visualizer_mode.clone();
+                                    settings_original_visualizer = runtime_visualizer_mode.clone();
+                                    settings_original_spectrum = runtime_spectrum.clone();
                                     settings_original_gain = runtime_visualizer_gain;
                                     settings_original_orientation =
                                         runtime_display_orientation.clone();
-                                    settings_original_rotation =
-                                        runtime_display_rotation.clone();
+                                    settings_original_rotation = runtime_display_rotation.clone();
                                     settings_status = "Saved".to_string();
                                 }
                                 Err(e) => {
@@ -2581,11 +2903,10 @@ pub fn run_display_loop(
                             Keycode::M | Keycode::F1 => {
                                 settings_original_artwork = runtime_artwork_mode.clone();
                                 settings_original_visualizer = runtime_visualizer_mode.clone();
+                                settings_original_spectrum = runtime_spectrum.clone();
                                 settings_original_gain = runtime_visualizer_gain;
-                                settings_original_orientation =
-                                    runtime_display_orientation.clone();
-                                settings_original_rotation =
-                                    runtime_display_rotation.clone();
+                                settings_original_orientation = runtime_display_orientation.clone();
+                                settings_original_rotation = runtime_display_rotation.clone();
                                 settings_selected = 0;
                                 settings_status.clear();
                                 settings_open = true;
@@ -2675,12 +2996,7 @@ pub fn run_display_loop(
         if ctx.config.visualizer.peaks.enabled {
             let hold = Duration::from_millis(ctx.config.visualizer.peaks.hold_ms);
             let should_drop = last_spectrum_peak_drop.elapsed() >= hold;
-            let top_only = ctx
-                .config
-                .visualizer
-                .spectrum
-                .render_style
-                .eq_ignore_ascii_case("top_only");
+            let top_only = runtime_spectrum.top_only();
             let peak_scale = if top_only {
                 ctx.config.visualizer.height.max(1)
             } else {
@@ -3178,6 +3494,7 @@ pub fn run_display_loop(
                 ctx.config.visualizer.spectrum_bar_gap,
                 state.meter.level,
                 vu_face_texture.as_ref(),
+                &runtime_spectrum,
             )?;
         }
 
@@ -3188,6 +3505,7 @@ pub fn run_display_loop(
                 &settings_font,
                 &runtime_artwork_mode,
                 &runtime_visualizer_mode,
+                &runtime_spectrum,
                 runtime_visualizer_gain,
                 &runtime_display_orientation,
                 &runtime_display_rotation,
