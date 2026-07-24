@@ -1875,6 +1875,55 @@ fn draw_spiral_groove(
     canvas.draw_lines(points.as_slice())
 }
 
+fn draw_vinyl_reflection(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    center_x: i32,
+    center_y: i32,
+    inner_radius: i32,
+    outer_radius: i32,
+    angle_degrees: f32,
+    opacity: f32,
+) -> Result<(), String> {
+    // A broad, feathered reflection gives the otherwise nearly black disc the
+    // directional sheen visible on real vinyl. It is baked into the cached
+    // record texture, so this detail has no per-frame rendering cost.
+    const ANGLE_STEPS: usize = 36;
+    let center_angle = angle_degrees.to_radians();
+    let half_sweep = 25.0f32.to_radians();
+
+    for radius in (inner_radius..=outer_radius).step_by(2) {
+        let radial_progress =
+            (radius - inner_radius) as f32 / (outer_radius - inner_radius).max(1) as f32;
+        let edge_fade = (radial_progress * std::f32::consts::PI).sin().sqrt();
+        let groove_shimmer =
+            0.55 + 0.45 * (radial_progress * 31.0 * std::f32::consts::TAU).sin().abs();
+
+        for step in 0..ANGLE_STEPS {
+            let start_progress = step as f32 / ANGLE_STEPS as f32;
+            let end_progress = (step + 1) as f32 / ANGLE_STEPS as f32;
+            let start_offset = (start_progress * 2.0 - 1.0) * half_sweep;
+            let end_offset = (end_progress * 2.0 - 1.0) * half_sweep;
+            let angular_fade = (start_progress * std::f32::consts::PI).sin().powi(2);
+            let brightness =
+                (9.0 + 62.0 * opacity * edge_fade * groove_shimmer * angular_fade) as u8;
+            let point_at = |angle: f32| {
+                Point::new(
+                    center_x + (angle.cos() * radius as f32).round() as i32,
+                    center_y + (angle.sin() * radius as f32).round() as i32,
+                )
+            };
+
+            canvas.set_draw_color(Color::RGB(brightness, brightness, brightness + 2));
+            canvas.draw_line(
+                point_at(center_angle + start_offset),
+                point_at(center_angle + end_offset),
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 fn draw_vinyl_record(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     target: Rect,
@@ -1898,6 +1947,29 @@ fn draw_vinyl_record(
     let label_radius = radius / 6;
     let inner_groove_radius = label_radius + (radius / 28).max(2);
     let outer_groove_radius = radius - 5;
+
+    // Two uneven opposing highlights emulate the softbox-like reflections in
+    // the reference record. Slightly different strengths keep the surface
+    // from looking mechanically symmetrical.
+    draw_vinyl_reflection(
+        canvas,
+        center_x,
+        center_y,
+        inner_groove_radius,
+        outer_groove_radius,
+        224.0,
+        opacity,
+    )?;
+    draw_vinyl_reflection(
+        canvas,
+        center_x,
+        center_y,
+        inner_groove_radius,
+        outer_groove_radius,
+        44.0,
+        opacity * 0.72,
+    )?;
+
     draw_spiral_groove(
         canvas,
         center_x,
