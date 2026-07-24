@@ -1944,31 +1944,9 @@ fn draw_vinyl_record(
 
     // A real record has one densely packed continuous spiral groove rather
     // than a small stack of widely spaced rings.
-    let label_radius = radius / 6;
+    let label_radius = radius / 3;
     let inner_groove_radius = label_radius + (radius / 28).max(2);
     let outer_groove_radius = radius - 5;
-
-    // Two uneven opposing highlights emulate the softbox-like reflections in
-    // the reference record. Slightly different strengths keep the surface
-    // from looking mechanically symmetrical.
-    draw_vinyl_reflection(
-        canvas,
-        center_x,
-        center_y,
-        inner_groove_radius,
-        outer_groove_radius,
-        224.0,
-        opacity,
-    )?;
-    draw_vinyl_reflection(
-        canvas,
-        center_x,
-        center_y,
-        inner_groove_radius,
-        outer_groove_radius,
-        44.0,
-        opacity * 0.72,
-    )?;
 
     draw_spiral_groove(
         canvas,
@@ -2777,9 +2755,9 @@ pub fn run_display_loop(
         }
     };
 
-    // Prefer the photographed reference surface. Its highlights remain fixed
-    // to the virtual light source while the album label rotates independently.
-    // The procedural texture is retained as a lightweight fallback.
+    // The record is split into material and lighting layers. Groove texture
+    // rotates with the disc; specular reflections remain fixed to the virtual
+    // light source. The procedural textures are retained as fallbacks.
     let record_scene = compute_record_rect(layout.artwork_region);
     let mut vinyl_texture = {
         match texture_creator.load_texture("assets/turntable/vinyl-reference.png") {
@@ -2807,6 +2785,56 @@ pub fn run_display_loop(
                             vinyl_canvas,
                             Rect::new(0, 0, diameter, diameter),
                             1.0,
+                        );
+                    })
+                    .map_err(|e| e.to_string())?;
+                Some(texture)
+            }
+        }
+    };
+    let mut vinyl_highlight_texture = {
+        match texture_creator.load_texture("assets/turntable/vinyl-highlights.png") {
+            Ok(mut texture) => {
+                texture.set_blend_mode(BlendMode::Blend);
+                Some(texture)
+            }
+            Err(e) => {
+                log_error(
+                    &ctx,
+                    &format!(
+                        "Failed to load vinyl lighting overlay; using procedural fallback: {e}"
+                    ),
+                );
+                let diameter = record_scene.width().max(1);
+                let radius = diameter as i32 / 2;
+                let mut texture = texture_creator
+                    .create_texture_target(PixelFormatEnum::RGBA8888, diameter, diameter)
+                    .map_err(|e| e.to_string())?;
+                texture.set_blend_mode(BlendMode::Blend);
+                canvas
+                    .with_texture_canvas(&mut texture, |lighting_canvas| {
+                        lighting_canvas.set_draw_color(Color::RGBA(0, 0, 0, 0));
+                        lighting_canvas.clear();
+                        let label_radius = radius / 3;
+                        let inner_radius = label_radius + (radius / 28).max(2);
+                        let outer_radius = radius - 5;
+                        let _ = draw_vinyl_reflection(
+                            lighting_canvas,
+                            radius,
+                            radius,
+                            inner_radius,
+                            outer_radius,
+                            224.0,
+                            1.0,
+                        );
+                        let _ = draw_vinyl_reflection(
+                            lighting_canvas,
+                            radius,
+                            radius,
+                            inner_radius,
+                            outer_radius,
+                            44.0,
+                            0.72,
                         );
                     })
                     .map_err(|e| e.to_string())?;
@@ -3389,11 +3417,24 @@ pub fn run_display_loop(
                             let rotation = (elapsed as f64 * 200.0) % 360.0;
                             if let Some(vinyl) = vinyl_texture.as_mut() {
                                 vinyl.set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
-                                // The photographed sheen is tied to the light
-                                // source, so the vinyl surface stays fixed while
-                                // the center label rotates beneath it.
-                                canvas.copy(vinyl, None, record)?;
+                                canvas.copy_ex(
+                                    vinyl,
+                                    None,
+                                    record,
+                                    rotation,
+                                    None,
+                                    false,
+                                    false,
+                                )?;
                                 vinyl.set_alpha_mod(255);
+                            }
+                            if let Some(highlight) = vinyl_highlight_texture.as_mut() {
+                                const HIGHLIGHT_ALPHA: u8 = 92;
+                                highlight.set_alpha_mod(
+                                    ((1.0 - fade) * HIGHLIGHT_ALPHA as f32).round() as u8,
+                                );
+                                canvas.copy(highlight, None, record)?;
+                                highlight.set_alpha_mod(255);
                             }
                             previous_label
                                 .set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
@@ -3468,7 +3509,20 @@ pub fn run_display_loop(
                             // 33 1/3 RPM equals 200 degrees per second.
                             let rotation = (shrink_elapsed as f64 * 200.0) % 360.0;
                             if let Some(vinyl) = vinyl_texture.as_ref() {
-                                canvas.copy(vinyl, None, record)?;
+                                canvas.copy_ex(
+                                    vinyl,
+                                    None,
+                                    record,
+                                    rotation,
+                                    None,
+                                    false,
+                                    false,
+                                )?;
+                            }
+                            if let Some(highlight) = vinyl_highlight_texture.as_mut() {
+                                highlight.set_alpha_mod(92);
+                                canvas.copy(highlight, None, record)?;
+                                highlight.set_alpha_mod(255);
                             }
                             if let Some(circular) = circular_artwork_texture.as_ref() {
                                 canvas.copy_ex(
