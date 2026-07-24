@@ -2793,6 +2793,8 @@ pub fn run_display_loop(
         }
     };
     const VINYL_HIGHLIGHT_ALPHA: u8 = 56;
+    const VINYL_SHIMMER_ALPHA: u8 = 128;
+    const VINYL_SHIMMER_FRAME_COUNT: usize = 16;
     let mut vinyl_highlight_texture = {
         match texture_creator.load_texture("assets/turntable/vinyl-highlights.png") {
             Ok(mut texture) => {
@@ -2848,6 +2850,26 @@ pub fn run_display_loop(
             }
         }
     };
+    let mut vinyl_shimmer_textures = Vec::with_capacity(VINYL_SHIMMER_FRAME_COUNT);
+    for frame in 1..=VINYL_SHIMMER_FRAME_COUNT {
+        let path = format!("assets/turntable/shimmer/frame-{frame:02}.png");
+        match texture_creator.load_texture(&path) {
+            Ok(mut texture) => {
+                texture.set_blend_mode(BlendMode::Blend);
+                vinyl_shimmer_textures.push(texture);
+            }
+            Err(e) => {
+                log_error(
+                    &ctx,
+                    &format!(
+                        "Failed to load vinyl shimmer sequence at {path}; using static lighting: {e}"
+                    ),
+                );
+                vinyl_shimmer_textures.clear();
+                break;
+            }
+        }
+    }
 
     log_info(&ctx, "Display loop started.");
 
@@ -3434,7 +3456,18 @@ pub fn run_display_loop(
                                 )?;
                                 vinyl.set_alpha_mod(255);
                             }
-                            if let Some(highlight) = vinyl_highlight_texture.as_mut() {
+                            if !vinyl_shimmer_textures.is_empty() {
+                                let frame = ((rotation / 360.0
+                                    * vinyl_shimmer_textures.len() as f64)
+                                    .floor() as usize)
+                                    % vinyl_shimmer_textures.len();
+                                let shimmer = &mut vinyl_shimmer_textures[frame];
+                                shimmer.set_alpha_mod(
+                                    ((1.0 - fade) * VINYL_SHIMMER_ALPHA as f32).round() as u8,
+                                );
+                                canvas.copy(shimmer, None, record)?;
+                                shimmer.set_alpha_mod(255);
+                            } else if let Some(highlight) = vinyl_highlight_texture.as_mut() {
                                 highlight.set_alpha_mod(
                                     ((1.0 - fade) * VINYL_HIGHLIGHT_ALPHA as f32).round() as u8,
                                 );
@@ -3524,7 +3557,16 @@ pub fn run_display_loop(
                                     false,
                                 )?;
                             }
-                            if let Some(highlight) = vinyl_highlight_texture.as_mut() {
+                            if !vinyl_shimmer_textures.is_empty() {
+                                let frame = ((rotation / 360.0
+                                    * vinyl_shimmer_textures.len() as f64)
+                                    .floor() as usize)
+                                    % vinyl_shimmer_textures.len();
+                                let shimmer = &mut vinyl_shimmer_textures[frame];
+                                shimmer.set_alpha_mod(VINYL_SHIMMER_ALPHA);
+                                canvas.copy(shimmer, None, record)?;
+                                shimmer.set_alpha_mod(255);
+                            } else if let Some(highlight) = vinyl_highlight_texture.as_mut() {
                                 highlight.set_alpha_mod(VINYL_HIGHLIGHT_ALPHA);
                                 canvas.copy(highlight, None, record)?;
                                 highlight.set_alpha_mod(255);
