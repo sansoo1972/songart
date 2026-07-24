@@ -2792,10 +2792,15 @@ pub fn run_display_loop(
             }
         }
     };
+    const VINYL_HIGHLIGHT_ALPHA: u8 = 56;
     let mut vinyl_highlight_texture = {
         match texture_creator.load_texture("assets/turntable/vinyl-highlights.png") {
             Ok(mut texture) => {
                 texture.set_blend_mode(BlendMode::Blend);
+                // The source mask is white so it can retain fine feathering
+                // through chroma-key extraction. Tone it down to the soft gray
+                // sheen of black vinyl instead of drawing white painted arcs.
+                texture.set_color_mod(150, 150, 154);
                 Some(texture)
             }
             Err(e) => {
@@ -2811,6 +2816,7 @@ pub fn run_display_loop(
                     .create_texture_target(PixelFormatEnum::RGBA8888, diameter, diameter)
                     .map_err(|e| e.to_string())?;
                 texture.set_blend_mode(BlendMode::Blend);
+                texture.set_color_mod(150, 150, 154);
                 canvas
                     .with_texture_canvas(&mut texture, |lighting_canvas| {
                         lighting_canvas.set_draw_color(Color::RGBA(0, 0, 0, 0));
@@ -3429,9 +3435,8 @@ pub fn run_display_loop(
                                 vinyl.set_alpha_mod(255);
                             }
                             if let Some(highlight) = vinyl_highlight_texture.as_mut() {
-                                const HIGHLIGHT_ALPHA: u8 = 92;
                                 highlight.set_alpha_mod(
-                                    ((1.0 - fade) * HIGHLIGHT_ALPHA as f32).round() as u8,
+                                    ((1.0 - fade) * VINYL_HIGHLIGHT_ALPHA as f32).round() as u8,
                                 );
                                 canvas.copy(highlight, None, record)?;
                                 highlight.set_alpha_mod(255);
@@ -3520,7 +3525,7 @@ pub fn run_display_loop(
                                 )?;
                             }
                             if let Some(highlight) = vinyl_highlight_texture.as_mut() {
-                                highlight.set_alpha_mod(92);
+                                highlight.set_alpha_mod(VINYL_HIGHLIGHT_ALPHA);
                                 canvas.copy(highlight, None, record)?;
                                 highlight.set_alpha_mod(255);
                             }
