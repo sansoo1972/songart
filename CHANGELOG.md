@@ -14,6 +14,9 @@ All notable changes to `songart` will be documented in this file.
 - Removed directional shading from the rotating vinyl material so the baked light source remains stationary throughout the sequence.
 - Restored continuous album-label rotation independent of the selected vinyl frame profile.
 
+### Changed
+- Rebuilt the baked revolution from a photorealistic black-PVC master with a rounded rim, pressed groove detail, restrained track bands, and fixed broad studio reflections.
+
 ---
 
 ## [0.17.0] - 2026-07-18
