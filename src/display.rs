@@ -2085,18 +2085,8 @@ fn cycle_option(current: &str, options: &[&str], direction: i32) -> String {
     options[(index + direction).rem_euclid(len) as usize].to_string()
 }
 
-fn vinyl_animation_fps(quality: &str) -> f64 {
-    match quality.trim().to_ascii_lowercase().as_str() {
-        "pi3" => 10.0,
-        "pi5" => 60.0,
-        _ => 20.0,
-    }
-}
-
-fn vinyl_rotation(elapsed_seconds: f64, quality: &str) -> f64 {
-    let fps = vinyl_animation_fps(quality);
-    let sampled_time = (elapsed_seconds.max(0.0) * fps).floor() / fps;
-    (sampled_time * 200.0) % 360.0
+fn vinyl_rotation(elapsed_seconds: f64) -> f64 {
+    (elapsed_seconds.max(0.0) * 200.0) % 360.0
 }
 
 fn vinyl_sequence_step(quality: &str) -> usize {
@@ -2188,8 +2178,8 @@ impl DisplayRotation {
 mod tests {
     use super::{
         metadata_font_theme_name, scene_layout, segmented_row_rect, segmented_row_step,
-        selected_font_theme_name, vinyl_animation_fps, vinyl_rotation, vinyl_sequence_frame,
-        vinyl_sequence_step, DisplayRotation,
+        selected_font_theme_name, vinyl_rotation, vinyl_sequence_frame, vinyl_sequence_step,
+        DisplayRotation,
     };
     use crate::config::DisplayPreset;
 
@@ -2228,23 +2218,10 @@ mod tests {
     }
 
     #[test]
-    fn vinyl_animation_profiles_target_raspberry_pi_generations() {
-        assert_eq!(vinyl_animation_fps("pi3"), 10.0);
-        assert_eq!(vinyl_animation_fps("pi4"), 20.0);
-        assert_eq!(vinyl_animation_fps("pi5"), 60.0);
-        assert_eq!(vinyl_animation_fps("unknown"), 20.0);
-    }
-
-    #[test]
-    fn pi3_rotation_advances_at_ten_fps() {
-        assert_eq!(vinyl_rotation(0.0, "pi3"), vinyl_rotation(0.09, "pi3"));
-        assert_ne!(vinyl_rotation(0.0, "pi3"), vinyl_rotation(0.11, "pi3"));
-    }
-
-    #[test]
-    fn pi5_rotation_advances_at_sixty_fps() {
-        assert_eq!(vinyl_rotation(0.0, "pi5"), vinyl_rotation(0.01, "pi5"));
-        assert_ne!(vinyl_rotation(0.0, "pi5"), vinyl_rotation(0.02, "pi5"));
+    fn album_label_rotation_remains_continuous() {
+        assert_eq!(vinyl_rotation(0.0), 0.0);
+        assert_eq!(vinyl_rotation(0.01), 2.0);
+        assert_eq!(vinyl_rotation(1.8), 0.0);
     }
 
     #[test]
@@ -2761,7 +2738,6 @@ pub fn run_display_loop(
     let mut event_pump = sdl.event_pump()?;
     let mut runtime_artwork_mode = ctx.config.artwork.mode.clone();
     let mut runtime_vinyl_animation_quality = ctx.config.artwork.vinyl_animation_quality.clone();
-    let loaded_vinyl_animation_quality = runtime_vinyl_animation_quality.clone();
     let mut runtime_visualizer_mode = ctx.config.visualizer.mode.clone();
     let mut runtime_spectrum = RuntimeSpectrumSettings::from_config(&ctx);
     let mut runtime_visualizer_gain = ctx.config.visualizer.gain;
@@ -3489,10 +3465,7 @@ pub fn run_display_loop(
                                             label_diameter,
                                             label_diameter,
                                         );
-                                        let rotation = vinyl_rotation(
-                                            elapsed as f64,
-                                            &loaded_vinyl_animation_quality,
-                                        );
+                                        let rotation = vinyl_rotation(elapsed as f64);
                                         draw_vinyl_surface(
                                             &mut canvas,
                                             &mut vinyl_frame_textures,
@@ -3577,10 +3550,7 @@ pub fn run_display_loop(
                                         );
 
                                         // 33 1/3 RPM equals 200 degrees per second.
-                                        let rotation = vinyl_rotation(
-                                            shrink_elapsed as f64,
-                                            &loaded_vinyl_animation_quality,
-                                        );
+                                        let rotation = vinyl_rotation(shrink_elapsed as f64);
                                         draw_vinyl_surface(
                                             &mut canvas,
                                             &mut vinyl_frame_textures,
