@@ -2174,7 +2174,10 @@ fn draw_vinyl_shimmer(
     alpha: u8,
 ) -> Result<(), String> {
     let (current, next, blend) = vinyl_shimmer_sample(elapsed_seconds, quality, textures.len());
-    let current_alpha = (alpha as f32 * (1.0 - blend)).round() as u8;
+    // Each animation keyframe is a complete lit vinyl surface. Draw the
+    // current frame at full requested opacity, then crossfade the next frame
+    // over it. This avoids exposing the fallback base midway through a blend.
+    let current_alpha = alpha;
     let next_alpha = (alpha as f32 * blend).round() as u8;
 
     if let Some(texture) = textures.get_mut(current) {
@@ -2873,7 +2876,7 @@ pub fn run_display_loop(
     // light source. The procedural textures are retained as fallbacks.
     let record_scene = compute_record_rect(layout.artwork_region);
     let mut vinyl_texture = {
-        match texture_creator.load_texture("assets/turntable/vinyl-reference.png") {
+        match texture_creator.load_texture("assets/turntable/vinyl-reference-v2.png") {
             Ok(mut texture) => {
                 texture.set_blend_mode(BlendMode::Blend);
                 Some(texture)
@@ -2906,7 +2909,7 @@ pub fn run_display_loop(
         }
     };
     const VINYL_HIGHLIGHT_ALPHA: u8 = 56;
-    const VINYL_SHIMMER_ALPHA: u8 = 128;
+    const VINYL_SHIMMER_ALPHA: u8 = 255;
     const VINYL_SHIMMER_FRAME_COUNT: usize = 16;
     let mut vinyl_highlight_texture = {
         match texture_creator.load_texture("assets/turntable/vinyl-highlights.png") {
@@ -2965,7 +2968,7 @@ pub fn run_display_loop(
     };
     let mut vinyl_shimmer_textures = Vec::with_capacity(VINYL_SHIMMER_FRAME_COUNT);
     for frame in 1..=VINYL_SHIMMER_FRAME_COUNT {
-        let path = format!("assets/turntable/shimmer/frame-{frame:02}.png");
+        let path = format!("assets/turntable/vinyl-frames/frame-{frame:02}.png");
         match texture_creator.load_texture(&path) {
             Ok(mut texture) => {
                 texture.set_blend_mode(BlendMode::Blend);
@@ -2975,7 +2978,7 @@ pub fn run_display_loop(
                 log_error(
                     &ctx,
                     &format!(
-                        "Failed to load vinyl shimmer sequence at {path}; using static lighting: {e}"
+                        "Failed to load photographic vinyl sequence at {path}; using static lighting: {e}"
                     ),
                 );
                 vinyl_shimmer_textures.clear();

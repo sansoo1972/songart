@@ -8,6 +8,7 @@ All notable changes to `songart` will be documented in this file.
 
 ### Added
 - [#41](https://github.com/sansoo1972/songart/issues/41) Raspberry Pi 3, Pi 4, and Pi 5 vinyl-reflection animation profiles at 10, 20, and 30 FPS, selectable from the F1 settings overlay.
+- Photographic 16-frame vinyl surface sequence with broad rotating reflections modeled after the supplied reference video.
 
 ---
 
