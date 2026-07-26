@@ -1892,55 +1892,6 @@ fn draw_spiral_groove(
     canvas.draw_lines(points.as_slice())
 }
 
-fn draw_vinyl_reflection(
-    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-    center_x: i32,
-    center_y: i32,
-    inner_radius: i32,
-    outer_radius: i32,
-    angle_degrees: f32,
-    opacity: f32,
-) -> Result<(), String> {
-    // A broad, feathered reflection gives the otherwise nearly black disc the
-    // directional sheen visible on real vinyl. It is baked into the cached
-    // record texture, so this detail has no per-frame rendering cost.
-    const ANGLE_STEPS: usize = 36;
-    let center_angle = angle_degrees.to_radians();
-    let half_sweep = 25.0f32.to_radians();
-
-    for radius in (inner_radius..=outer_radius).step_by(2) {
-        let radial_progress =
-            (radius - inner_radius) as f32 / (outer_radius - inner_radius).max(1) as f32;
-        let edge_fade = (radial_progress * std::f32::consts::PI).sin().sqrt();
-        let groove_shimmer =
-            0.55 + 0.45 * (radial_progress * 31.0 * std::f32::consts::TAU).sin().abs();
-
-        for step in 0..ANGLE_STEPS {
-            let start_progress = step as f32 / ANGLE_STEPS as f32;
-            let end_progress = (step + 1) as f32 / ANGLE_STEPS as f32;
-            let start_offset = (start_progress * 2.0 - 1.0) * half_sweep;
-            let end_offset = (end_progress * 2.0 - 1.0) * half_sweep;
-            let angular_fade = (start_progress * std::f32::consts::PI).sin().powi(2);
-            let brightness =
-                (9.0 + 62.0 * opacity * edge_fade * groove_shimmer * angular_fade) as u8;
-            let point_at = |angle: f32| {
-                Point::new(
-                    center_x + (angle.cos() * radius as f32).round() as i32,
-                    center_y + (angle.sin() * radius as f32).round() as i32,
-                )
-            };
-
-            canvas.set_draw_color(Color::RGB(brightness, brightness, brightness + 2));
-            canvas.draw_line(
-                point_at(center_angle + start_offset),
-                point_at(center_angle + end_offset),
-            )?;
-        }
-    }
-
-    Ok(())
-}
-
 fn draw_vinyl_record(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     target: Rect,
@@ -2148,6 +2099,49 @@ fn vinyl_rotation(elapsed_seconds: f64, quality: &str) -> f64 {
     (sampled_time * 200.0) % 360.0
 }
 
+fn vinyl_sequence_step(quality: &str) -> usize {
+    match quality.trim().to_ascii_lowercase().as_str() {
+        "pi3" => 6,
+        "pi5" => 1,
+        _ => 3,
+    }
+}
+
+fn vinyl_sequence_frame(elapsed_seconds: f64, frame_count: usize) -> usize {
+    if frame_count == 0 {
+        return 0;
+    }
+    let revolution = (elapsed_seconds.max(0.0) * 200.0 / 360.0).fract();
+    (revolution * frame_count as f64).floor() as usize % frame_count
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_vinyl_surface(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    frames: &mut [Texture<'_>],
+    vinyl_fallback: Option<&mut Texture<'_>>,
+    target: Rect,
+    elapsed_seconds: f64,
+    rotation: f64,
+    alpha: u8,
+) -> Result<(), String> {
+    if !frames.is_empty() {
+        let frame = vinyl_sequence_frame(elapsed_seconds, frames.len());
+        let texture = &mut frames[frame];
+        texture.set_alpha_mod(alpha);
+        canvas.copy(texture, None, target)?;
+        texture.set_alpha_mod(255);
+        return Ok(());
+    }
+
+    if let Some(vinyl) = vinyl_fallback {
+        vinyl.set_alpha_mod(alpha);
+        canvas.copy_ex(vinyl, None, target, rotation, None, false, false)?;
+        vinyl.set_alpha_mod(255);
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DisplayRotation {
     Normal,
@@ -2194,7 +2188,8 @@ impl DisplayRotation {
 mod tests {
     use super::{
         metadata_font_theme_name, scene_layout, segmented_row_rect, segmented_row_step,
-        selected_font_theme_name, vinyl_animation_fps, vinyl_rotation, DisplayRotation,
+        selected_font_theme_name, vinyl_animation_fps, vinyl_rotation, vinyl_sequence_frame,
+        vinyl_sequence_step, DisplayRotation,
     };
     use crate::config::DisplayPreset;
 
@@ -2250,6 +2245,20 @@ mod tests {
     fn pi5_rotation_advances_at_sixty_fps() {
         assert_eq!(vinyl_rotation(0.0, "pi5"), vinyl_rotation(0.01, "pi5"));
         assert_ne!(vinyl_rotation(0.0, "pi5"), vinyl_rotation(0.02, "pi5"));
+    }
+
+    #[test]
+    fn vinyl_sequence_profiles_load_the_expected_frame_counts() {
+        assert_eq!(108 / vinyl_sequence_step("pi3"), 18);
+        assert_eq!(108 / vinyl_sequence_step("pi4"), 36);
+        assert_eq!(108 / vinyl_sequence_step("pi5"), 108);
+    }
+
+    #[test]
+    fn vinyl_sequence_wraps_after_one_revolution() {
+        assert_eq!(vinyl_sequence_frame(0.0, 108), 0);
+        assert_eq!(vinyl_sequence_frame(1.8, 108), 0);
+        assert_eq!(vinyl_sequence_frame(0.9, 108), 54);
     }
 
     #[test]
@@ -2555,7 +2564,7 @@ fn draw_settings_overlay(
         canvas,
         texture_creator,
         font,
-        "Saved orientation/rotation take full effect after restart",
+        "Saved vinyl motion/orientation/rotation take full effect after restart",
         Color::RGB(155, 150, 140),
         panel_x + 32,
         panel_y + panel_h as i32 - 73,
@@ -2752,6 +2761,7 @@ pub fn run_display_loop(
     let mut event_pump = sdl.event_pump()?;
     let mut runtime_artwork_mode = ctx.config.artwork.mode.clone();
     let mut runtime_vinyl_animation_quality = ctx.config.artwork.vinyl_animation_quality.clone();
+    let loaded_vinyl_animation_quality = runtime_vinyl_animation_quality.clone();
     let mut runtime_visualizer_mode = ctx.config.visualizer.mode.clone();
     let mut runtime_spectrum = RuntimeSpectrumSettings::from_config(&ctx);
     let mut runtime_visualizer_gain = ctx.config.visualizer.gain;
@@ -2819,9 +2829,9 @@ pub fn run_display_loop(
         }
     };
 
-    // The record is split into material and lighting layers. Groove texture
-    // rotates with the disc; specular reflections remain fixed to the virtual
-    // light source. The procedural textures are retained as fallbacks.
+    // Normal playback uses complete, pre-rendered vinyl frames. Every frame
+    // bakes a rotated groove surface under the same screen-space illumination;
+    // the single material texture remains only as a low-memory fallback.
     let record_scene = compute_record_rect(layout.artwork_region);
     let mut vinyl_texture = {
         match texture_creator.load_texture("assets/turntable/vinyl-reference-v2.png") {
@@ -2856,59 +2866,31 @@ pub fn run_display_loop(
             }
         }
     };
-    const VINYL_HIGHLIGHT_ALPHA: u8 = 170;
-    let mut vinyl_highlight_texture = {
-        match texture_creator.load_texture("assets/turntable/vinyl-highlights-v2.png") {
+    const VINYL_SEQUENCE_FRAME_COUNT: usize = 108;
+    let sequence_step = vinyl_sequence_step(&ctx.config.artwork.vinyl_animation_quality);
+    let mut vinyl_frame_textures = Vec::with_capacity(VINYL_SEQUENCE_FRAME_COUNT / sequence_step);
+    for frame in (0..VINYL_SEQUENCE_FRAME_COUNT).step_by(sequence_step) {
+        let path = format!(
+            "assets/turntable/vinyl-frames-v2/frame-{:03}.png",
+            frame + 1
+        );
+        match texture_creator.load_texture(&path) {
             Ok(mut texture) => {
                 texture.set_blend_mode(BlendMode::Blend);
-                texture.set_color_mod(170, 170, 174);
-                Some(texture)
+                vinyl_frame_textures.push(texture);
             }
             Err(e) => {
                 log_error(
                     &ctx,
                     &format!(
-                        "Failed to load vinyl lighting overlay; using procedural fallback: {e}"
+                        "Failed to load baked vinyl sequence at {path}; using layered fallback: {e}"
                     ),
                 );
-                let diameter = record_scene.width().max(1);
-                let radius = diameter as i32 / 2;
-                let mut texture = texture_creator
-                    .create_texture_target(PixelFormatEnum::RGBA8888, diameter, diameter)
-                    .map_err(|e| e.to_string())?;
-                texture.set_blend_mode(BlendMode::Blend);
-                texture.set_color_mod(150, 150, 154);
-                canvas
-                    .with_texture_canvas(&mut texture, |lighting_canvas| {
-                        lighting_canvas.set_draw_color(Color::RGBA(0, 0, 0, 0));
-                        lighting_canvas.clear();
-                        let label_radius = radius / 3;
-                        let inner_radius = label_radius + (radius / 28).max(2);
-                        let outer_radius = radius - 5;
-                        let _ = draw_vinyl_reflection(
-                            lighting_canvas,
-                            radius,
-                            radius,
-                            inner_radius,
-                            outer_radius,
-                            224.0,
-                            1.0,
-                        );
-                        let _ = draw_vinyl_reflection(
-                            lighting_canvas,
-                            radius,
-                            radius,
-                            inner_radius,
-                            outer_radius,
-                            44.0,
-                            0.72,
-                        );
-                    })
-                    .map_err(|e| e.to_string())?;
-                Some(texture)
+                vinyl_frame_textures.clear();
+                break;
             }
         }
-    };
+    }
     log_info(&ctx, "Display loop started.");
 
     while running.load(Ordering::SeqCst) {
@@ -3059,7 +3041,9 @@ pub fn run_display_loop(
 
                                 settings_status = if matches!(
                                     selected_row,
-                                    SettingsRow::Orientation | SettingsRow::Rotation
+                                    SettingsRow::VinylAnimation
+                                        | SettingsRow::Orientation
+                                        | SettingsRow::Rotation
                                 ) {
                                     "Save + restart".to_string()
                                 } else {
@@ -3442,305 +3426,292 @@ pub fn run_display_loop(
         canvas
             .with_texture_canvas(&mut composed_frame_texture, |mut canvas| {
                 frame_draw_result = (|| -> Result<(), String> {
-        let canvas_w = scene_w;
-        let canvas_h = scene_h;
-        let scale_x = (canvas_w as f32) / (scene_w as f32);
-        let scale_y = (canvas_h as f32) / (scene_h as f32);
-        let scene_scale = f32::min(scale_x, scale_y);
+                    let canvas_w = scene_w;
+                    let canvas_h = scene_h;
+                    let scale_x = (canvas_w as f32) / (scene_w as f32);
+                    let scale_y = (canvas_h as f32) / (scene_h as f32);
+                    let scene_scale = f32::min(scale_x, scale_y);
 
-        let render_w = ((scene_w as f32) * scene_scale) as u32;
-        let render_h = ((scene_h as f32) * scene_scale) as u32;
+                    let render_w = ((scene_w as f32) * scene_scale) as u32;
+                    let render_h = ((scene_h as f32) * scene_scale) as u32;
 
-        let offset_x = ((canvas_w - render_w) / 2) as i32;
-        let offset_y = ((canvas_h - render_h) / 2) as i32;
+                    let offset_x = ((canvas_w - render_w) / 2) as i32;
+                    let offset_y = ((canvas_h - render_h) / 2) as i32;
 
-        let sx = |x: i32| offset_x + (((x as f32) * scene_scale) as i32);
-        let sy = |y: i32| offset_y + (((y as f32) * scene_scale) as i32);
-        let sw = |w: u32| ((w as f32) * scene_scale) as u32;
-        let sh = |h: u32| ((h as f32) * scene_scale) as u32;
+                    let sx = |x: i32| offset_x + (((x as f32) * scene_scale) as i32);
+                    let sy = |y: i32| offset_y + (((y as f32) * scene_scale) as i32);
+                    let sw = |w: u32| ((w as f32) * scene_scale) as u32;
+                    let sh = |h: u32| ((h as f32) * scene_scale) as u32;
 
-        canvas.set_draw_color(canvas_background_color(&ctx));
-        canvas.clear();
+                    canvas.set_draw_color(canvas_background_color(&ctx));
+                    canvas.clear();
 
-        let static_target = Rect::new(offset_x, offset_y, render_w, render_h);
-        canvas.copy(&static_scene_texture, None, static_target)?;
+                    let static_target = Rect::new(offset_x, offset_y, render_w, render_h);
+                    canvas.copy(&static_scene_texture, None, static_target)?;
 
-        const ARTWORK_FADE_SECONDS: f32 = 1.5;
-        let artwork_elapsed = artwork_started_at.elapsed().as_secs_f32();
-        if artwork_elapsed >= ARTWORK_FADE_SECONDS {
-            previous_artwork_texture = None;
-            previous_circular_artwork_texture = None;
-        }
+                    const ARTWORK_FADE_SECONDS: f32 = 1.5;
+                    let artwork_elapsed = artwork_started_at.elapsed().as_secs_f32();
+                    if artwork_elapsed >= ARTWORK_FADE_SECONDS {
+                        previous_artwork_texture = None;
+                        previous_circular_artwork_texture = None;
+                    }
 
-        if runtime_artwork_mode.eq_ignore_ascii_case("turntable") {
-            if let (Some(artwork), Some(cache)) =
-                (artwork_texture.as_mut(), static_scene_cache.as_ref())
-            {
-                if let Some(cover_scene) = cache.artwork_rect {
-                    let elapsed = artwork_elapsed;
-                    let cover = Rect::new(
-                        sx(cover_scene.x()),
-                        sy(cover_scene.y()),
-                        sw(cover_scene.width()),
-                        sh(cover_scene.height()),
-                    );
-
-                    if elapsed < ARTWORK_FADE_SECONDS {
-                        let fade = (elapsed / ARTWORK_FADE_SECONDS).clamp(0.0, 1.0);
-                        let record = Rect::new(
-                            sx(record_scene.x()),
-                            sy(record_scene.y()),
-                            sw(record_scene.width()),
-                            sh(record_scene.height()),
-                        );
-                        if let Some(previous_label) =
-                            previous_circular_artwork_texture.as_mut()
+                    if runtime_artwork_mode.eq_ignore_ascii_case("turntable") {
+                        if let (Some(artwork), Some(cache)) =
+                            (artwork_texture.as_mut(), static_scene_cache.as_ref())
                         {
-                            let label_diameter = record.width() / 3;
-                            let label = Rect::new(
-                                record.x() + (record.width() - label_diameter) as i32 / 2,
-                                record.y() + (record.height() - label_diameter) as i32 / 2,
-                                label_diameter,
-                                label_diameter,
-                            );
-                            let rotation = vinyl_rotation(
-                                elapsed as f64,
-                                &runtime_vinyl_animation_quality,
-                            );
-                            if let Some(vinyl) = vinyl_texture.as_mut() {
-                                vinyl.set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
-                                canvas.copy_ex(
-                                    vinyl,
-                                    None,
-                                    record,
-                                    rotation,
-                                    None,
-                                    false,
-                                    false,
-                                )?;
-                                vinyl.set_alpha_mod(255);
-                            }
-                            if let Some(highlight) = vinyl_highlight_texture.as_mut() {
-                                highlight.set_alpha_mod(
-                                    ((1.0 - fade) * VINYL_HIGHLIGHT_ALPHA as f32).round() as u8,
+                            if let Some(cover_scene) = cache.artwork_rect {
+                                let elapsed = artwork_elapsed;
+                                let cover = Rect::new(
+                                    sx(cover_scene.x()),
+                                    sy(cover_scene.y()),
+                                    sw(cover_scene.width()),
+                                    sh(cover_scene.height()),
                                 );
-                                canvas.copy(highlight, None, record)?;
-                                highlight.set_alpha_mod(255);
+
+                                if elapsed < ARTWORK_FADE_SECONDS {
+                                    let fade = (elapsed / ARTWORK_FADE_SECONDS).clamp(0.0, 1.0);
+                                    let record = Rect::new(
+                                        sx(record_scene.x()),
+                                        sy(record_scene.y()),
+                                        sw(record_scene.width()),
+                                        sh(record_scene.height()),
+                                    );
+                                    if let Some(previous_label) =
+                                        previous_circular_artwork_texture.as_mut()
+                                    {
+                                        let label_diameter = record.width() / 3;
+                                        let label = Rect::new(
+                                            record.x()
+                                                + (record.width() - label_diameter) as i32 / 2,
+                                            record.y()
+                                                + (record.height() - label_diameter) as i32 / 2,
+                                            label_diameter,
+                                            label_diameter,
+                                        );
+                                        let rotation = vinyl_rotation(
+                                            elapsed as f64,
+                                            &loaded_vinyl_animation_quality,
+                                        );
+                                        draw_vinyl_surface(
+                                            &mut canvas,
+                                            &mut vinyl_frame_textures,
+                                            vinyl_texture.as_mut(),
+                                            record,
+                                            elapsed as f64,
+                                            rotation,
+                                            ((1.0 - fade) * 255.0).round() as u8,
+                                        )?;
+                                        previous_label
+                                            .set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
+                                        canvas.copy_ex(
+                                            previous_label,
+                                            None,
+                                            label,
+                                            rotation,
+                                            None,
+                                            false,
+                                            false,
+                                        )?;
+                                        previous_label.set_alpha_mod(255);
+                                    }
+                                    artwork.set_alpha_mod((fade * 255.0).round() as u8);
+                                    canvas.copy(artwork, None, cover)?;
+                                    artwork.set_alpha_mod(255);
+                                } else if elapsed < ARTWORK_FADE_SECONDS + 5.0 {
+                                    canvas.copy(artwork, None, cover)?;
+                                } else {
+                                    let record = Rect::new(
+                                        sx(record_scene.x()),
+                                        sy(record_scene.y()),
+                                        sw(record_scene.width()),
+                                        sh(record_scene.height()),
+                                    );
+
+                                    let label_diameter = record.width() / 3;
+                                    let label = Rect::new(
+                                        record.x() + (record.width() - label_diameter) as i32 / 2,
+                                        record.y() + (record.height() - label_diameter) as i32 / 2,
+                                        label_diameter,
+                                        label_diameter,
+                                    );
+
+                                    const CROP_SECONDS: f32 = 2.0;
+                                    const SHRINK_SECONDS: f32 = 2.5;
+                                    let morph_elapsed = elapsed - ARTWORK_FADE_SECONDS - 5.0;
+                                    if morph_elapsed < CROP_SECONDS {
+                                        let linear_crop =
+                                            (morph_elapsed / CROP_SECONDS).clamp(0.0, 1.0);
+                                        let crop =
+                                            linear_crop * linear_crop * (3.0 - 2.0 * linear_crop);
+                                        artwork.set_alpha_mod(((1.0 - crop) * 255.0).round() as u8);
+                                        canvas.copy(artwork, None, cover)?;
+                                        artwork.set_alpha_mod(255);
+
+                                        if let Some(circular) = circular_artwork_texture.as_mut() {
+                                            circular.set_alpha_mod((crop * 255.0).round() as u8);
+                                            canvas.copy(circular, None, record)?;
+                                            circular.set_alpha_mod(255);
+                                        }
+                                    } else {
+                                        let shrink_elapsed = morph_elapsed - CROP_SECONDS;
+                                        let linear_progress =
+                                            (shrink_elapsed / SHRINK_SECONDS).clamp(0.0, 1.0);
+                                        let progress = linear_progress
+                                            * linear_progress
+                                            * (3.0 - 2.0 * linear_progress);
+                                        let interpolate = |start: i32, end: i32| {
+                                            (start as f32 + (end - start) as f32 * progress).round()
+                                                as i32
+                                        };
+                                        let interpolate_size = |start: u32, end: u32| {
+                                            (start as f32 + (end as f32 - start as f32) * progress)
+                                                .round()
+                                                as u32
+                                        };
+                                        let shrinking_disc = Rect::new(
+                                            interpolate(record.x(), label.x()),
+                                            interpolate(record.y(), label.y()),
+                                            interpolate_size(record.width(), label.width()),
+                                            interpolate_size(record.height(), label.height()),
+                                        );
+
+                                        // 33 1/3 RPM equals 200 degrees per second.
+                                        let rotation = vinyl_rotation(
+                                            shrink_elapsed as f64,
+                                            &loaded_vinyl_animation_quality,
+                                        );
+                                        draw_vinyl_surface(
+                                            &mut canvas,
+                                            &mut vinyl_frame_textures,
+                                            vinyl_texture.as_mut(),
+                                            record,
+                                            shrink_elapsed as f64,
+                                            rotation,
+                                            255,
+                                        )?;
+                                        if let Some(circular) = circular_artwork_texture.as_ref() {
+                                            canvas.copy_ex(
+                                                circular,
+                                                None,
+                                                shrinking_disc,
+                                                rotation,
+                                                None,
+                                                false,
+                                                false,
+                                            )?;
+                                        }
+
+                                        let center_x = record.x() + record.width() as i32 / 2;
+                                        let center_y = record.y() + record.height() as i32 / 2;
+                                        let spindle_radius = (record.width() / 160).max(2) as i32;
+                                        draw_filled_circle(
+                                            &mut canvas,
+                                            center_x,
+                                            center_y,
+                                            spindle_radius,
+                                            Color::RGB(210, 210, 205),
+                                        )?;
+                                    }
+                                }
                             }
-                            previous_label
-                                .set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
-                            canvas.copy_ex(
-                                previous_label,
-                                None,
-                                label,
-                                rotation,
-                                None,
-                                false,
-                                false,
-                            )?;
-                            previous_label.set_alpha_mod(255);
                         }
-                        artwork.set_alpha_mod((fade * 255.0).round() as u8);
-                        canvas.copy(artwork, None, cover)?;
-                        artwork.set_alpha_mod(255);
-                    } else if elapsed < ARTWORK_FADE_SECONDS + 5.0 {
-                        canvas.copy(artwork, None, cover)?;
-                    } else {
-                        let record = Rect::new(
-                            sx(record_scene.x()),
-                            sy(record_scene.y()),
-                            sw(record_scene.width()),
-                            sh(record_scene.height()),
-                        );
-
-                        let label_diameter = record.width() / 3;
-                        let label = Rect::new(
-                            record.x() + (record.width() - label_diameter) as i32 / 2,
-                            record.y() + (record.height() - label_diameter) as i32 / 2,
-                            label_diameter,
-                            label_diameter,
-                        );
-
-                        const CROP_SECONDS: f32 = 2.0;
-                        const SHRINK_SECONDS: f32 = 2.5;
-                        let morph_elapsed = elapsed - ARTWORK_FADE_SECONDS - 5.0;
-                        if morph_elapsed < CROP_SECONDS {
-                            let linear_crop = (morph_elapsed / CROP_SECONDS).clamp(0.0, 1.0);
-                            let crop =
-                                linear_crop * linear_crop * (3.0 - 2.0 * linear_crop);
-                            artwork.set_alpha_mod(((1.0 - crop) * 255.0).round() as u8);
+                    } else if let (Some(artwork), Some(cache)) =
+                        (artwork_texture.as_mut(), static_scene_cache.as_ref())
+                    {
+                        if let Some(cover_scene) = cache.artwork_rect {
+                            let cover = Rect::new(
+                                sx(cover_scene.x()),
+                                sy(cover_scene.y()),
+                                sw(cover_scene.width()),
+                                sh(cover_scene.height()),
+                            );
+                            let fade = (artwork_elapsed / ARTWORK_FADE_SECONDS).clamp(0.0, 1.0);
+                            if let Some(previous) = previous_artwork_texture.as_mut() {
+                                let previous_scene =
+                                    compute_artwork_rect(previous.query(), layout.artwork_region);
+                                let previous_target = Rect::new(
+                                    sx(previous_scene.x()),
+                                    sy(previous_scene.y()),
+                                    sw(previous_scene.width()),
+                                    sh(previous_scene.height()),
+                                );
+                                previous.set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
+                                canvas.copy(previous, None, previous_target)?;
+                                previous.set_alpha_mod(255);
+                            }
+                            artwork.set_alpha_mod((fade * 255.0).round() as u8);
                             canvas.copy(artwork, None, cover)?;
                             artwork.set_alpha_mod(255);
-
-                            if let Some(circular) = circular_artwork_texture.as_mut() {
-                                circular.set_alpha_mod((crop * 255.0).round() as u8);
-                                canvas.copy(circular, None, record)?;
-                                circular.set_alpha_mod(255);
-                            }
-                        } else {
-                            let shrink_elapsed = morph_elapsed - CROP_SECONDS;
-                            let linear_progress =
-                                (shrink_elapsed / SHRINK_SECONDS).clamp(0.0, 1.0);
-                            let progress =
-                                linear_progress * linear_progress * (3.0 - 2.0 * linear_progress);
-                            let interpolate = |start: i32, end: i32| {
-                                (start as f32 + (end - start) as f32 * progress).round() as i32
-                            };
-                            let interpolate_size = |start: u32, end: u32| {
-                                (start as f32 + (end as f32 - start as f32) * progress).round()
-                                    as u32
-                            };
-                            let shrinking_disc = Rect::new(
-                                interpolate(record.x(), label.x()),
-                                interpolate(record.y(), label.y()),
-                                interpolate_size(record.width(), label.width()),
-                                interpolate_size(record.height(), label.height()),
-                            );
-
-                            // 33 1/3 RPM equals 200 degrees per second.
-                            let rotation = vinyl_rotation(
-                                shrink_elapsed as f64,
-                                &runtime_vinyl_animation_quality,
-                            );
-                            if let Some(vinyl) = vinyl_texture.as_ref() {
-                                canvas.copy_ex(
-                                    vinyl,
-                                    None,
-                                    record,
-                                    rotation,
-                                    None,
-                                    false,
-                                    false,
-                                )?;
-                            }
-                            if let Some(highlight) = vinyl_highlight_texture.as_mut() {
-                                highlight.set_alpha_mod(VINYL_HIGHLIGHT_ALPHA);
-                                canvas.copy(highlight, None, record)?;
-                                highlight.set_alpha_mod(255);
-                            }
-                            if let Some(circular) = circular_artwork_texture.as_ref() {
-                                canvas.copy_ex(
-                                    circular,
-                                    None,
-                                    shrinking_disc,
-                                    rotation,
-                                    None,
-                                    false,
-                                    false,
-                                )?;
-                            }
-
-                            let center_x = record.x() + record.width() as i32 / 2;
-                            let center_y = record.y() + record.height() as i32 / 2;
-                            let spindle_radius = (record.width() / 160).max(2) as i32;
-                            draw_filled_circle(
-                                &mut canvas,
-                                center_x,
-                                center_y,
-                                spindle_radius,
-                                Color::RGB(210, 210, 205),
-                            )?;
                         }
                     }
-                }
-            }
-        } else if let (Some(artwork), Some(cache)) =
-            (artwork_texture.as_mut(), static_scene_cache.as_ref())
-        {
-            if let Some(cover_scene) = cache.artwork_rect {
-                let cover = Rect::new(
-                    sx(cover_scene.x()),
-                    sy(cover_scene.y()),
-                    sw(cover_scene.width()),
-                    sh(cover_scene.height()),
-                );
-                let fade = (artwork_elapsed / ARTWORK_FADE_SECONDS).clamp(0.0, 1.0);
-                if let Some(previous) = previous_artwork_texture.as_mut() {
-                    let previous_scene =
-                        compute_artwork_rect(previous.query(), layout.artwork_region);
-                    let previous_target = Rect::new(
-                        sx(previous_scene.x()),
-                        sy(previous_scene.y()),
-                        sw(previous_scene.width()),
-                        sh(previous_scene.height()),
-                    );
-                    previous.set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
-                    canvas.copy(previous, None, previous_target)?;
-                    previous.set_alpha_mod(255);
-                }
-                artwork.set_alpha_mod((fade * 255.0).round() as u8);
-                canvas.copy(artwork, None, cover)?;
-                artwork.set_alpha_mod(255);
-            }
-        }
 
-        if let Some(cache) = static_scene_cache.as_ref() {
-            cache.draw_text(
-                &mut canvas,
-                offset_x,
-                offset_y,
-                scene_scale,
-                text_scroll_started_at.elapsed(),
-            )?;
-        }
+                    if let Some(cache) = static_scene_cache.as_ref() {
+                        cache.draw_text(
+                            &mut canvas,
+                            offset_x,
+                            offset_y,
+                            scene_scale,
+                            text_scroll_started_at.elapsed(),
+                        )?;
+                    }
 
-        if ctx.config.visualizer.enabled && state.visualizer.enabled {
-            let padding = ctx.config.visualizer.padding;
-            let vis_h = ctx
-                .config
-                .visualizer
-                .height
-                .min(layout.visualizer_region.height().saturating_sub(padding * 2));
-            let vis_x_scene = layout.visualizer_region.x() + padding as i32;
-            let vis_y_scene = layout.visualizer_region.y()
-                + layout.visualizer_region.height() as i32
-                - vis_h as i32
-                - padding as i32;
-            let vis_w_scene = layout
-                .visualizer_region
-                .width()
-                .saturating_sub(padding * 2);
+                    if ctx.config.visualizer.enabled && state.visualizer.enabled {
+                        let padding = ctx.config.visualizer.padding;
+                        let vis_h = ctx.config.visualizer.height.min(
+                            layout
+                                .visualizer_region
+                                .height()
+                                .saturating_sub(padding * 2),
+                        );
+                        let vis_x_scene = layout.visualizer_region.x() + padding as i32;
+                        let vis_y_scene = layout.visualizer_region.y()
+                            + layout.visualizer_region.height() as i32
+                            - vis_h as i32
+                            - padding as i32;
+                        let vis_w_scene =
+                            layout.visualizer_region.width().saturating_sub(padding * 2);
 
-            draw_visualizer(
-                &mut canvas,
-                &ctx,
-                &visualizer_colors,
-                state.visualizer.mode,
-                &state.visualizer.frame.left_points,
-                &state.visualizer.frame.right_points,
-                &smoothed_upper_bins,
-                &smoothed_lower_bins,
-                &upper_peak_bins,
-                &lower_peak_bins,
-                sx(vis_x_scene),
-                sy(vis_y_scene),
-                sw(vis_w_scene),
-                sh(vis_h),
-                ctx.config.visualizer.spectrum_bar_gap,
-                state.meter.level,
-                vu_face_texture.as_ref(),
-                &runtime_spectrum,
-            )?;
-        }
+                        draw_visualizer(
+                            &mut canvas,
+                            &ctx,
+                            &visualizer_colors,
+                            state.visualizer.mode,
+                            &state.visualizer.frame.left_points,
+                            &state.visualizer.frame.right_points,
+                            &smoothed_upper_bins,
+                            &smoothed_lower_bins,
+                            &upper_peak_bins,
+                            &lower_peak_bins,
+                            sx(vis_x_scene),
+                            sy(vis_y_scene),
+                            sw(vis_w_scene),
+                            sh(vis_h),
+                            ctx.config.visualizer.spectrum_bar_gap,
+                            state.meter.level,
+                            vu_face_texture.as_ref(),
+                            &runtime_spectrum,
+                        )?;
+                    }
 
-        if settings_open {
-            draw_settings_overlay(
-                &mut canvas,
-                &texture_creator,
-                &settings_font,
-                &runtime_artwork_mode,
-                &runtime_vinyl_animation_quality,
-                &runtime_visualizer_mode,
-                &runtime_spectrum,
-                runtime_visualizer_gain,
-                &runtime_display_orientation,
-                &runtime_display_rotation,
-                settings_selected,
-                &settings_status,
-            )?;
-        }
+                    if settings_open {
+                        draw_settings_overlay(
+                            &mut canvas,
+                            &texture_creator,
+                            &settings_font,
+                            &runtime_artwork_mode,
+                            &runtime_vinyl_animation_quality,
+                            &runtime_visualizer_mode,
+                            &runtime_spectrum,
+                            runtime_visualizer_gain,
+                            &runtime_display_orientation,
+                            &runtime_display_rotation,
+                            settings_selected,
+                            &settings_status,
+                        )?;
+                    }
 
-        Ok(())
+                    Ok(())
                 })();
             })
             .map_err(|e| e.to_string())?;

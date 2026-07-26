@@ -8,7 +8,7 @@ All notable changes to `songart` will be documented in this file.
 
 ### Added
 - [#41](https://github.com/sansoo1972/songart/issues/41) Raspberry Pi 3, Pi 4, and Pi 5 vinyl-rotation profiles at 10, 20, and 60 FPS, selectable from the F1 settings overlay.
-- Photographic vinyl material with a fixed screen-space reflection layer modeled after the supplied reference video.
+- Complete 108-frame photographic vinyl revolution with the rotating groove surface and fixed screen-space illumination baked into every frame; Pi 3 and Pi 4 load evenly sampled subsets to limit texture memory.
 
 ---
 
