@@ -86,7 +86,7 @@ frame_delay_ms = 16
 # "turntable" places a circular crop of the artwork on an LP center label.
 mode = "turntable"
 # Reflection animation profile: "pi3" = 10 FPS, "pi4" = 20 FPS,
-# "pi5" = full 30 FPS.
+# "pi5" = full 60 FPS.
 vinyl_animation_quality = "pi4"
 
 

@@ -2137,62 +2137,15 @@ fn cycle_option(current: &str, options: &[&str], direction: i32) -> String {
 fn vinyl_animation_fps(quality: &str) -> f64 {
     match quality.trim().to_ascii_lowercase().as_str() {
         "pi3" => 10.0,
-        "pi5" => 30.0,
+        "pi5" => 60.0,
         _ => 20.0,
     }
 }
 
-fn vinyl_shimmer_sample(
-    elapsed_seconds: f64,
-    quality: &str,
-    frame_count: usize,
-) -> (usize, usize, f32) {
-    if frame_count == 0 {
-        return (0, 0, 0.0);
-    }
-
+fn vinyl_rotation(elapsed_seconds: f64, quality: &str) -> f64 {
     let fps = vinyl_animation_fps(quality);
     let sampled_time = (elapsed_seconds.max(0.0) * fps).floor() / fps;
-    let revolution = (sampled_time * 200.0 / 360.0).fract();
-    let frame_position = revolution * frame_count as f64;
-    let current = frame_position.floor() as usize % frame_count;
-    let next = (current + 1) % frame_count;
-    let blend = if quality.eq_ignore_ascii_case("pi3") {
-        0.0
-    } else {
-        frame_position.fract() as f32
-    };
-    (current, next, blend)
-}
-
-fn draw_vinyl_shimmer(
-    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-    textures: &mut [Texture<'_>],
-    target: Rect,
-    elapsed_seconds: f64,
-    quality: &str,
-    alpha: u8,
-) -> Result<(), String> {
-    let (current, next, blend) = vinyl_shimmer_sample(elapsed_seconds, quality, textures.len());
-    // Each animation keyframe is a complete lit vinyl surface. Draw the
-    // current frame at full requested opacity, then crossfade the next frame
-    // over it. This avoids exposing the fallback base midway through a blend.
-    let current_alpha = alpha;
-    let next_alpha = (alpha as f32 * blend).round() as u8;
-
-    if let Some(texture) = textures.get_mut(current) {
-        texture.set_alpha_mod(current_alpha);
-        canvas.copy(texture, None, target)?;
-        texture.set_alpha_mod(255);
-    }
-    if next_alpha > 0 {
-        if let Some(texture) = textures.get_mut(next) {
-            texture.set_alpha_mod(next_alpha);
-            canvas.copy(texture, None, target)?;
-            texture.set_alpha_mod(255);
-        }
-    }
-    Ok(())
+    (sampled_time * 200.0) % 360.0
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2241,7 +2194,7 @@ impl DisplayRotation {
 mod tests {
     use super::{
         metadata_font_theme_name, scene_layout, segmented_row_rect, segmented_row_step,
-        selected_font_theme_name, vinyl_animation_fps, vinyl_shimmer_sample, DisplayRotation,
+        selected_font_theme_name, vinyl_animation_fps, vinyl_rotation, DisplayRotation,
     };
     use crate::config::DisplayPreset;
 
@@ -2283,25 +2236,20 @@ mod tests {
     fn vinyl_animation_profiles_target_raspberry_pi_generations() {
         assert_eq!(vinyl_animation_fps("pi3"), 10.0);
         assert_eq!(vinyl_animation_fps("pi4"), 20.0);
-        assert_eq!(vinyl_animation_fps("pi5"), 30.0);
+        assert_eq!(vinyl_animation_fps("pi5"), 60.0);
         assert_eq!(vinyl_animation_fps("unknown"), 20.0);
     }
 
     #[test]
-    fn pi3_shimmer_uses_unblended_keyframes() {
-        let (current, next, blend) = vinyl_shimmer_sample(0.45, "pi3", 16);
-        assert_eq!(next, (current + 1) % 16);
-        assert_eq!(blend, 0.0);
+    fn pi3_rotation_advances_at_ten_fps() {
+        assert_eq!(vinyl_rotation(0.0, "pi3"), vinyl_rotation(0.09, "pi3"));
+        assert_ne!(vinyl_rotation(0.0, "pi3"), vinyl_rotation(0.11, "pi3"));
     }
 
     #[test]
-    fn pi5_shimmer_advances_at_thirty_fps() {
-        let first = vinyl_shimmer_sample(0.0, "pi5", 16);
-        let same_tick = vinyl_shimmer_sample(0.02, "pi5", 16);
-        let next_tick = vinyl_shimmer_sample(0.04, "pi5", 16);
-
-        assert_eq!(first, same_tick);
-        assert_ne!(first, next_tick);
+    fn pi5_rotation_advances_at_sixty_fps() {
+        assert_eq!(vinyl_rotation(0.0, "pi5"), vinyl_rotation(0.01, "pi5"));
+        assert_ne!(vinyl_rotation(0.0, "pi5"), vinyl_rotation(0.02, "pi5"));
     }
 
     #[test]
@@ -2541,7 +2489,7 @@ fn draw_settings_overlay(
             SettingsRow::VinylAnimation => {
                 let description = match vinyl_animation_quality {
                     quality if quality.eq_ignore_ascii_case("pi3") => "Pi 3 / 10 fps",
-                    quality if quality.eq_ignore_ascii_case("pi5") => "Pi 5 / 30 fps",
+                    quality if quality.eq_ignore_ascii_case("pi5") => "Pi 5 / 60 fps",
                     _ => "Pi 4 / 20 fps",
                 };
                 format!("Vinyl motion  < {} >", description)
@@ -2908,17 +2856,12 @@ pub fn run_display_loop(
             }
         }
     };
-    const VINYL_HIGHLIGHT_ALPHA: u8 = 56;
-    const VINYL_SHIMMER_ALPHA: u8 = 255;
-    const VINYL_SHIMMER_FRAME_COUNT: usize = 16;
+    const VINYL_HIGHLIGHT_ALPHA: u8 = 170;
     let mut vinyl_highlight_texture = {
-        match texture_creator.load_texture("assets/turntable/vinyl-highlights.png") {
+        match texture_creator.load_texture("assets/turntable/vinyl-highlights-v2.png") {
             Ok(mut texture) => {
                 texture.set_blend_mode(BlendMode::Blend);
-                // The source mask is white so it can retain fine feathering
-                // through chroma-key extraction. Tone it down to the soft gray
-                // sheen of black vinyl instead of drawing white painted arcs.
-                texture.set_color_mod(150, 150, 154);
+                texture.set_color_mod(170, 170, 174);
                 Some(texture)
             }
             Err(e) => {
@@ -2966,27 +2909,6 @@ pub fn run_display_loop(
             }
         }
     };
-    let mut vinyl_shimmer_textures = Vec::with_capacity(VINYL_SHIMMER_FRAME_COUNT);
-    for frame in 1..=VINYL_SHIMMER_FRAME_COUNT {
-        let path = format!("assets/turntable/vinyl-frames/frame-{frame:02}.png");
-        match texture_creator.load_texture(&path) {
-            Ok(mut texture) => {
-                texture.set_blend_mode(BlendMode::Blend);
-                vinyl_shimmer_textures.push(texture);
-            }
-            Err(e) => {
-                log_error(
-                    &ctx,
-                    &format!(
-                        "Failed to load photographic vinyl sequence at {path}; using static lighting: {e}"
-                    ),
-                );
-                vinyl_shimmer_textures.clear();
-                break;
-            }
-        }
-    }
-
     log_info(&ctx, "Display loop started.");
 
     while running.load(Ordering::SeqCst) {
@@ -3581,7 +3503,10 @@ pub fn run_display_loop(
                                 label_diameter,
                                 label_diameter,
                             );
-                            let rotation = (elapsed as f64 * 200.0) % 360.0;
+                            let rotation = vinyl_rotation(
+                                elapsed as f64,
+                                &runtime_vinyl_animation_quality,
+                            );
                             if let Some(vinyl) = vinyl_texture.as_mut() {
                                 vinyl.set_alpha_mod(((1.0 - fade) * 255.0).round() as u8);
                                 canvas.copy_ex(
@@ -3595,16 +3520,7 @@ pub fn run_display_loop(
                                 )?;
                                 vinyl.set_alpha_mod(255);
                             }
-                            if !vinyl_shimmer_textures.is_empty() {
-                                draw_vinyl_shimmer(
-                                    &mut canvas,
-                                    &mut vinyl_shimmer_textures,
-                                    record,
-                                    elapsed as f64,
-                                    &runtime_vinyl_animation_quality,
-                                    ((1.0 - fade) * VINYL_SHIMMER_ALPHA as f32).round() as u8,
-                                )?;
-                            } else if let Some(highlight) = vinyl_highlight_texture.as_mut() {
+                            if let Some(highlight) = vinyl_highlight_texture.as_mut() {
                                 highlight.set_alpha_mod(
                                     ((1.0 - fade) * VINYL_HIGHLIGHT_ALPHA as f32).round() as u8,
                                 );
@@ -3682,7 +3598,10 @@ pub fn run_display_loop(
                             );
 
                             // 33 1/3 RPM equals 200 degrees per second.
-                            let rotation = (shrink_elapsed as f64 * 200.0) % 360.0;
+                            let rotation = vinyl_rotation(
+                                shrink_elapsed as f64,
+                                &runtime_vinyl_animation_quality,
+                            );
                             if let Some(vinyl) = vinyl_texture.as_ref() {
                                 canvas.copy_ex(
                                     vinyl,
@@ -3694,16 +3613,7 @@ pub fn run_display_loop(
                                     false,
                                 )?;
                             }
-                            if !vinyl_shimmer_textures.is_empty() {
-                                draw_vinyl_shimmer(
-                                    &mut canvas,
-                                    &mut vinyl_shimmer_textures,
-                                    record,
-                                    shrink_elapsed as f64,
-                                    &runtime_vinyl_animation_quality,
-                                    VINYL_SHIMMER_ALPHA,
-                                )?;
-                            } else if let Some(highlight) = vinyl_highlight_texture.as_mut() {
+                            if let Some(highlight) = vinyl_highlight_texture.as_mut() {
                                 highlight.set_alpha_mod(VINYL_HIGHLIGHT_ALPHA);
                                 canvas.copy(highlight, None, record)?;
                                 highlight.set_alpha_mod(255);

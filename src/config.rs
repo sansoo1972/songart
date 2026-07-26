@@ -34,7 +34,7 @@ pub struct ArtworkConfig {
     pub mode: String,
 
     /// Reflection animation profile: `pi3` (10 FPS), `pi4` (20 FPS), or
-    /// `pi5` (30 FPS).
+    /// `pi5` (60 FPS).
     #[serde(default = "default_vinyl_animation_quality")]
     pub vinyl_animation_quality: String,
 }
