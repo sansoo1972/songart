@@ -1,4 +1,4 @@
-use crate::audio::{SharedAudioBuffer, build_oscilloscope_points, compute_rms};
+use crate::audio::{build_oscilloscope_points, compute_rms, SharedAudioBuffer};
 use crate::config::DisplayPreset;
 use crate::fft::compute_spectrum_bins;
 use crate::logging::{log_debug, log_error, log_info};
@@ -17,8 +17,8 @@ use sdl2::video::WindowContext;
 use std::fs;
 use std::path::Path;
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -178,6 +178,7 @@ impl RuntimeSpectrumSettings {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsRow {
     Artwork,
+    VinylAnimation,
     Visualizer,
     SpectrumStyle,
     SegmentRows,
@@ -190,8 +191,16 @@ enum SettingsRow {
     Rotation,
 }
 
-fn settings_rows(visualizer_mode: &str, spectrum: &RuntimeSpectrumSettings) -> Vec<SettingsRow> {
-    let mut rows = vec![SettingsRow::Artwork, SettingsRow::Visualizer];
+fn settings_rows(
+    artwork_mode: &str,
+    visualizer_mode: &str,
+    spectrum: &RuntimeSpectrumSettings,
+) -> Vec<SettingsRow> {
+    let mut rows = vec![SettingsRow::Artwork];
+    if artwork_mode.eq_ignore_ascii_case("turntable") {
+        rows.push(SettingsRow::VinylAnimation);
+    }
+    rows.push(SettingsRow::Visualizer);
 
     if visualizer_mode.eq_ignore_ascii_case("spectrum") {
         rows.push(SettingsRow::SpectrumStyle);
@@ -265,7 +274,11 @@ fn rgb_saturation(r: u8, g: u8, b: u8) -> f32 {
     let max = r.max(g).max(b) as f32;
     let min = r.min(g).min(b) as f32;
 
-    if max <= 0.0 { 0.0 } else { (max - min) / max }
+    if max <= 0.0 {
+        0.0
+    } else {
+        (max - min) / max
+    }
 }
 
 fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
@@ -288,7 +301,11 @@ fn rgb_hue(r: u8, g: u8, b: u8) -> f32 {
         60.0 * (((rf - gf) / delta) + 4.0)
     };
 
-    if hue < 0.0 { hue + 360.0 } else { hue }
+    if hue < 0.0 {
+        hue + 360.0
+    } else {
+        hue
+    }
 }
 
 fn hue_distance(a: f32, b: f32) -> f32 {
@@ -2117,6 +2134,64 @@ fn cycle_option(current: &str, options: &[&str], direction: i32) -> String {
     options[(index + direction).rem_euclid(len) as usize].to_string()
 }
 
+fn vinyl_animation_fps(quality: &str) -> f64 {
+    match quality.trim().to_ascii_lowercase().as_str() {
+        "pi3" => 10.0,
+        "pi5" => 30.0,
+        _ => 20.0,
+    }
+}
+
+fn vinyl_shimmer_sample(
+    elapsed_seconds: f64,
+    quality: &str,
+    frame_count: usize,
+) -> (usize, usize, f32) {
+    if frame_count == 0 {
+        return (0, 0, 0.0);
+    }
+
+    let fps = vinyl_animation_fps(quality);
+    let sampled_time = (elapsed_seconds.max(0.0) * fps).floor() / fps;
+    let revolution = (sampled_time * 200.0 / 360.0).fract();
+    let frame_position = revolution * frame_count as f64;
+    let current = frame_position.floor() as usize % frame_count;
+    let next = (current + 1) % frame_count;
+    let blend = if quality.eq_ignore_ascii_case("pi3") {
+        0.0
+    } else {
+        frame_position.fract() as f32
+    };
+    (current, next, blend)
+}
+
+fn draw_vinyl_shimmer(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    textures: &mut [Texture<'_>],
+    target: Rect,
+    elapsed_seconds: f64,
+    quality: &str,
+    alpha: u8,
+) -> Result<(), String> {
+    let (current, next, blend) = vinyl_shimmer_sample(elapsed_seconds, quality, textures.len());
+    let current_alpha = (alpha as f32 * (1.0 - blend)).round() as u8;
+    let next_alpha = (alpha as f32 * blend).round() as u8;
+
+    if let Some(texture) = textures.get_mut(current) {
+        texture.set_alpha_mod(current_alpha);
+        canvas.copy(texture, None, target)?;
+        texture.set_alpha_mod(255);
+    }
+    if next_alpha > 0 {
+        if let Some(texture) = textures.get_mut(next) {
+            texture.set_alpha_mod(next_alpha);
+            canvas.copy(texture, None, target)?;
+            texture.set_alpha_mod(255);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DisplayRotation {
     Normal,
@@ -2162,8 +2237,8 @@ impl DisplayRotation {
 #[cfg(test)]
 mod tests {
     use super::{
-        DisplayRotation, metadata_font_theme_name, scene_layout, segmented_row_rect,
-        segmented_row_step, selected_font_theme_name,
+        metadata_font_theme_name, scene_layout, segmented_row_rect, segmented_row_step,
+        selected_font_theme_name, vinyl_animation_fps, vinyl_shimmer_sample, DisplayRotation,
     };
     use crate::config::DisplayPreset;
 
@@ -2199,6 +2274,31 @@ mod tests {
     #[test]
     fn display_rotation_rejects_unknown_values() {
         assert_eq!(DisplayRotation::parse("sideways"), None);
+    }
+
+    #[test]
+    fn vinyl_animation_profiles_target_raspberry_pi_generations() {
+        assert_eq!(vinyl_animation_fps("pi3"), 10.0);
+        assert_eq!(vinyl_animation_fps("pi4"), 20.0);
+        assert_eq!(vinyl_animation_fps("pi5"), 30.0);
+        assert_eq!(vinyl_animation_fps("unknown"), 20.0);
+    }
+
+    #[test]
+    fn pi3_shimmer_uses_unblended_keyframes() {
+        let (current, next, blend) = vinyl_shimmer_sample(0.45, "pi3", 16);
+        assert_eq!(next, (current + 1) % 16);
+        assert_eq!(blend, 0.0);
+    }
+
+    #[test]
+    fn pi5_shimmer_advances_at_thirty_fps() {
+        let first = vinyl_shimmer_sample(0.0, "pi5", 16);
+        let same_tick = vinyl_shimmer_sample(0.02, "pi5", 16);
+        let next_tick = vinyl_shimmer_sample(0.04, "pi5", 16);
+
+        assert_eq!(first, same_tick);
+        assert_ne!(first, next_tick);
     }
 
     #[test]
@@ -2328,6 +2428,7 @@ mod tests {
 fn save_display_modes(
     path: &str,
     artwork_mode: &str,
+    vinyl_animation_quality: &str,
     visualizer_mode: &str,
     spectrum: &RuntimeSpectrumSettings,
     visualizer_gain: f32,
@@ -2339,6 +2440,7 @@ fn save_display_modes(
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| format!("Failed to parse {path}: {e}"))?;
     document["artwork"]["mode"] = toml_edit::value(artwork_mode);
+    document["artwork"]["vinyl_animation_quality"] = toml_edit::value(vinyl_animation_quality);
     document["visualizer"]["mode"] = toml_edit::value(visualizer_mode);
     document["visualizer"]["spectrum"]["render_style"] = toml_edit::value(&spectrum.render_style);
     document["visualizer"]["spectrum"]["segment_rows"] =
@@ -2388,6 +2490,7 @@ fn draw_settings_overlay(
     texture_creator: &TextureCreator<WindowContext>,
     font: &sdl2::ttf::Font,
     artwork_mode: &str,
+    vinyl_animation_quality: &str,
     visualizer_mode: &str,
     spectrum: &RuntimeSpectrumSettings,
     visualizer_gain: f32,
@@ -2397,11 +2500,11 @@ fn draw_settings_overlay(
     status: &str,
 ) -> Result<(), String> {
     let (canvas_w, canvas_h) = canvas.output_size().map_err(|e| e.to_string())?;
-    let rows = settings_rows(visualizer_mode, spectrum);
+    let rows = settings_rows(artwork_mode, visualizer_mode, spectrum);
     let panel_w = canvas_w.saturating_sub(80).min(760);
     let row_spacing = 36i32;
-    let panel_h = (190 + rows.len() as u32 * row_spacing as u32)
-        .min(canvas_h.saturating_sub(80).max(1));
+    let panel_h =
+        (190 + rows.len() as u32 * row_spacing as u32).min(canvas_h.saturating_sub(80).max(1));
     let panel_x = ((canvas_w - panel_w) / 2) as i32;
     let panel_y = ((canvas_h - panel_h) / 2) as i32;
 
@@ -2432,6 +2535,14 @@ fn draw_settings_overlay(
         .iter()
         .map(|row| match row {
             SettingsRow::Artwork => format!("Artwork       < {} >", artwork_mode),
+            SettingsRow::VinylAnimation => {
+                let description = match vinyl_animation_quality {
+                    quality if quality.eq_ignore_ascii_case("pi3") => "Pi 3 / 10 fps",
+                    quality if quality.eq_ignore_ascii_case("pi5") => "Pi 5 / 30 fps",
+                    _ => "Pi 4 / 20 fps",
+                };
+                format!("Vinyl motion  < {} >", description)
+            }
             SettingsRow::Visualizer => format!("Visualizer    < {} >", visualizer_mode),
             SettingsRow::SpectrumStyle => format!("Spectrum      < {} >", spectrum.render_style),
             SettingsRow::SegmentRows => format!("Segments      < {} >", spectrum.segment_rows),
@@ -2689,6 +2800,7 @@ pub fn run_display_loop(
 
     let mut event_pump = sdl.event_pump()?;
     let mut runtime_artwork_mode = ctx.config.artwork.mode.clone();
+    let mut runtime_vinyl_animation_quality = ctx.config.artwork.vinyl_animation_quality.clone();
     let mut runtime_visualizer_mode = ctx.config.visualizer.mode.clone();
     let mut runtime_spectrum = RuntimeSpectrumSettings::from_config(&ctx);
     let mut runtime_visualizer_gain = ctx.config.visualizer.gain;
@@ -2706,6 +2818,7 @@ pub fn run_display_loop(
     let mut settings_open = false;
     let mut settings_selected = 0usize;
     let mut settings_original_artwork = runtime_artwork_mode.clone();
+    let mut settings_original_vinyl_animation_quality = runtime_vinyl_animation_quality.clone();
     let mut settings_original_visualizer = runtime_visualizer_mode.clone();
     let mut settings_original_spectrum = runtime_spectrum.clone();
     let mut settings_original_gain = runtime_visualizer_gain;
@@ -2886,6 +2999,8 @@ pub fn run_display_loop(
                         match key {
                             Keycode::Escape => {
                                 runtime_artwork_mode = settings_original_artwork.clone();
+                                runtime_vinyl_animation_quality =
+                                    settings_original_vinyl_animation_quality.clone();
                                 runtime_visualizer_mode = settings_original_visualizer.clone();
                                 runtime_spectrum = settings_original_spectrum.clone();
                                 runtime_visualizer_gain = settings_original_gain;
@@ -2899,17 +3014,23 @@ pub fn run_display_loop(
                                 settings_status.clear();
                             }
                             Keycode::Down => {
-                                let row_count =
-                                    settings_rows(&runtime_visualizer_mode, &runtime_spectrum)
-                                        .len();
+                                let row_count = settings_rows(
+                                    &runtime_artwork_mode,
+                                    &runtime_visualizer_mode,
+                                    &runtime_spectrum,
+                                )
+                                .len();
                                 settings_selected =
                                     (settings_selected + 1).min(row_count.saturating_sub(1));
                                 settings_status.clear();
                             }
                             Keycode::Left | Keycode::Right => {
                                 let direction = if key == Keycode::Right { 1 } else { -1 };
-                                let rows =
-                                    settings_rows(&runtime_visualizer_mode, &runtime_spectrum);
+                                let rows = settings_rows(
+                                    &runtime_artwork_mode,
+                                    &runtime_visualizer_mode,
+                                    &runtime_spectrum,
+                                );
                                 let selected_row = rows
                                     .get(settings_selected)
                                     .copied()
@@ -2923,6 +3044,13 @@ pub fn run_display_loop(
                                             direction,
                                         );
                                         artwork_started_at = Instant::now();
+                                    }
+                                    SettingsRow::VinylAnimation => {
+                                        runtime_vinyl_animation_quality = cycle_option(
+                                            &runtime_vinyl_animation_quality,
+                                            &["pi3", "pi4", "pi5"],
+                                            direction,
+                                        );
                                     }
                                     SettingsRow::Visualizer => {
                                         runtime_visualizer_mode = cycle_option(
@@ -2995,9 +3123,12 @@ pub fn run_display_loop(
                                     }
                                 }
 
-                                let row_count =
-                                    settings_rows(&runtime_visualizer_mode, &runtime_spectrum)
-                                        .len();
+                                let row_count = settings_rows(
+                                    &runtime_artwork_mode,
+                                    &runtime_visualizer_mode,
+                                    &runtime_spectrum,
+                                )
+                                .len();
                                 settings_selected =
                                     settings_selected.min(row_count.saturating_sub(1));
 
@@ -3013,6 +3144,7 @@ pub fn run_display_loop(
                             Keycode::S => match save_display_modes(
                                 "config/songart.toml",
                                 &runtime_artwork_mode,
+                                &runtime_vinyl_animation_quality,
                                 &runtime_visualizer_mode,
                                 &runtime_spectrum,
                                 runtime_visualizer_gain,
@@ -3021,6 +3153,8 @@ pub fn run_display_loop(
                             ) {
                                 Ok(()) => {
                                     settings_original_artwork = runtime_artwork_mode.clone();
+                                    settings_original_vinyl_animation_quality =
+                                        runtime_vinyl_animation_quality.clone();
                                     settings_original_visualizer = runtime_visualizer_mode.clone();
                                     settings_original_spectrum = runtime_spectrum.clone();
                                     settings_original_gain = runtime_visualizer_gain;
@@ -3048,6 +3182,8 @@ pub fn run_display_loop(
                         match key {
                             Keycode::M | Keycode::F1 => {
                                 settings_original_artwork = runtime_artwork_mode.clone();
+                                settings_original_vinyl_animation_quality =
+                                    runtime_vinyl_animation_quality.clone();
                                 settings_original_visualizer = runtime_visualizer_mode.clone();
                                 settings_original_spectrum = runtime_spectrum.clone();
                                 settings_original_gain = runtime_visualizer_gain;
@@ -3457,16 +3593,14 @@ pub fn run_display_loop(
                                 vinyl.set_alpha_mod(255);
                             }
                             if !vinyl_shimmer_textures.is_empty() {
-                                let frame = ((rotation / 360.0
-                                    * vinyl_shimmer_textures.len() as f64)
-                                    .floor() as usize)
-                                    % vinyl_shimmer_textures.len();
-                                let shimmer = &mut vinyl_shimmer_textures[frame];
-                                shimmer.set_alpha_mod(
+                                draw_vinyl_shimmer(
+                                    &mut canvas,
+                                    &mut vinyl_shimmer_textures,
+                                    record,
+                                    elapsed as f64,
+                                    &runtime_vinyl_animation_quality,
                                     ((1.0 - fade) * VINYL_SHIMMER_ALPHA as f32).round() as u8,
-                                );
-                                canvas.copy(shimmer, None, record)?;
-                                shimmer.set_alpha_mod(255);
+                                )?;
                             } else if let Some(highlight) = vinyl_highlight_texture.as_mut() {
                                 highlight.set_alpha_mod(
                                     ((1.0 - fade) * VINYL_HIGHLIGHT_ALPHA as f32).round() as u8,
@@ -3558,14 +3692,14 @@ pub fn run_display_loop(
                                 )?;
                             }
                             if !vinyl_shimmer_textures.is_empty() {
-                                let frame = ((rotation / 360.0
-                                    * vinyl_shimmer_textures.len() as f64)
-                                    .floor() as usize)
-                                    % vinyl_shimmer_textures.len();
-                                let shimmer = &mut vinyl_shimmer_textures[frame];
-                                shimmer.set_alpha_mod(VINYL_SHIMMER_ALPHA);
-                                canvas.copy(shimmer, None, record)?;
-                                shimmer.set_alpha_mod(255);
+                                draw_vinyl_shimmer(
+                                    &mut canvas,
+                                    &mut vinyl_shimmer_textures,
+                                    record,
+                                    shrink_elapsed as f64,
+                                    &runtime_vinyl_animation_quality,
+                                    VINYL_SHIMMER_ALPHA,
+                                )?;
                             } else if let Some(highlight) = vinyl_highlight_texture.as_mut() {
                                 highlight.set_alpha_mod(VINYL_HIGHLIGHT_ALPHA);
                                 canvas.copy(highlight, None, record)?;
@@ -3682,6 +3816,7 @@ pub fn run_display_loop(
                 &texture_creator,
                 &settings_font,
                 &runtime_artwork_mode,
+                &runtime_vinyl_animation_quality,
                 &runtime_visualizer_mode,
                 &runtime_spectrum,
                 runtime_visualizer_gain,

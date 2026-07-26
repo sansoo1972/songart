@@ -32,12 +32,18 @@ pub struct ArtworkConfig {
     /// the artwork as the center label of a vinyl record.
     #[serde(default = "default_artwork_mode")]
     pub mode: String,
+
+    /// Reflection animation profile: `pi3` (10 FPS), `pi4` (20 FPS), or
+    /// `pi5` (30 FPS).
+    #[serde(default = "default_vinyl_animation_quality")]
+    pub vinyl_animation_quality: String,
 }
 
 impl Default for ArtworkConfig {
     fn default() -> Self {
         Self {
             mode: default_artwork_mode(),
+            vinyl_animation_quality: default_vinyl_animation_quality(),
         }
     }
 }
@@ -438,6 +444,10 @@ fn default_display_rotation() -> String {
 
 fn default_artwork_mode() -> String {
     "cover".to_string()
+}
+
+fn default_vinyl_animation_quality() -> String {
+    "pi4".to_string()
 }
 
 // Audio defaults.

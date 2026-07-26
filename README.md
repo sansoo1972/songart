@@ -51,6 +51,7 @@ analog meters and spinning turntable to appear together:
 ```toml
 [artwork]
 mode = "turntable"
+vinyl_animation_quality = "pi4"
 
 [visualizer]
 enabled = true
@@ -81,14 +82,16 @@ theme.
 Available modes:
 
 - Artwork: `cover`, `turntable`
+- Vinyl motion (when Artwork is `turntable`): Pi 3 / 10 fps,
+  Pi 4 / 20 fps, Pi 5 / 30 fps
 - Visualizer: `spectrum`, `oscilloscope`, `analog_vu`
 - Spectrum: `full`, `top_only`, `segmented`
 - Sensitivity: `0.25`–`8.0`
 
-The overlay only shows controls that apply to the active visualizer. Spectrum
-style is hidden for Oscilloscope and Analog VU, and the segmented rows, row
-height, row gap, column gap, and inactive LED toggle appear only when Spectrum
-is set to `segmented`.
+The overlay only shows controls that apply to the active mode. Vinyl motion is
+shown only for Turntable artwork. Spectrum style is hidden for Oscilloscope and
+Analog VU, and the segmented rows, row height, row gap, column gap, and inactive
+LED toggle appear only when Spectrum is set to `segmented`.
 
 Saving preserves TOML comments, writes through a temporary file, and keeps the
 previous configuration at `config/songart.toml.bak`.
@@ -186,6 +189,8 @@ config/songart.toml
 - `display` selects the active display preset and frame timing
 - `display.colors` controls the major display-region backgrounds
 - `artwork.mode` selects the standard cover or turntable-style presentation
+- `artwork.vinyl_animation_quality` selects the Pi 3 (10 fps), Pi 4 (20 fps),
+  or Pi 5 (30 fps) reflection profile
 - `display_presets` define scene geometry and spacing
 - `fonts` selects fixed or metadata-driven font behavior
 - `font_themes` define title/body font paths and font sizes
@@ -238,6 +243,7 @@ visualizer_background = "#000000"
 
 [artwork]
 mode = "cover" # cover, turntable
+vinyl_animation_quality = "pi4" # pi3 (10 fps), pi4 (20 fps), pi5 (30 fps)
 
 [display_presets.portrait]
 width = 1080
