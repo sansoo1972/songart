@@ -93,9 +93,11 @@ shown only for Turntable artwork. Spectrum style is hidden for Oscilloscope and
 Analog VU, and the segmented rows, row height, row gap, column gap, and inactive
 LED toggle appear only when Spectrum is set to `segmented`.
 
-Vinyl motion quality takes effect after restart because each profile loads a
-different-sized subset of the baked 108-frame revolution: 18 frames on Pi 3,
-36 frames on Pi 4, or all 108 frames on Pi 5.
+Vinyl motion quality takes effect after restart. The profiles sample the
+continuously rotating high-resolution material at 10 fps on Pi 3, 20 fps on
+Pi 4, or 60 fps on Pi 5. The album-art label remains continuous in every mode.
+The vinyl material and fixed lighting use 2048×2048 source textures so the
+record remains crisp on native 1080p layouts and scales cleanly to 4K output.
 
 Saving preserves TOML comments, writes through a temporary file, and keeps the
 previous configuration at `config/songart.toml.bak`.

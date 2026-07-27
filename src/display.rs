@@ -2089,45 +2089,33 @@ fn vinyl_rotation(elapsed_seconds: f64) -> f64 {
     (elapsed_seconds.max(0.0) * 200.0) % 360.0
 }
 
-fn vinyl_sequence_step(quality: &str) -> usize {
-    match quality.trim().to_ascii_lowercase().as_str() {
-        "pi3" => 6,
-        "pi5" => 1,
-        _ => 3,
-    }
+fn vinyl_surface_rotation(elapsed_seconds: f64, quality: &str) -> f64 {
+    let fps = match quality.trim().to_ascii_lowercase().as_str() {
+        "pi3" => 10.0,
+        "pi5" => 60.0,
+        _ => 20.0,
+    };
+    let sampled_time = (elapsed_seconds.max(0.0) * fps).floor() / fps;
+    (sampled_time * 200.0) % 360.0
 }
 
-fn vinyl_sequence_frame(elapsed_seconds: f64, frame_count: usize) -> usize {
-    if frame_count == 0 {
-        return 0;
-    }
-    let revolution = (elapsed_seconds.max(0.0) * 200.0 / 360.0).fract();
-    (revolution * frame_count as f64).floor() as usize % frame_count
-}
-
-#[allow(clippy::too_many_arguments)]
 fn draw_vinyl_surface(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-    frames: &mut [Texture<'_>],
-    vinyl_fallback: Option<&mut Texture<'_>>,
+    vinyl: Option<&mut Texture<'_>>,
+    lighting: Option<&mut Texture<'_>>,
     target: Rect,
-    elapsed_seconds: f64,
     rotation: f64,
     alpha: u8,
 ) -> Result<(), String> {
-    if !frames.is_empty() {
-        let frame = vinyl_sequence_frame(elapsed_seconds, frames.len());
-        let texture = &mut frames[frame];
-        texture.set_alpha_mod(alpha);
-        canvas.copy(texture, None, target)?;
-        texture.set_alpha_mod(255);
-        return Ok(());
-    }
-
-    if let Some(vinyl) = vinyl_fallback {
+    if let Some(vinyl) = vinyl {
         vinyl.set_alpha_mod(alpha);
         canvas.copy_ex(vinyl, None, target, rotation, None, false, false)?;
         vinyl.set_alpha_mod(255);
+    }
+    if let Some(lighting) = lighting {
+        lighting.set_alpha_mod(alpha);
+        canvas.copy(lighting, None, target)?;
+        lighting.set_alpha_mod(255);
     }
     Ok(())
 }
@@ -2178,8 +2166,7 @@ impl DisplayRotation {
 mod tests {
     use super::{
         metadata_font_theme_name, scene_layout, segmented_row_rect, segmented_row_step,
-        selected_font_theme_name, vinyl_rotation, vinyl_sequence_frame, vinyl_sequence_step,
-        DisplayRotation,
+        selected_font_theme_name, vinyl_rotation, vinyl_surface_rotation, DisplayRotation,
     };
     use crate::config::DisplayPreset;
 
@@ -2225,17 +2212,10 @@ mod tests {
     }
 
     #[test]
-    fn vinyl_sequence_profiles_load_the_expected_frame_counts() {
-        assert_eq!(108 / vinyl_sequence_step("pi3"), 18);
-        assert_eq!(108 / vinyl_sequence_step("pi4"), 36);
-        assert_eq!(108 / vinyl_sequence_step("pi5"), 108);
-    }
-
-    #[test]
-    fn vinyl_sequence_wraps_after_one_revolution() {
-        assert_eq!(vinyl_sequence_frame(0.0, 108), 0);
-        assert_eq!(vinyl_sequence_frame(1.8, 108), 0);
-        assert_eq!(vinyl_sequence_frame(0.9, 108), 54);
+    fn vinyl_surface_profiles_sample_at_expected_rates() {
+        assert_eq!(vinyl_surface_rotation(0.09, "pi3"), 0.0);
+        assert_eq!(vinyl_surface_rotation(0.09, "pi4"), 10.0);
+        assert_eq!(vinyl_surface_rotation(0.02, "pi5"), 200.0 / 60.0);
     }
 
     #[test]
@@ -2738,6 +2718,7 @@ pub fn run_display_loop(
     let mut event_pump = sdl.event_pump()?;
     let mut runtime_artwork_mode = ctx.config.artwork.mode.clone();
     let mut runtime_vinyl_animation_quality = ctx.config.artwork.vinyl_animation_quality.clone();
+    let loaded_vinyl_animation_quality = runtime_vinyl_animation_quality.clone();
     let mut runtime_visualizer_mode = ctx.config.visualizer.mode.clone();
     let mut runtime_spectrum = RuntimeSpectrumSettings::from_config(&ctx);
     let mut runtime_visualizer_gain = ctx.config.visualizer.gain;
@@ -2805,12 +2786,12 @@ pub fn run_display_loop(
         }
     };
 
-    // Normal playback uses complete, pre-rendered vinyl frames. Every frame
-    // bakes a rotated groove surface under the same screen-space illumination;
-    // the single material texture remains only as a low-memory fallback.
+    // The high-resolution material rotates continuously while the equally
+    // detailed illumination remains fixed in screen space. Two 2048px source
+    // textures stay sharp at 1080p and 4K without a huge decoded frame bank.
     let record_scene = compute_record_rect(layout.artwork_region);
     let mut vinyl_texture = {
-        match texture_creator.load_texture("assets/turntable/vinyl-reference-v2.png") {
+        match texture_creator.load_texture("assets/turntable/vinyl-material-2048.png") {
             Ok(mut texture) => {
                 texture.set_blend_mode(BlendMode::Blend);
                 Some(texture)
@@ -2842,31 +2823,17 @@ pub fn run_display_loop(
             }
         }
     };
-    const VINYL_SEQUENCE_FRAME_COUNT: usize = 108;
-    let sequence_step = vinyl_sequence_step(&ctx.config.artwork.vinyl_animation_quality);
-    let mut vinyl_frame_textures = Vec::with_capacity(VINYL_SEQUENCE_FRAME_COUNT / sequence_step);
-    for frame in (0..VINYL_SEQUENCE_FRAME_COUNT).step_by(sequence_step) {
-        let path = format!(
-            "assets/turntable/vinyl-frames-v2/frame-{:03}.png",
-            frame + 1
-        );
-        match texture_creator.load_texture(&path) {
+    let mut vinyl_lighting_texture =
+        match texture_creator.load_texture("assets/turntable/vinyl-lighting-2048.png") {
             Ok(mut texture) => {
                 texture.set_blend_mode(BlendMode::Blend);
-                vinyl_frame_textures.push(texture);
+                Some(texture)
             }
             Err(e) => {
-                log_error(
-                    &ctx,
-                    &format!(
-                        "Failed to load baked vinyl sequence at {path}; using layered fallback: {e}"
-                    ),
-                );
-                vinyl_frame_textures.clear();
-                break;
+                log_error(&ctx, &format!("Failed to load fixed vinyl lighting: {e}"));
+                None
             }
-        }
-    }
+        };
     log_info(&ctx, "Display loop started.");
 
     while running.load(Ordering::SeqCst) {
@@ -3465,14 +3432,17 @@ pub fn run_display_loop(
                                             label_diameter,
                                             label_diameter,
                                         );
-                                        let rotation = vinyl_rotation(elapsed as f64);
+                                        let label_rotation = vinyl_rotation(elapsed as f64);
+                                        let surface_rotation = vinyl_surface_rotation(
+                                            elapsed as f64,
+                                            &loaded_vinyl_animation_quality,
+                                        );
                                         draw_vinyl_surface(
                                             &mut canvas,
-                                            &mut vinyl_frame_textures,
                                             vinyl_texture.as_mut(),
+                                            vinyl_lighting_texture.as_mut(),
                                             record,
-                                            elapsed as f64,
-                                            rotation,
+                                            surface_rotation,
                                             ((1.0 - fade) * 255.0).round() as u8,
                                         )?;
                                         previous_label
@@ -3481,7 +3451,7 @@ pub fn run_display_loop(
                                             previous_label,
                                             None,
                                             label,
-                                            rotation,
+                                            label_rotation,
                                             None,
                                             false,
                                             false,
@@ -3550,14 +3520,17 @@ pub fn run_display_loop(
                                         );
 
                                         // 33 1/3 RPM equals 200 degrees per second.
-                                        let rotation = vinyl_rotation(shrink_elapsed as f64);
+                                        let label_rotation = vinyl_rotation(shrink_elapsed as f64);
+                                        let surface_rotation = vinyl_surface_rotation(
+                                            shrink_elapsed as f64,
+                                            &loaded_vinyl_animation_quality,
+                                        );
                                         draw_vinyl_surface(
                                             &mut canvas,
-                                            &mut vinyl_frame_textures,
                                             vinyl_texture.as_mut(),
+                                            vinyl_lighting_texture.as_mut(),
                                             record,
-                                            shrink_elapsed as f64,
-                                            rotation,
+                                            surface_rotation,
                                             255,
                                         )?;
                                         if let Some(circular) = circular_artwork_texture.as_ref() {
@@ -3565,7 +3538,7 @@ pub fn run_display_loop(
                                                 circular,
                                                 None,
                                                 shrinking_disc,
-                                                rotation,
+                                                label_rotation,
                                                 None,
                                                 false,
                                                 false,
