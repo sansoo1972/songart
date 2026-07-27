@@ -13,6 +13,7 @@ All notable changes to `songart` will be documented in this file.
 ### Fixed
 - Separated the neutral rotating material from fixed screen-space illumination so the light source cannot rotate with the record.
 - Restored continuous album-label rotation independent of the selected vinyl surface profile.
+- Lowered the vinyl material black level and narrowed the fixed specular mask so most of the disc remains true black instead of washing out to gray on bright displays.
 
 ### Changed
 - Rebuilt the record from 2048px photorealistic material and lighting textures with a rounded rim, dense pressed grooves, subtle rotation-visible pressing variation, and fixed broad studio reflections for sharp 1080p and 4K output.
