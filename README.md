@@ -456,6 +456,9 @@ Using the same color for all four values creates a seamless display. Different v
 theme = "retro"
 mode = "fixed"
 fallback_theme = "simple"
+unicode_sans = "/home/admin/projects/songart/assets/fonts/NotoSansCJKkr-Regular.otf"
+unicode_serif = "/home/admin/projects/songart/assets/fonts/NotoSerifCJKkr-Regular.otf"
+unicode_mono = "/home/admin/projects/songart/assets/fonts/NotoSansMonoCJKkr-Regular.otf"
 ```
 
 ### Metadata-driven font theme
@@ -486,6 +489,15 @@ On each track change, the display logs the font mode, genre, release value, sele
 The bundled presets intentionally use visibly different title fonts so changes are easy to confirm on the display.
 
 If `fonts.mode` contains an invalid value, `songart` logs a warning and uses metadata-driven selection instead of silently pinning the display to the fixed theme.
+
+Before rendering each metadata value, SongArt checks whether the active themed
+font provides every required glyph. Supported values keep their selected theme.
+Values containing unsupported Korean or other non-Latin characters use a
+coordinated Noto fallback: mono for `modern` and `techy`, serif for `retro`,
+`grungy`, and `fantasy`, and sans for the remaining themes. Labels such as
+`Title:` and `Artist:` remain in the active themed font. The bundled Noto CJK
+fonts are licensed under the SIL Open Font License; see
+`assets/fonts/Noto-CJK-LICENSE.txt`.
 
 Available theme names can include:
 

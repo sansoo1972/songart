@@ -168,6 +168,12 @@ mode = "metadata"
 # Used when metadata does not match a known rule.
 fallback_theme = "simple"
 
+# Used only when the selected themed font cannot render every character in a
+# metadata value. The fallback style is matched to the active theme.
+unicode_sans = "/home/admin/projects/songart/assets/fonts/NotoSansCJKkr-Regular.otf"
+unicode_serif = "/home/admin/projects/songart/assets/fonts/NotoSerifCJKkr-Regular.otf"
+unicode_mono = "/home/admin/projects/songart/assets/fonts/NotoSansMonoCJKkr-Regular.otf"
+
 
 # ------------------------------------------------------------------------------
 # Font Themes

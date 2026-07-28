@@ -681,6 +681,45 @@ fn selected_fonts<'a>(
     }
 }
 
+fn unicode_fallback_path<'a>(ctx: &'a AppContext, theme_name: &str) -> &'a str {
+    match theme_name {
+        "modern" | "techy" => &ctx.config.fonts.unicode_mono,
+        "retro" | "grungy" | "fantasy" => &ctx.config.fonts.unicode_serif,
+        _ => &ctx.config.fonts.unicode_sans,
+    }
+}
+
+fn font_supports_text(font: &sdl2::ttf::Font, text: &str) -> bool {
+    text.chars()
+        .filter(|ch| !ch.is_whitespace() && !ch.is_control())
+        .all(|ch| font.find_glyph(ch).is_some())
+}
+
+fn metadata_fallback_fields(
+    title_font: &sdl2::ttf::Font,
+    body_font: &sdl2::ttf::Font,
+    state: &SongState,
+) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+
+    if !state.title.trim().is_empty() && !font_supports_text(title_font, &state.title) {
+        fields.push("title");
+    }
+
+    for (name, value) in [
+        ("artist", state.artist.as_str()),
+        ("album", state.album.as_str()),
+        ("genre", state.genre.as_str()),
+        ("composer", state.composer.as_str()),
+    ] {
+        if !value.trim().is_empty() && !font_supports_text(body_font, value) {
+            fields.push(name);
+        }
+    }
+
+    fields
+}
+
 // ==============================================================================
 // Display Preset Selection
 // ==============================================================================
@@ -868,7 +907,8 @@ struct TextField<'a> {
 impl<'a> TextField<'a> {
     fn new(
         texture_creator: &'a TextureCreator<WindowContext>,
-        font: &sdl2::ttf::Font,
+        label_font: &sdl2::ttf::Font,
+        value_font: &sdl2::ttf::Font,
         label: &str,
         value: &str,
         label_color: Color,
@@ -879,7 +919,7 @@ impl<'a> TextField<'a> {
     ) -> Result<Self, String> {
         let label = CachedText::new(
             texture_creator,
-            font,
+            label_font,
             label,
             label_color,
             x,
@@ -890,7 +930,7 @@ impl<'a> TextField<'a> {
         let value_viewport_width = viewport_width.saturating_sub(label.rect.width()).max(1);
         let value = CachedText::new(
             texture_creator,
-            font,
+            value_font,
             value,
             value_color,
             value_x,
@@ -930,6 +970,8 @@ fn build_text_cache<'a>(
     texture_creator: &'a TextureCreator<WindowContext>,
     title_font: &sdl2::ttf::Font,
     body_font: &sdl2::ttf::Font,
+    unicode_title_font: &sdl2::ttf::Font,
+    unicode_body_font: &sdl2::ttf::Font,
     state: &SongState,
     preset: &DisplayPreset,
     layout: &SceneLayout,
@@ -955,10 +997,41 @@ fn build_text_cache<'a>(
 
     let album_line = album_line(state);
     let year_line = release_year_line(state);
+    let title_value_font = if font_supports_text(title_font, &title_line) {
+        title_font
+    } else {
+        unicode_title_font
+    };
+    let artist_value_font = if font_supports_text(body_font, &artist_line) {
+        body_font
+    } else {
+        unicode_body_font
+    };
+    let album_value_font = if font_supports_text(body_font, &album_line) {
+        body_font
+    } else {
+        unicode_body_font
+    };
+    let year_value_font = if font_supports_text(body_font, &year_line) {
+        body_font
+    } else {
+        unicode_body_font
+    };
+    let genre_value_font = if font_supports_text(body_font, &state.genre) {
+        body_font
+    } else {
+        unicode_body_font
+    };
+    let composer_value_font = if font_supports_text(body_font, &state.composer) {
+        body_font
+    } else {
+        unicode_body_font
+    };
 
     let title = TextField::new(
         texture_creator,
         title_font,
+        title_value_font,
         "Title: ",
         &title_line,
         Color::RGB(255, 255, 255),
@@ -972,6 +1045,7 @@ fn build_text_cache<'a>(
     let artist = TextField::new(
         texture_creator,
         body_font,
+        artist_value_font,
         "Artist: ",
         &artist_line,
         Color::RGB(170, 170, 170),
@@ -991,6 +1065,7 @@ fn build_text_cache<'a>(
     let album = TextField::new(
         texture_creator,
         body_font,
+        album_value_font,
         "Album: ",
         &album_line,
         Color::RGB(150, 150, 150),
@@ -1003,6 +1078,7 @@ fn build_text_cache<'a>(
     let year = TextField::new(
         texture_creator,
         body_font,
+        year_value_font,
         "Year: ",
         &year_line,
         Color::RGB(150, 150, 150),
@@ -1022,6 +1098,7 @@ fn build_text_cache<'a>(
     let genre = TextField::new(
         texture_creator,
         body_font,
+        genre_value_font,
         "Genre: ",
         &state.genre,
         Color::RGB(120, 120, 120),
@@ -1034,6 +1111,7 @@ fn build_text_cache<'a>(
     let composer = TextField::new(
         texture_creator,
         body_font,
+        composer_value_font,
         "Composer: ",
         &state.composer,
         Color::RGB(120, 120, 120),
@@ -2165,8 +2243,9 @@ impl DisplayRotation {
 #[cfg(test)]
 mod tests {
     use super::{
-        metadata_font_theme_name, scene_layout, segmented_row_rect, segmented_row_step,
-        selected_font_theme_name, vinyl_rotation, vinyl_surface_rotation, DisplayRotation,
+        font_supports_text, metadata_font_theme_name, scene_layout, segmented_row_rect,
+        segmented_row_step, selected_font_theme_name, vinyl_rotation, vinyl_surface_rotation,
+        DisplayRotation,
     };
     use crate::config::DisplayPreset;
 
@@ -2216,6 +2295,22 @@ mod tests {
         assert_eq!(vinyl_surface_rotation(0.09, "pi3"), 0.0);
         assert_eq!(vinyl_surface_rotation(0.09, "pi4"), 10.0);
         assert_eq!(vinyl_surface_rotation(0.02, "pi5"), 200.0 / 60.0);
+    }
+
+    #[test]
+    fn noto_fallback_covers_korean_missing_from_themed_font() {
+        let ttf = sdl2::ttf::init().expect("SDL_ttf should initialize");
+        let themed = ttf
+            .load_font("assets/fonts/SyneMono-Regular.ttf", 24)
+            .expect("bundled themed font should load");
+        let fallback = ttf
+            .load_font("assets/fonts/NotoSansCJKkr-Regular.otf", 24)
+            .expect("bundled Unicode fallback should load");
+
+        assert!(font_supports_text(&themed, "Midnight Drive"));
+        assert!(!font_supports_text(&themed, "서울의 밤"));
+        assert!(font_supports_text(&fallback, "서울의 밤"));
+        assert!(font_supports_text(&fallback, "Midnight 서울 Drive"));
     }
 
     #[test]
@@ -2703,6 +2798,14 @@ pub fn run_display_loop(
     let mut body_font = ttf_ctx
         .load_font(body_font_path, body_font_size)
         .map_err(|e| format!("Failed to load body font from {}: {e}", body_font_path))?;
+
+    let unicode_font_path = unicode_fallback_path(&ctx, &selected_theme);
+    let mut unicode_title_font = ttf_ctx
+        .load_font(unicode_font_path, title_font_size)
+        .map_err(|e| format!("Failed to load Unicode fallback font from {}: {e}", unicode_font_path))?;
+    let mut unicode_body_font = ttf_ctx
+        .load_font(unicode_font_path, body_font_size)
+        .map_err(|e| format!("Failed to load Unicode fallback font from {}: {e}", unicode_font_path))?;
 
     // Settings remain readable and visually stable regardless of song theme.
     let settings_font = ttf_ctx
@@ -3329,13 +3432,46 @@ pub fn run_display_loop(
                         format!("Failed to load body font from {}: {e}", body_font_path)
                     })?;
 
+                let unicode_font_path = unicode_fallback_path(&ctx, &selected_theme);
+                unicode_title_font = ttf_ctx
+                    .load_font(unicode_font_path, title_font_size)
+                    .map_err(|e| {
+                        format!(
+                            "Failed to load Unicode fallback font from {}: {e}",
+                            unicode_font_path
+                        )
+                    })?;
+                unicode_body_font = ttf_ctx
+                    .load_font(unicode_font_path, body_font_size)
+                    .map_err(|e| {
+                        format!(
+                            "Failed to load Unicode fallback font from {}: {e}",
+                            unicode_font_path
+                        )
+                    })?;
+
                 loaded_font_theme = selected_theme;
+            }
+
+            let fallback_fields = metadata_fallback_fields(&title_font, &body_font, &state);
+            if !fallback_fields.is_empty() {
+                log_info(
+                    &ctx,
+                    &format!(
+                        "Unicode font fallback active: theme='{}' font='{}' fields={}",
+                        loaded_font_theme,
+                        unicode_fallback_path(&ctx, &loaded_font_theme),
+                        fallback_fields.join(",")
+                    ),
+                );
             }
 
             let text = build_text_cache(
                 &texture_creator,
                 &title_font,
                 &body_font,
+                &unicode_title_font,
+                &unicode_body_font,
                 &state,
                 preset,
                 &layout,

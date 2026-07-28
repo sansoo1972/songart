@@ -196,6 +196,17 @@ pub struct FontsConfig {
     /// Theme used when metadata mode cannot confidently choose a match.
     #[serde(default = "default_fallback_font_theme")]
     pub fallback_theme: String,
+
+    /// Broad Unicode fallbacks used when the active themed font cannot render
+    /// every character in a metadata value.
+    #[serde(default = "default_unicode_sans_font")]
+    pub unicode_sans: String,
+
+    #[serde(default = "default_unicode_serif_font")]
+    pub unicode_serif: String,
+
+    #[serde(default = "default_unicode_mono_font")]
+    pub unicode_mono: String,
 }
 
 /// A single named font theme.
@@ -480,6 +491,18 @@ fn default_font_mode() -> String {
 
 fn default_fallback_font_theme() -> String {
     "simple".to_string()
+}
+
+fn default_unicode_sans_font() -> String {
+    "assets/fonts/NotoSansCJKkr-Regular.otf".to_string()
+}
+
+fn default_unicode_serif_font() -> String {
+    "assets/fonts/NotoSerifCJKkr-Regular.otf".to_string()
+}
+
+fn default_unicode_mono_font() -> String {
+    "assets/fonts/NotoSansMonoCJKkr-Regular.otf".to_string()
 }
 
 // Visualizer defaults.
