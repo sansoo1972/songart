@@ -8,6 +8,24 @@ All notable changes to `songart` will be documented in this file.
 
 ---
 
+## [0.18.0] - 2026-07-28
+
+### Added
+- [#41](https://github.com/sansoo1972/songart/issues/41) Raspberry Pi 3, Pi 4, and Pi 5 vinyl-rotation profiles at 10, 20, and 60 FPS, selectable from the F1 settings overlay.
+- High-resolution vinyl rendering without a memory-heavy decoded frame bank.
+
+### Fixed
+- Separated the neutral rotating material from fixed screen-space illumination so the light source cannot rotate with the record.
+- Restored continuous album-label rotation independent of the selected vinyl surface profile.
+- Lowered the vinyl material black level and narrowed the fixed specular mask so most of the disc remains true black instead of washing out to gray on bright displays.
+- Removed all baked illumination from the 2048px vinyl material; the separate fixed lighting texture now supplies 100% of the visible sheen.
+- Restored smooth motion by rotating the vinyl and album label continuously at the display frame rate while using the selected Pi profile only to control surface-detail updates.
+
+### Changed
+- Rebuilt the record from 2048px photorealistic material and lighting textures with a rounded rim, dense pressed grooves, subtle rotation-visible pressing variation, and fixed broad studio reflections for sharp 1080p and 4K output.
+
+---
+
 ## [0.17.0] - 2026-07-18
 
 ### Added

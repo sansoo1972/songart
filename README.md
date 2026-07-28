@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.17.0 adds an optional segmented LED-style Spectrum analyzer and contextual F1 menu controls for Spectrum and segmented display tuning.
+Version 0.18.0 completes the photorealistic turntable enhancement with high-resolution black vinyl, fixed studio reflections, smooth independent label rotation, and selectable Raspberry Pi 3, Pi 4, and Pi 5 animation profiles.
 
 ---
 
@@ -41,6 +41,36 @@ Version 0.17.0 adds an optional segmented LED-style Spectrum analyzer and contex
 
 ---
 
+## Photorealistic Turntable Mode
+
+Turntable mode presents the current album cover as the center label of a
+high-resolution 33⅓ RPM record. The 2048×2048 vinyl material stays neutral,
+black, and glossy while a separate screen-space lighting texture keeps the
+studio reflections fixed as the grooves and album label rotate. This avoids the
+unrealistic appearance of a light source spinning with the record and preserves
+sharp detail on 1080p and 4K displays.
+
+Choose a performance profile for the Raspberry Pi running the display:
+
+| Profile | Surface update rate | Recommended hardware |
+| --- | ---: | --- |
+| `pi3` | 10 FPS | Raspberry Pi 3 |
+| `pi4` | 20 FPS | Raspberry Pi 4 |
+| `pi5` | 60 FPS | Raspberry Pi 5 |
+
+```toml
+[artwork]
+mode = "turntable"
+vinyl_animation_quality = "pi4"
+```
+
+The profile is selectable from the F1 settings overlay while Artwork is set to
+Turntable. Press `S` to save the selection to `config/songart.toml`. The record
+and album label continue rotating smoothly at the display frame rate; the
+profile controls how frequently the detailed vinyl surface is refreshed.
+
+---
+
 ## 1970s Analog VU Meters
 
 ![Photorealistic 1970s-style analog VU meter](assets/vu/vintage-meter-face-v2.png)
@@ -51,6 +81,7 @@ analog meters and spinning turntable to appear together:
 ```toml
 [artwork]
 mode = "turntable"
+vinyl_animation_quality = "pi4"
 
 [visualizer]
 enabled = true
@@ -81,14 +112,22 @@ theme.
 Available modes:
 
 - Artwork: `cover`, `turntable`
+- Vinyl motion (when Artwork is `turntable`): Pi 3 / 10 fps,
+  Pi 4 / 20 fps, Pi 5 / 60 fps
 - Visualizer: `spectrum`, `oscilloscope`, `analog_vu`
 - Spectrum: `full`, `top_only`, `segmented`
 - Sensitivity: `0.25`–`8.0`
 
-The overlay only shows controls that apply to the active visualizer. Spectrum
-style is hidden for Oscilloscope and Analog VU, and the segmented rows, row
-height, row gap, column gap, and inactive LED toggle appear only when Spectrum
-is set to `segmented`.
+The overlay only shows controls that apply to the active mode. Vinyl motion is
+shown only for Turntable artwork. Spectrum style is hidden for Oscilloscope and
+Analog VU, and the segmented rows, row height, row gap, column gap, and inactive
+LED toggle appear only when Spectrum is set to `segmented`.
+
+Vinyl motion quality takes effect after restart. The profiles sample the
+continuously rotating high-resolution material at 10 fps on Pi 3, 20 fps on
+Pi 4, or 60 fps on Pi 5. The album-art label remains continuous in every mode.
+The vinyl material and fixed lighting use 2048×2048 source textures so the
+record remains crisp on native 1080p layouts and scales cleanly to 4K output.
 
 Saving preserves TOML comments, writes through a temporary file, and keeps the
 previous configuration at `config/songart.toml.bak`.
@@ -186,6 +225,8 @@ config/songart.toml
 - `display` selects the active display preset and frame timing
 - `display.colors` controls the major display-region backgrounds
 - `artwork.mode` selects the standard cover or turntable-style presentation
+- `artwork.vinyl_animation_quality` selects the Pi 3 (10 fps), Pi 4 (20 fps),
+  or Pi 5 (60 fps) rotation profile
 - `display_presets` define scene geometry and spacing
 - `fonts` selects fixed or metadata-driven font behavior
 - `font_themes` define title/body font paths and font sizes
@@ -238,6 +279,7 @@ visualizer_background = "#000000"
 
 [artwork]
 mode = "cover" # cover, turntable
+vinyl_animation_quality = "pi4" # pi3 (10 fps), pi4 (20 fps), pi5 (60 fps)
 
 [display_presets.portrait]
 width = 1080
@@ -620,15 +662,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.17.0**.
+This project is now at **0.18.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.17.0 -m "songart 0.17.0"
-git push origin v0.17.0
+git tag -a v0.18.0 -m "songart 0.18.0"
+git push origin v0.18.0
 ```
 
 ---
