@@ -12,4 +12,5 @@ rustfft = "6"
 ctrlc = "3.4"
 toml = "0.8"
 toml_edit = "0.22"
+unicode-normalization = "0.1"
 chrono = { version = "0.4.44", features = ["clock"] }

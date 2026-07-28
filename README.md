@@ -490,14 +490,14 @@ The bundled presets intentionally use visibly different title fonts so changes a
 
 If `fonts.mode` contains an invalid value, `songart` logs a warning and uses metadata-driven selection instead of silently pinning the display to the fixed theme.
 
-Before rendering each metadata value, SongArt checks whether the active themed
-font provides every required glyph. Supported values keep their selected theme.
-Values containing unsupported Korean or other non-Latin characters use a
-coordinated Noto fallback: mono for `modern` and `techy`, serif for `retro`,
-`grungy`, and `fantasy`, and sans for the remaining themes. Labels such as
-`Title:` and `Artist:` remain in the active themed font. The bundled Noto CJK
-fonts are licensed under the SIL Open Font License; see
-`assets/fonts/Noto-CJK-LICENSE.txt`.
+Before rendering metadata, SongArt normalizes Unicode text to composed form so
+Hangul syllables and other combining sequences render correctly. It then checks
+whether the active themed fonts provide every required glyph. When any displayed
+field requires fallback, the complete description panel—including labels and
+Latin-only values—uses one coordinated Noto family for consistent typography:
+mono for `modern` and `techy`, serif for `retro`, `grungy`, and `fantasy`, and
+sans for the remaining themes. The bundled Noto CJK fonts are licensed under the
+SIL Open Font License; see `assets/fonts/Noto-CJK-LICENSE.txt`.
 
 Available theme names can include:
 
