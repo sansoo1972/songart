@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.17.0 adds an optional segmented LED-style Spectrum analyzer and contextual F1 menu controls for Spectrum and segmented display tuning.
+Version 0.18.0 completes the photorealistic turntable enhancement with high-resolution black vinyl, fixed studio reflections, smooth independent label rotation, and selectable Raspberry Pi 3, Pi 4, and Pi 5 animation profiles.
 
 ---
 
@@ -38,6 +38,36 @@ Version 0.17.0 adds an optional segmented LED-style Spectrum analyzer and contex
 - Externalized runtime configuration via TOML
 - Graceful Ctrl+C shutdown handling
 - Runtime artifacts ignored by Git
+
+---
+
+## Photorealistic Turntable Mode
+
+Turntable mode presents the current album cover as the center label of a
+high-resolution 33⅓ RPM record. The 2048×2048 vinyl material stays neutral,
+black, and glossy while a separate screen-space lighting texture keeps the
+studio reflections fixed as the grooves and album label rotate. This avoids the
+unrealistic appearance of a light source spinning with the record and preserves
+sharp detail on 1080p and 4K displays.
+
+Choose a performance profile for the Raspberry Pi running the display:
+
+| Profile | Surface update rate | Recommended hardware |
+| --- | ---: | --- |
+| `pi3` | 10 FPS | Raspberry Pi 3 |
+| `pi4` | 20 FPS | Raspberry Pi 4 |
+| `pi5` | 60 FPS | Raspberry Pi 5 |
+
+```toml
+[artwork]
+mode = "turntable"
+vinyl_animation_quality = "pi4"
+```
+
+The profile is selectable from the F1 settings overlay while Artwork is set to
+Turntable. Press `S` to save the selection to `config/songart.toml`. The record
+and album label continue rotating smoothly at the display frame rate; the
+profile controls how frequently the detailed vinyl surface is refreshed.
 
 ---
 
@@ -632,15 +662,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.17.0**.
+This project is now at **0.18.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.17.0 -m "songart 0.17.0"
-git push origin v0.17.0
+git tag -a v0.18.0 -m "songart 0.18.0"
+git push origin v0.18.0
 ```
 
 ---
