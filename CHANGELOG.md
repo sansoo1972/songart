@@ -6,6 +6,13 @@ All notable changes to `songart` will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- [#20](https://github.com/sansoo1972/songart/issues/20) Configurable Noto CJK sans, serif, and mono fallback fonts for Korean and other non-Latin metadata.
+
+### Fixed
+- Metadata panels retain the active theme when it has complete glyph coverage and automatically switch the complete description area to one theme-matched Unicode family when any field requires fallback.
+- Decomposed Unicode metadata is normalized before rendering so Korean Hangul syllables are composed instead of displaying as separated Jamo.
+
 ---
 
 ## [0.18.0] - 2026-07-28

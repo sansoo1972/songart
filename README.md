@@ -456,6 +456,9 @@ Using the same color for all four values creates a seamless display. Different v
 theme = "retro"
 mode = "fixed"
 fallback_theme = "simple"
+unicode_sans = "/home/admin/projects/songart/assets/fonts/NotoSansCJKkr-Regular.otf"
+unicode_serif = "/home/admin/projects/songart/assets/fonts/NotoSerifCJKkr-Regular.otf"
+unicode_mono = "/home/admin/projects/songart/assets/fonts/NotoSansMonoCJKkr-Regular.otf"
 ```
 
 ### Metadata-driven font theme
@@ -486,6 +489,15 @@ On each track change, the display logs the font mode, genre, release value, sele
 The bundled presets intentionally use visibly different title fonts so changes are easy to confirm on the display.
 
 If `fonts.mode` contains an invalid value, `songart` logs a warning and uses metadata-driven selection instead of silently pinning the display to the fixed theme.
+
+Before rendering metadata, SongArt normalizes Unicode text to composed form so
+Hangul syllables and other combining sequences render correctly. It then checks
+whether the active themed fonts provide every required glyph. When any displayed
+field requires fallback, the complete description panel—including labels and
+Latin-only values—uses one coordinated Noto family for consistent typography:
+mono for `modern` and `techy`, serif for `retro`, `grungy`, and `fantasy`, and
+sans for the remaining themes. The bundled Noto CJK fonts are licensed under the
+SIL Open Font License; see `assets/fonts/Noto-CJK-LICENSE.txt`.
 
 Available theme names can include:
 
@@ -684,6 +696,7 @@ git push origin v0.18.0
 - Modular source layout working
 - Theme-based font selection working
 - Metadata-driven font theme selection working
+- Panel-wide Unicode font fallback and composed Korean metadata rendering verified on Raspberry Pi
 - Configurable display backgrounds working
 - Display presets for portrait and landscape working
 - Scene scaling to real SDL canvas working
