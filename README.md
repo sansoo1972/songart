@@ -696,6 +696,7 @@ git push origin v0.18.0
 - Modular source layout working
 - Theme-based font selection working
 - Metadata-driven font theme selection working
+- Panel-wide Unicode font fallback and composed Korean metadata rendering verified on Raspberry Pi
 - Configurable display backgrounds working
 - Display presets for portrait and landscape working
 - Scene scaling to real SDL canvas working
