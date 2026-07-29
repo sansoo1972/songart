@@ -152,6 +152,18 @@ detail_line_spacing = 40
 
 
 # ------------------------------------------------------------------------------
+# Optional Track Metadata
+# ------------------------------------------------------------------------------
+
+[metadata_display]
+# Two fields are placed on each compact row. Unknown values are skipped.
+# Options: genre, composer, album_artist, track, duration, label, lyricist,
+# producer, isrc, rating, catalog, copyright
+fields = ["genre", "composer", "track", "duration", "label", "isrc", "album_artist", "producer"]
+max_rows = 4
+
+
+# ------------------------------------------------------------------------------
 # Font Selection
 # ------------------------------------------------------------------------------
 

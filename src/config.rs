@@ -16,6 +16,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub artwork: ArtworkConfig,
     pub display_presets: HashMap<String, DisplayPreset>,
+    #[serde(default)]
+    pub metadata_display: MetadataDisplayConfig,
     pub fonts: FontsConfig,
     pub font_themes: HashMap<String, FontTheme>,
     pub visualizer: VisualizerConfig,
@@ -174,6 +176,24 @@ pub struct DisplayPreset {
     pub title_line_spacing: i32,
     pub body_line_spacing: i32,
     pub detail_line_spacing: i32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct MetadataDisplayConfig {
+    #[serde(default = "default_metadata_fields")]
+    pub fields: Vec<String>,
+
+    #[serde(default = "default_metadata_max_rows")]
+    pub max_rows: usize,
+}
+
+impl Default for MetadataDisplayConfig {
+    fn default() -> Self {
+        Self {
+            fields: default_metadata_fields(),
+            max_rows: default_metadata_max_rows(),
+        }
+    }
 }
 
 // ==============================================================================
@@ -503,6 +523,26 @@ fn default_unicode_serif_font() -> String {
 
 fn default_unicode_mono_font() -> String {
     "assets/fonts/NotoSansMonoCJKkr-Regular.otf".to_string()
+}
+
+fn default_metadata_fields() -> Vec<String> {
+    [
+        "genre",
+        "composer",
+        "track",
+        "duration",
+        "label",
+        "isrc",
+        "album_artist",
+        "producer",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn default_metadata_max_rows() -> usize {
+    4
 }
 
 // Visualizer defaults.

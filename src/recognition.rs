@@ -11,14 +11,16 @@ use std::thread;
 use std::time::Duration;
 
 const UNKNOWN: &str = "Unknown";
-const MUSICBRAINZ_USER_AGENT: &str = "songart/0.11.1 (https://github.com/sansoo1972/songart)";
+const MUSICBRAINZ_USER_AGENT: &str = "songart/0.18.0 (https://github.com/sansoo1972/songart)";
 
 /// Looks up a metadata value by title in SongRec's nested JSON sections.
 fn metadata_value(json: &Value, wanted_title: &str) -> Option<String> {
     let sections = json["track"]["sections"].as_array()?;
 
     for section in sections {
-        let metadata = section["metadata"].as_array()?;
+        let Some(metadata) = section["metadata"].as_array() else {
+            continue;
+        };
         for item in metadata {
             let title = item["title"].as_str().unwrap_or("");
             if title.eq_ignore_ascii_case(wanted_title) {
@@ -37,8 +39,34 @@ fn extract_album(json: &Value) -> String {
     metadata_value(json, "Album").unwrap_or_else(|| "Unknown".to_string())
 }
 
-fn extract_label(json: &Value) -> String {
-    metadata_value(json, "Label").unwrap_or_else(|| "Unknown".to_string())
+fn metadata_value_any(json: &Value, titles: &[&str]) -> Option<String> {
+    titles.iter().find_map(|title| metadata_value(json, title))
+}
+
+fn clean_metadata_value(value: Option<String>) -> String {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| UNKNOWN.to_string())
+}
+
+fn extract_album_artist(json: &Value) -> String {
+    clean_metadata_value(metadata_value_any(
+        json,
+        &["Album Artist", "Album Artists"],
+    ))
+}
+
+fn extract_label(json: &Value, artist: &str) -> String {
+    let label = clean_metadata_value(metadata_value_any(
+        json,
+        &["Record Label", "Label", "Publisher"],
+    ));
+
+    if !is_unknown(&label) && label.trim().eq_ignore_ascii_case(artist.trim()) {
+        UNKNOWN.to_string()
+    } else {
+        label
+    }
 }
 
 fn extract_released(json: &Value) -> String {
@@ -76,10 +104,13 @@ fn relation_artist_name(relation: &Value) -> Option<String> {
 
 fn normalize_match_text(value: &str) -> String {
     value
-        .trim()
-        .replace(['’', '‘', '`'], "'")
-        .replace(['“', '”'], "\"")
-        .to_ascii_lowercase()
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn metadata_titles(json: &Value) -> Vec<String> {
@@ -231,6 +262,199 @@ fn musicbrainz_client(ctx: &AppContext) -> Option<reqwest::blocking::Client> {
             log_debug(ctx, &format!("MusicBrainz client build failed: {e}"));
             None
         }
+    }
+}
+
+#[derive(Debug, Default, PartialEq)]
+struct TrackMetadataEnrichment {
+    release_id: String,
+    album: String,
+    album_artist: String,
+    track_number: String,
+    track_total: String,
+    disc_number: String,
+    disc_total: String,
+    duration: String,
+    released: String,
+    label: String,
+    catalog_number: String,
+}
+
+fn artist_credit_names(value: &Value) -> String {
+    value
+        .as_array()
+        .map(|credits| {
+            credits
+                .iter()
+                .filter_map(|credit| credit["artist"]["name"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| UNKNOWN.to_string())
+}
+
+fn musicbrainz_metadata_enrichment(
+    json: &Value,
+    title: &str,
+    artist: &str,
+    album: &str,
+) -> TrackMetadataEnrichment {
+    let Some(recordings) = json["recordings"].as_array() else {
+        return TrackMetadataEnrichment::default();
+    };
+    let Some(recording) = recordings
+        .iter()
+        .find(|recording| recording_matches(recording, title, artist))
+        .or_else(|| recordings.first())
+    else {
+        return TrackMetadataEnrichment::default();
+    };
+
+    let mut result = TrackMetadataEnrichment {
+        duration: recording["length"]
+            .as_u64()
+            .map(format_duration_millis)
+            .unwrap_or_default(),
+        ..TrackMetadataEnrichment::default()
+    };
+
+    let Some(releases) = recording["releases"].as_array() else {
+        return result;
+    };
+    let album_match = normalize_match_text(album);
+    let exact_release = releases.iter().find(|release| {
+        !album_match.is_empty()
+            && normalize_match_text(release["title"].as_str().unwrap_or("")) == album_match
+    });
+    let Some(release) = exact_release.or_else(|| {
+        if is_unknown(album) {
+            releases.first()
+        } else {
+            None
+        }
+    })
+    else {
+        return result;
+    };
+
+    result.release_id = release["id"].as_str().unwrap_or("").to_string();
+    result.album = release["title"].as_str().unwrap_or("").to_string();
+    result.album_artist = artist_credit_names(&release["artist-credit"]);
+    result.released = release["date"].as_str().unwrap_or("").to_string();
+
+    if let Some(label_info) = release["label-info"]
+        .as_array()
+        .and_then(|labels| labels.first())
+    {
+        result.label = label_info["label"]["name"].as_str().unwrap_or("").to_string();
+        result.catalog_number = label_info["catalog-number"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+    }
+
+    if let Some(media) = release["media"].as_array() {
+        result.disc_total = media.len().to_string();
+        let recording_id = recording["id"].as_str().unwrap_or("");
+
+        for medium in media {
+            let tracks = medium["tracks"]
+                .as_array()
+                .or_else(|| medium["track"].as_array());
+            let matching_track = tracks.and_then(|tracks| {
+                tracks
+                    .iter()
+                    .find(|track| {
+                        track["recording"]["id"].as_str().unwrap_or("") == recording_id
+                    })
+                    .or_else(|| tracks.first())
+            });
+
+            if let Some(track) = matching_track {
+                result.disc_number = medium["position"]
+                    .as_u64()
+                    .map(|value| value.to_string())
+                    .unwrap_or_default();
+                result.track_number = track["position"]
+                    .as_u64()
+                    .map(|value| value.to_string())
+                    .or_else(|| track["number"].as_str().map(str::to_string))
+                    .unwrap_or_default();
+                result.track_total = medium["track-count"]
+                    .as_u64()
+                    .map(|value| value.to_string())
+                    .unwrap_or_default();
+                break;
+            }
+        }
+    }
+
+    result
+}
+
+fn lookup_metadata_by_isrc(
+    ctx: &AppContext,
+    isrc: &str,
+    title: &str,
+    artist: &str,
+    album: &str,
+) -> Option<TrackMetadataEnrichment> {
+    if is_unknown(isrc) {
+        return None;
+    }
+
+    let client = musicbrainz_client(ctx)?;
+    let query = format!("isrc:{}", isrc.trim());
+    let json = fetch_musicbrainz_json(
+        ctx,
+        &client,
+        "https://musicbrainz.org/ws/2/recording",
+        &[
+            ("query", &query),
+            ("limit", "1"),
+            ("fmt", "json"),
+        ],
+    )?;
+    let mut enrichment = musicbrainz_metadata_enrichment(&json, title, artist, album);
+    if !enrichment.release_id.is_empty()
+        && (enrichment.label.is_empty() || enrichment.catalog_number.is_empty())
+    {
+        thread::sleep(Duration::from_secs(1));
+        let release_url = format!(
+            "https://musicbrainz.org/ws/2/release/{}",
+            enrichment.release_id
+        );
+        if let Some(release) = fetch_musicbrainz_json(
+            ctx,
+            &client,
+            &release_url,
+            &[("inc", "labels"), ("fmt", "json")],
+        ) {
+            if let Some(label_info) = release["label-info"]
+                .as_array()
+                .and_then(|labels| labels.first())
+            {
+                if enrichment.label.is_empty() {
+                    enrichment.label =
+                        label_info["label"]["name"].as_str().unwrap_or("").to_string();
+                }
+                if enrichment.catalog_number.is_empty() {
+                    enrichment.catalog_number = label_info["catalog-number"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                }
+            }
+        }
+    }
+
+    Some(enrichment)
+}
+
+fn fill_missing(target: &mut String, fallback: String) {
+    if is_unknown(target) && !fallback.trim().is_empty() && !is_unknown(&fallback) {
+        *target = fallback;
     }
 }
 
@@ -565,9 +789,84 @@ fn resolve_composer(ctx: &AppContext, json: &Value, title: &str, artist: &str) -
 }
 
 fn extract_track_number(json: &Value) -> String {
-    metadata_value(json, "Track")
-        .or_else(|| metadata_value(json, "Track Number"))
-        .unwrap_or_else(|| "Unknown".to_string())
+    split_position(
+        metadata_value_any(json, &["Track", "Track Number"]).as_deref(),
+    )
+    .0
+}
+
+fn split_position(value: Option<&str>) -> (String, String) {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return (UNKNOWN.to_string(), UNKNOWN.to_string());
+    };
+
+    for separator in [" of ", "/", "／"] {
+        if let Some((position, total)) = value.split_once(separator) {
+            return (
+                clean_metadata_value(Some(position.trim().to_string())),
+                clean_metadata_value(Some(total.trim().to_string())),
+            );
+        }
+    }
+
+    (value.to_string(), UNKNOWN.to_string())
+}
+
+fn extract_track_total(json: &Value) -> String {
+    let (_, embedded_total) = split_position(
+        metadata_value_any(json, &["Track", "Track Number"]).as_deref(),
+    );
+    if !is_unknown(&embedded_total) {
+        embedded_total
+    } else {
+        clean_metadata_value(metadata_value_any(
+            json,
+            &["Track Count", "Total Tracks", "Tracks"],
+        ))
+    }
+}
+
+fn extract_disc_position(json: &Value) -> (String, String) {
+    let value = metadata_value_any(json, &["Disc", "Disc Number"]);
+    let (number, embedded_total) = split_position(value.as_deref());
+    let total = if !is_unknown(&embedded_total) {
+        embedded_total
+    } else {
+        clean_metadata_value(metadata_value_any(
+            json,
+            &["Disc Count", "Total Discs", "Discs"],
+        ))
+    };
+    (number, total)
+}
+
+fn extract_duration(json: &Value) -> String {
+    clean_metadata_value(
+        metadata_value_any(json, &["Duration", "Time", "Length"]).or_else(|| {
+            json["track"]["duration"]
+                .as_u64()
+                .map(format_duration_millis)
+        }),
+    )
+}
+
+fn format_duration_millis(value: u64) -> String {
+    let total_seconds = if value > 10_000 { value / 1000 } else { value };
+    format!("{}:{:02}", total_seconds / 60, total_seconds % 60)
+}
+
+fn extract_lyricist(json: &Value) -> String {
+    clean_metadata_value(metadata_value_any(
+        json,
+        &["Lyricist", "Lyricists", "Lyrics By", "Lyrics by"],
+    ))
+}
+
+fn extract_producer(json: &Value) -> String {
+    clean_metadata_value(metadata_value_any(
+        json,
+        &["Producer", "Producers", "Produced By", "Produced by"],
+    ))
 }
 
 fn extract_genre(json: &Value) -> String {
@@ -578,29 +877,29 @@ fn extract_isrc(json: &Value) -> String {
     json["track"]["isrc"].as_str().unwrap_or("Unknown").to_string()
 }
 
-fn extract_notes(json: &Value) -> String {
-    let mut bits = Vec::new();
-
-    let genre = extract_genre(json);
-    if genre != "Unknown" {
-        bits.push(format!("Genre: {genre}"));
+fn extract_explicit(json: &Value) -> String {
+    if let Some(explicit) = json["track"]["hub"]["explicit"].as_bool() {
+        return if explicit { "Explicit" } else { "Clean" }.to_string();
     }
 
-    let label = extract_label(json);
-    if label != "Unknown" {
-        bits.push(format!("Label: {label}"));
-    }
+    clean_metadata_value(metadata_value_any(
+        json,
+        &["Content Rating", "Rating", "Explicit"],
+    ))
+}
 
-    let isrc = extract_isrc(json);
-    if isrc != "Unknown" {
-        bits.push(format!("ISRC: {isrc}"));
-    }
+fn extract_copyright(json: &Value) -> String {
+    clean_metadata_value(metadata_value_any(
+        json,
+        &["Copyright", "Copyright Line"],
+    ))
+}
 
-    if bits.is_empty() {
-        "None".to_string()
-    } else {
-        bits.join(" | ")
-    }
+fn extract_catalog_number(json: &Value) -> String {
+    clean_metadata_value(metadata_value_any(
+        json,
+        &["Catalog Number", "Catalogue Number", "Catalog No.", "UPC"],
+    ))
 }
 
 /// Builds an ordered list of possible artwork URLs, preferring higher sizes
@@ -852,12 +1151,21 @@ pub fn run_recognition_loop(
 
         let title = json["track"]["title"].as_str().unwrap_or("Unknown");
         let artist = json["track"]["subtitle"].as_str().unwrap_or("Unknown");
-        let album = extract_album(&json);
-        let track_number = extract_track_number(&json);
-        let released = extract_released(&json);
+        let mut album = extract_album(&json);
+        let mut album_artist = extract_album_artist(&json);
+        let mut track_number = extract_track_number(&json);
+        let mut track_total = extract_track_total(&json);
+        let (mut disc_number, mut disc_total) = extract_disc_position(&json);
+        let mut duration = extract_duration(&json);
+        let mut released = extract_released(&json);
         let genre = extract_genre(&json);
-        let label = extract_label(&json);
-        let notes = extract_notes(&json);
+        let mut label = extract_label(&json, artist);
+        let isrc = extract_isrc(&json);
+        let explicit = extract_explicit(&json);
+        let copyright = extract_copyright(&json);
+        let mut catalog_number = extract_catalog_number(&json);
+        let lyricist = extract_lyricist(&json);
+        let producer = extract_producer(&json);
 
         let current = format!("{artist} - {title}");
 
@@ -890,6 +1198,35 @@ pub fn run_recognition_loop(
             continue;
         }
 
+        if [
+            &album_artist,
+            &track_number,
+            &track_total,
+            &disc_number,
+            &duration,
+            &label,
+            &catalog_number,
+        ]
+        .iter()
+        .any(|value| is_unknown(value))
+        {
+            if let Some(enrichment) =
+                lookup_metadata_by_isrc(&ctx, &isrc, title, artist, &album)
+            {
+                fill_missing(&mut album, enrichment.album);
+                fill_missing(&mut album_artist, enrichment.album_artist);
+                fill_missing(&mut track_number, enrichment.track_number);
+                fill_missing(&mut track_total, enrichment.track_total);
+                fill_missing(&mut disc_number, enrichment.disc_number);
+                fill_missing(&mut disc_total, enrichment.disc_total);
+                fill_missing(&mut duration, enrichment.duration);
+                fill_missing(&mut released, enrichment.released);
+                fill_missing(&mut label, enrichment.label);
+                fill_missing(&mut catalog_number, enrichment.catalog_number);
+                log_debug(&ctx, "Filled missing structured metadata from MusicBrainz ISRC lookup.");
+            }
+        }
+
         let composer = resolve_composer(&ctx, &json, title, artist);
 
         log_blank(&ctx);
@@ -898,19 +1235,29 @@ pub fn run_recognition_loop(
         log_info(&ctx, &format!("Song Title:   {title}"));
         log_info(&ctx, &format!("Artist:       {artist}"));
         log_info(&ctx, &format!("Album:        {album}"));
+        log_info(&ctx, &format!("Album Artist: {album_artist}"));
         log_info(&ctx, &format!("Track:        {track_number}"));
+        log_info(&ctx, &format!("Track Total:  {track_total}"));
+        log_info(&ctx, &format!("Disc:         {disc_number}"));
+        log_info(&ctx, &format!("Disc Total:   {disc_total}"));
+        log_info(&ctx, &format!("Duration:     {duration}"));
         log_info(&ctx, &format!("Composer:     {composer}"));
+        log_info(&ctx, &format!("Lyricist:     {lyricist}"));
+        log_info(&ctx, &format!("Producer:     {producer}"));
         log_info(&ctx, &format!("Released:     {released}"));
         log_info(&ctx, &format!("Genre:        {genre}"));
         log_info(&ctx, &format!("Label:        {label}"));
-        log_info(&ctx, &format!("Seed URL:     {preview_url}"));
-        log_info(&ctx, &format!("Notes:        {notes}"));
+        log_info(&ctx, &format!("ISRC:         {isrc}"));
+        log_info(&ctx, &format!("Rating:       {explicit}"));
+        log_info(&ctx, &format!("Copyright:    {copyright}"));
+        log_info(&ctx, &format!("Catalog No.:  {catalog_number}"));
+        log_debug(&ctx, &format!("Seed URL:     {preview_url}"));
         log_info(&ctx, "========================================");
         log_blank(&ctx);
 
         match download_best_artwork(&ctx, &json, &ctx.config.paths.artwork_file) {
             Ok(final_url) => {
-                log_info(&ctx, &format!("Final URL:    {final_url}"));
+                log_debug(&ctx, &format!("Final URL:    {final_url}"));
 
                 let artwork_changed = final_url != last_artwork_url;
 
@@ -919,12 +1266,22 @@ pub fn run_recognition_loop(
                     state.title = title.to_string();
                     state.artist = artist.to_string();
                     state.album = album;
+                    state.album_artist = album_artist;
                     state.track_number = track_number;
+                    state.track_total = track_total;
+                    state.disc_number = disc_number;
+                    state.disc_total = disc_total;
+                    state.duration = duration;
                     state.composer = composer.clone();
+                    state.lyricist = lyricist;
+                    state.producer = producer;
                     state.released = released;
                     state.genre = genre;
                     state.label = label;
-                    state.notes = notes;
+                    state.isrc = isrc;
+                    state.explicit = explicit;
+                    state.copyright = copyright;
+                    state.catalog_number = catalog_number;
                     state.artwork_path = ctx.config.paths.artwork_file.clone();
                     state.artwork_url = final_url.clone();
                     state.version = state.version.wrapping_add(1);
@@ -1009,6 +1366,155 @@ mod tests {
         });
 
         assert_eq!(extract_composer(&json), "Jane Songwriter");
+    }
+
+    #[test]
+    fn extracts_structured_track_and_release_metadata() {
+        let json = json!({
+            "track": {
+                "duration": 245000,
+                "isrc": "US-ABC-24-12345",
+                "hub": { "explicit": true },
+                "sections": [
+                    { "type": "LYRICS", "text": ["First line"] },
+                    {
+                        "metadata": [
+                            { "title": "Album Artist", "text": "Various Artists" },
+                            { "title": "Track", "text": "3 of 12" },
+                            { "title": "Disc Number", "text": "1/2" },
+                            { "title": "Record Label", "text": "Example Records" },
+                            { "title": "Producer", "text": "Pat Producer" },
+                            { "title": "Lyricist", "text": "Lee Lyricist" },
+                            { "title": "Catalog Number", "text": "CAT-123" }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        assert_eq!(extract_album_artist(&json), "Various Artists");
+        assert_eq!(extract_track_number(&json), "3");
+        assert_eq!(extract_track_total(&json), "12");
+        assert_eq!(extract_disc_position(&json), ("1".to_string(), "2".to_string()));
+        assert_eq!(extract_duration(&json), "4:05");
+        assert_eq!(extract_label(&json, "Song Artist"), "Example Records");
+        assert_eq!(extract_producer(&json), "Pat Producer");
+        assert_eq!(extract_lyricist(&json), "Lee Lyricist");
+        assert_eq!(extract_isrc(&json), "US-ABC-24-12345");
+        assert_eq!(extract_explicit(&json), "Explicit");
+        assert_eq!(extract_catalog_number(&json), "CAT-123");
+    }
+
+    #[test]
+    fn rejects_artist_name_as_ambiguous_record_label() {
+        let json = json!({
+            "track": {
+                "sections": [{
+                    "metadata": [
+                        { "title": "Label", "text": "Neil Diamond" }
+                    ]
+                }]
+            }
+        });
+
+        assert_eq!(extract_label(&json, "Neil Diamond"), UNKNOWN);
+    }
+
+    #[test]
+    fn record_label_precedes_generic_label_metadata() {
+        let json = json!({
+            "track": {
+                "sections": [{
+                    "metadata": [
+                        { "title": "Label", "text": "Ambiguous Label" },
+                        { "title": "Record Label", "text": "Authoritative Records" }
+                    ]
+                }]
+            }
+        });
+
+        assert_eq!(
+            extract_label(&json, "Song Artist"),
+            "Authoritative Records"
+        );
+    }
+
+    #[test]
+    fn enriches_missing_fields_from_matching_musicbrainz_release() {
+        let json = json!({
+            "recordings": [{
+                "id": "recording-id",
+                "title": "I Am...I Said",
+                "length": 214693,
+                "artist-credit": [{
+                    "artist": { "name": "Neil Diamond" }
+                }],
+                "releases": [{
+                    "id": "release-id",
+                    "title": "All-Time Greatest Hits",
+                    "date": "2014-07-08",
+                    "artist-credit": [{
+                        "artist": { "name": "Neil Diamond" }
+                    }],
+                    "label-info": [{
+                        "catalog-number": "B0020837-02",
+                        "label": { "name": "Capitol Records" }
+                    }],
+                    "media": [{
+                        "position": 1,
+                        "track-count": 23,
+                        "track": [{
+                            "number": "4",
+                            "position": 4,
+                            "recording": { "id": "recording-id" }
+                        }]
+                    }]
+                }]
+            }]
+        });
+
+        let result = musicbrainz_metadata_enrichment(
+            &json,
+            "I Am...I Said",
+            "Neil Diamond",
+            "All-Time Greatest Hits",
+        );
+
+        assert_eq!(result.release_id, "release-id");
+        assert_eq!(result.album_artist, "Neil Diamond");
+        assert_eq!(result.track_number, "4");
+        assert_eq!(result.track_total, "23");
+        assert_eq!(result.disc_number, "1");
+        assert_eq!(result.disc_total, "1");
+        assert_eq!(result.duration, "3:34");
+        assert_eq!(result.released, "2014-07-08");
+        assert_eq!(result.label, "Capitol Records");
+        assert_eq!(result.catalog_number, "B0020837-02");
+    }
+
+    #[test]
+    fn does_not_apply_release_details_from_a_different_album() {
+        let json = json!({
+            "recordings": [{
+                "id": "recording-id",
+                "title": "Song",
+                "length": 180000,
+                "artist-credit": [{ "artist": { "name": "Artist" } }],
+                "releases": [{
+                    "id": "wrong-release",
+                    "title": "Different Compilation",
+                    "date": "2020"
+                }]
+            }]
+        });
+
+        let result =
+            musicbrainz_metadata_enrichment(&json, "Song", "Artist", "Wanted Album");
+
+        assert_eq!(result.duration, "3:00");
+        assert!(result.release_id.is_empty());
+        assert!(result.track_number.is_empty());
+        assert!(result.label.is_empty());
     }
 
     #[test]

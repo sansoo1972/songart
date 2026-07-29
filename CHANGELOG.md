@@ -8,10 +8,14 @@ All notable changes to `songart` will be documented in this file.
 
 ### Added
 - [#20](https://github.com/sansoo1972/songart/issues/20) Configurable Noto CJK sans, serif, and mono fallback fonts for Korean and other non-Latin metadata.
+- [#44](https://github.com/sansoo1972/songart/issues/44) Structured album artist, track/disc position, duration, lyricist, producer, ISRC, content rating, copyright, catalog number, and validated record-label metadata.
+- Configurable compact secondary metadata rows with field ordering and a layout-safe row limit.
+- MusicBrainz ISRC fallback for missing duration and release-specific track, disc, album-artist, label, and catalog metadata.
 
 ### Fixed
 - Metadata panels retain the active theme when it has complete glyph coverage and automatically switch the complete description area to one theme-matched Unicode family when any field requires fallback.
 - Decomposed Unicode metadata is normalized before rendering so Korean Hangul syllables are composed instead of displaying as separated Jamo.
+- Ambiguous record-label values that merely repeat the track artist are no longer presented as authoritative labels.
 
 ---
 

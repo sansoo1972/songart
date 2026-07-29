@@ -1,5 +1,5 @@
 use crate::audio::{build_oscilloscope_points, compute_rms, SharedAudioBuffer};
-use crate::config::DisplayPreset;
+use crate::config::{DisplayPreset, MetadataDisplayConfig};
 use crate::fft::compute_spectrum_bins;
 use crate::logging::{log_debug, log_error, log_info};
 use crate::state::{AppContext, SongState};
@@ -704,21 +704,33 @@ fn metadata_fallback_fields(
     title_font: &sdl2::ttf::Font,
     body_font: &sdl2::ttf::Font,
     state: &SongState,
-) -> Vec<&'static str> {
+    metadata_display: &MetadataDisplayConfig,
+) -> Vec<String> {
     let mut fields = Vec::new();
 
     if !state.title.trim().is_empty() && !font_supports_text(title_font, &state.title) {
-        fields.push("title");
+        fields.push("title".to_string());
     }
 
     for (name, value) in [
         ("artist", state.artist.as_str()),
         ("album", state.album.as_str()),
-        ("genre", state.genre.as_str()),
-        ("composer", state.composer.as_str()),
+        ("released", state.released.as_str()),
     ] {
         if !value.trim().is_empty() && !font_supports_text(body_font, value) {
-            fields.push(name);
+            fields.push(name.to_string());
+        }
+    }
+
+    for key in metadata_display
+        .fields
+        .iter()
+        .take(metadata_display.max_rows.max(1).min(6) * 2)
+    {
+        if let Some((_, value)) = optional_metadata_field(state, key) {
+            if !font_supports_text(body_font, &value) {
+                fields.push(key.clone());
+            }
         }
     }
 
@@ -963,12 +975,61 @@ impl<'a> TextField<'a> {
 }
 
 struct TextCache<'a> {
-    title: TextField<'a>,
-    artist: TextField<'a>,
-    album: TextField<'a>,
-    year: TextField<'a>,
-    genre: TextField<'a>,
-    composer: TextField<'a>,
+    fields: Vec<TextField<'a>>,
+}
+
+fn meaningful_metadata(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && !value.eq_ignore_ascii_case("unknown")
+        && !value.eq_ignore_ascii_case("none")
+        && !value.eq_ignore_ascii_case("not available")
+}
+
+fn position_summary(number: &str, total: &str) -> String {
+    match (meaningful_metadata(number), meaningful_metadata(total)) {
+        (true, true) => format!("{number}/{total}"),
+        (true, false) => number.to_string(),
+        (false, true) => format!("?/{total}"),
+        (false, false) => String::new(),
+    }
+}
+
+fn optional_metadata_field(state: &SongState, key: &str) -> Option<(&'static str, String)> {
+    let field = match key.trim().to_ascii_lowercase().as_str() {
+        "genre" => ("Genre: ", state.genre.clone()),
+        "composer" => ("Composer: ", state.composer.clone()),
+        "album_artist" => ("Album Artist: ", state.album_artist.clone()),
+        "track" => {
+            let track = position_summary(&state.track_number, &state.track_total);
+            let disc = position_summary(&state.disc_number, &state.disc_total);
+            let value = match (
+                meaningful_metadata(&track),
+                meaningful_metadata(&disc),
+            ) {
+                (true, true) => format!("{track}  •  Disc {disc}"),
+                (true, false) => track,
+                (false, true) => format!("Disc {disc}"),
+                (false, false) => String::new(),
+            };
+            ("Track: ", value)
+        }
+        "duration" => ("Duration: ", state.duration.clone()),
+        "label" => ("Label: ", state.label.clone()),
+        "lyricist" => ("Lyricist: ", state.lyricist.clone()),
+        "producer" => ("Producer: ", state.producer.clone()),
+        "isrc" => ("ISRC: ", state.isrc.clone()),
+        "rating" | "explicit" => ("Rating: ", state.explicit.clone()),
+        "catalog" | "catalog_number" => ("Catalog: ", state.catalog_number.clone()),
+        "copyright" => ("Copyright: ", state.copyright.clone()),
+        _ => return None,
+    };
+
+    if meaningful_metadata(&field.1) {
+        Some((field.0, normalize_display_text(&field.1)))
+    } else {
+        None
+    }
 }
 
 fn build_text_cache<'a>(
@@ -979,8 +1040,10 @@ fn build_text_cache<'a>(
     unicode_body_font: &sdl2::ttf::Font,
     state: &SongState,
     preset: &DisplayPreset,
+    metadata_display: &MetadataDisplayConfig,
     layout: &SceneLayout,
 ) -> Result<TextCache<'a>, String> {
+    let mut fields = Vec::new();
     let panel_x = layout.metadata_region.x() + preset.panel_x;
     let mut panel_y = layout.metadata_region.y() + preset.panel_y;
     let viewport_width = layout
@@ -1002,9 +1065,8 @@ fn build_text_cache<'a>(
 
     let album_line = normalize_display_text(&album_line(state));
     let year_line = normalize_display_text(&release_year_line(state));
-    let genre_line = normalize_display_text(&state.genre);
-    let composer_line = normalize_display_text(&state.composer);
-    let use_unicode_panel = !metadata_fallback_fields(title_font, body_font, state).is_empty();
+    let use_unicode_panel =
+        !metadata_fallback_fields(title_font, body_font, state, metadata_display).is_empty();
     let panel_title_font = if use_unicode_panel {
         unicode_title_font
     } else {
@@ -1016,7 +1078,7 @@ fn build_text_cache<'a>(
         body_font
     };
 
-    let title = TextField::new(
+    fields.push(TextField::new(
         texture_creator,
         panel_title_font,
         panel_title_font,
@@ -1027,10 +1089,10 @@ fn build_text_cache<'a>(
         panel_x,
         panel_y,
         viewport_width,
-    )?;
+    )?);
     panel_y += preset.title_line_spacing;
 
-    let artist = TextField::new(
+    fields.push(TextField::new(
         texture_creator,
         panel_body_font,
         panel_body_font,
@@ -1041,7 +1103,7 @@ fn build_text_cache<'a>(
         panel_x,
         panel_y,
         viewport_width,
-    )?;
+    )?);
     panel_y += preset.body_line_spacing;
 
     let year_x = panel_x + ((viewport_width as f32) * 0.76) as i32;
@@ -1050,7 +1112,7 @@ fn build_text_cache<'a>(
         .saturating_sub(year_x)
         .max(1) as u32;
 
-    let album = TextField::new(
+    fields.push(TextField::new(
         texture_creator,
         panel_body_font,
         panel_body_font,
@@ -1061,62 +1123,76 @@ fn build_text_cache<'a>(
         panel_x,
         panel_y,
         album_viewport_width,
-    )?;
+    )?);
 
-    let year = TextField::new(
-        texture_creator,
-        panel_body_font,
-        panel_body_font,
-        "Year: ",
-        &year_line,
-        Color::RGB(150, 150, 150),
-        Color::RGB(180, 180, 180),
-        year_x,
-        panel_y,
-        year_viewport_width,
-    )?;
+    if meaningful_metadata(&year_line) {
+        fields.push(TextField::new(
+            texture_creator,
+            panel_body_font,
+            panel_body_font,
+            "Year: ",
+            &year_line,
+            Color::RGB(150, 150, 150),
+            Color::RGB(180, 180, 180),
+            year_x,
+            panel_y,
+            year_viewport_width,
+        )?);
+    }
     panel_y += preset.detail_line_spacing;
 
-    let composer_x = panel_x + ((viewport_width as f32) * 0.38) as i32;
-    let genre_viewport_width = (composer_x - panel_x).max(1) as u32;
-    let composer_viewport_width = (panel_x + viewport_width as i32)
-        .saturating_sub(composer_x)
-        .max(1) as u32;
+    let mut optional_fields = metadata_display
+        .fields
+        .iter()
+        .filter_map(|key| optional_metadata_field(state, key))
+        .take(metadata_display.max_rows.max(1).min(6) * 2)
+        .collect::<Vec<_>>();
 
-    let genre = TextField::new(
-        texture_creator,
-        panel_body_font,
-        panel_body_font,
-        "Genre: ",
-        &genre_line,
-        Color::RGB(120, 120, 120),
-        Color::RGB(140, 140, 140),
-        panel_x,
-        panel_y,
-        genre_viewport_width,
-    )?;
+    while !optional_fields.is_empty() {
+        let left = optional_fields.remove(0);
+        let right = if optional_fields.is_empty() {
+            None
+        } else {
+            Some(optional_fields.remove(0))
+        };
+        let right_x = panel_x + ((viewport_width as f32) * 0.5) as i32;
+        let left_width = (right_x - panel_x).max(1) as u32;
+        let right_width = (panel_x + viewport_width as i32)
+            .saturating_sub(right_x)
+            .max(1) as u32;
 
-    let composer = TextField::new(
-        texture_creator,
-        panel_body_font,
-        panel_body_font,
-        "Composer: ",
-        &composer_line,
-        Color::RGB(120, 120, 120),
-        Color::RGB(140, 140, 140),
-        composer_x,
-        panel_y,
-        composer_viewport_width,
-    )?;
+        fields.push(TextField::new(
+            texture_creator,
+            panel_body_font,
+            panel_body_font,
+            left.0,
+            &left.1,
+            Color::RGB(120, 120, 120),
+            Color::RGB(150, 150, 150),
+            panel_x,
+            panel_y,
+            left_width,
+        )?);
 
-    Ok(TextCache {
-        title,
-        artist,
-        album,
-        year,
-        genre,
-        composer,
-    })
+        if let Some(right) = right {
+            fields.push(TextField::new(
+                texture_creator,
+                panel_body_font,
+                panel_body_font,
+                right.0,
+                &right.1,
+                Color::RGB(120, 120, 120),
+                Color::RGB(150, 150, 150),
+                right_x,
+                panel_y,
+                right_width,
+            )?);
+        }
+
+        panel_y += preset.detail_line_spacing;
+    }
+
+    Ok(TextCache { fields })
 }
 
 // ==============================================================================
@@ -2106,24 +2182,9 @@ impl<'a> StaticSceneCache<'a> {
         scale: f32,
         elapsed: Duration,
     ) -> Result<(), String> {
-        self.text
-            .title
-            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
-        self.text
-            .artist
-            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
-        self.text
-            .album
-            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
-        self.text
-            .year
-            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
-        self.text
-            .genre
-            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
-        self.text
-            .composer
-            .draw(canvas, offset_x, offset_y, scale, elapsed)?;
+        for field in &self.text.fields {
+            field.draw(canvas, offset_x, offset_y, scale, elapsed)?;
+        }
 
         Ok(())
     }
@@ -2231,9 +2292,10 @@ impl DisplayRotation {
 #[cfg(test)]
 mod tests {
     use super::{
-        font_supports_text, metadata_font_theme_name, normalize_display_text, scene_layout,
-        segmented_row_rect, segmented_row_step, selected_font_theme_name, vinyl_rotation,
-        vinyl_surface_rotation, DisplayRotation,
+        font_supports_text, meaningful_metadata, metadata_font_theme_name,
+        normalize_display_text, position_summary, scene_layout, segmented_row_rect,
+        segmented_row_step, selected_font_theme_name, vinyl_rotation, vinyl_surface_rotation,
+        DisplayRotation,
     };
     use crate::config::DisplayPreset;
 
@@ -2304,6 +2366,16 @@ mod tests {
     #[test]
     fn decomposed_korean_is_normalized_before_rendering() {
         assert_eq!(normalize_display_text("불꽃으로"), "불꽃으로");
+    }
+
+    #[test]
+    fn optional_metadata_hides_unknown_values_and_formats_positions() {
+        assert!(!meaningful_metadata("Unknown"));
+        assert!(!meaningful_metadata(" none "));
+        assert!(meaningful_metadata("Example Records"));
+        assert_eq!(position_summary("3", "12"), "3/12");
+        assert_eq!(position_summary("3", "Unknown"), "3");
+        assert_eq!(position_summary("Unknown", "12"), "?/12");
     }
 
     #[test]
@@ -3446,7 +3518,12 @@ pub fn run_display_loop(
                 loaded_font_theme = selected_theme;
             }
 
-            let fallback_fields = metadata_fallback_fields(&title_font, &body_font, &state);
+            let fallback_fields = metadata_fallback_fields(
+                &title_font,
+                &body_font,
+                &state,
+                &ctx.config.metadata_display,
+            );
             if !fallback_fields.is_empty() {
                 log_info(
                     &ctx,
@@ -3467,6 +3544,7 @@ pub fn run_display_loop(
                 &unicode_body_font,
                 &state,
                 preset,
+                &ctx.config.metadata_display,
                 &layout,
             )?;
 

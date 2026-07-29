@@ -13,6 +13,7 @@ Version 0.18.0 completes the photorealistic turntable enhancement with high-reso
 - Real-time music recognition via SongRec
 - Automatic high-resolution album artwork retrieval
 - SDL-based artwork and metadata display
+- Structured optional track, release, identifier, and credit metadata
 - Optional animated turntable artwork mode with realistic LP presentation
 - Real-time FFT spectrum analyzer
 - Oscilloscope audio visualizer
@@ -228,6 +229,7 @@ config/songart.toml
 - `artwork.vinyl_animation_quality` selects the Pi 3 (10 fps), Pi 4 (20 fps),
   or Pi 5 (60 fps) rotation profile
 - `display_presets` define scene geometry and spacing
+- `metadata_display` selects and orders compact optional metadata fields
 - `fonts` selects fixed or metadata-driven font behavior
 - `font_themes` define title/body font paths and font sizes
 - `visualizer` controls FFT, spectrum, oscilloscope, and responsiveness behavior
@@ -444,6 +446,60 @@ visualizer_background = "#000000"
 ```
 
 Using the same color for all four values creates a seamless display. Different values can be used later for themed panel layouts.
+
+---
+
+## Rich Track Metadata
+
+SongArt stores optional track information as structured fields instead of
+combining identifiers and release data into a notes string. It reads available
+SongRec/Shazam metadata first, then uses a MusicBrainz ISRC lookup to fill
+missing duration and matching-release details. A MusicBrainz release is used
+only when its album title matches the recognized album, preventing unrelated
+compilations from supplying misleading track or label information.
+
+Supported optional fields include:
+
+- album artist
+- track number and total track count
+- disc number and total disc count
+- duration
+- record label
+- lyricist and producer
+- ISRC
+- explicit/clean rating
+- catalog number and copyright
+
+Values such as `Unknown` are omitted from the display. A record-label value
+that duplicates the track artist is rejected unless a more authoritative
+fallback supplies a real label.
+
+The compact secondary panel is configurable. Two fields are placed on each row,
+and the row limit prevents metadata from overlapping the visualizer:
+
+```toml
+[metadata_display]
+fields = [
+    "genre",
+    "composer",
+    "track",
+    "duration",
+    "label",
+    "isrc",
+    "album_artist",
+    "producer",
+]
+max_rows = 4
+```
+
+Available field keys are `genre`, `composer`, `album_artist`, `track`,
+`duration`, `label`, `lyricist`, `producer`, `isrc`, `rating`, `catalog`, and
+`copyright`. Long values retain the normal clipping and scrolling behavior.
+If any selected value needs Unicode fallback, the complete metadata panel
+continues to use the coordinated fallback behavior described below.
+
+Artwork lookup URLs remain debug-only diagnostics and are not displayed as
+track attributes.
 
 ---
 
