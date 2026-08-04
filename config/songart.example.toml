@@ -107,7 +107,7 @@ artwork_blackout_minutes = 30
 artwork_timeout_action = "black"
 
 # Bouncing artwork size and movement speed.
-artwork_size_ratio = 0.42
+artwork_size_ratio = 0.28
 artwork_speed_pixels_per_second = 120.0
 
 # Duration of the transition into idle mode.

@@ -3129,6 +3129,11 @@ pub fn run_display_loop(
                     repeat: false,
                     ..
                 } => {
+                    if !settings_open && key == Keycode::Escape {
+                        log_info(&ctx, "Escape pressed; stopping SongArt.");
+                        running.store(false, Ordering::SeqCst);
+                        continue;
+                    }
                     last_user_activity_at = Instant::now();
                     if idle_started_at.take().is_some() {
                         log_info(&ctx, "Idle display exited by user input.");
@@ -3416,7 +3421,6 @@ pub fn run_display_loop(
                                 settings_status.clear();
                                 settings_open = true;
                             }
-                            Keycode::Escape => running.store(false, Ordering::SeqCst),
                             _ => {}
                         }
                     }

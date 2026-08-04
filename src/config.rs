@@ -573,7 +573,7 @@ fn default_idle_artwork_timeout_action() -> String {
 }
 
 fn default_idle_artwork_size_ratio() -> f32 {
-    0.42
+    0.28
 }
 
 fn default_idle_artwork_speed() -> f32 {

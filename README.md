@@ -152,7 +152,7 @@ artwork_interval_seconds = 12
 artwork_history_limit = 10
 artwork_blackout_minutes = 30
 artwork_timeout_action = "black" # or "exit"
-artwork_size_ratio = 0.42
+artwork_size_ratio = 0.28
 artwork_speed_pixels_per_second = 120.0
 fade_seconds = 2.0
 ```
@@ -166,9 +166,10 @@ available, it falls back to black immediately. The enabled state, timeout,
 mode, unique-album count, maximum artwork period, and terminal action are
 available in the F1 settings overlay and can be persisted with `S`.
 
-Mouse movement, a mouse click, scrolling, or any key wakes the display and
-restarts its inactivity timer. While idle, the first Escape press wakes SongArt;
-a subsequent Escape from the active display exits the application.
+Mouse movement, a mouse click, scrolling, or any non-Escape key wakes the
+display and restarts its inactivity timer. Escape exits SongArt from either the
+active display or an idle screen. Escape continues to cancel without quitting
+while the settings overlay is open.
 
 The mouse pointer is hidden after `display.cursor_hide_seconds` without mouse
 movement and appears again as soon as the mouse moves.
