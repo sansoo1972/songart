@@ -1,6 +1,7 @@
 use crate::config::AppConfig;
 use crate::logging::LogLevel;
 use crate::visualizer::VisualizerMode;
+use std::time::Instant;
 
 /// Shared runtime context available across threads.
 ///
@@ -72,6 +73,9 @@ pub struct SongState {
     pub artwork_path: String,
     pub artwork_url: String,
     pub version: u64,
+    /// Updated only after SongRec successfully identifies a song. Display code
+    /// uses this instant to enter and leave the application-level idle state.
+    pub last_recognized_at: Instant,
     pub meter: MeterState,
     pub visualizer: VisualizerState,
 }
@@ -91,6 +95,7 @@ impl Default for SongState {
             artwork_path: String::new(),
             artwork_url: String::new(),
             version: 0,
+            last_recognized_at: Instant::now(),
             meter: MeterState::default(),
             visualizer: VisualizerState::default(),
         }

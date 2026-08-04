@@ -2,6 +2,8 @@
 
 **Status:** Completed  
 **Issue:** [#20](https://github.com/sansoo1972/songart/issues/20)  
+**Release:** 0.19.0
+
 **Completed:** 2026-07-28
 
 ## Summary

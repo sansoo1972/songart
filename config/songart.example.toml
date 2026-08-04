@@ -76,6 +76,43 @@ rotation = "normal"
 # ~16 ms targets roughly 60 FPS.
 frame_delay_ms = 16
 
+# Hide the mouse pointer after this many seconds without mouse movement.
+cursor_hide_seconds = 3
+
+
+# ------------------------------------------------------------------------------
+# Idle Display
+# ------------------------------------------------------------------------------
+
+[idle]
+# Keep listening while the display sleeps. Set to false to disable idle mode.
+enabled = false
+
+# Minutes without a successful song recognition before sleeping (1-30).
+timeout_minutes = 10
+
+# "artwork" cycles through covers recognized in this session.
+# "black" fades the entire screen to black.
+mode = "black"
+
+# Slideshow pacing and bounded in-memory history (one image per album).
+artwork_interval_seconds = 12
+artwork_history_limit = 10
+
+# After this many minutes in artwork idle mode, fade fully to black.
+artwork_blackout_minutes = 30
+
+# After the artwork period: "black" keeps SongArt listening on a black screen;
+# "exit" closes SongArt cleanly and returns control to the operating system.
+artwork_timeout_action = "black"
+
+# Bouncing artwork size and movement speed.
+artwork_size_ratio = 0.28
+artwork_speed_pixels_per_second = 120.0
+
+# Duration of the transition into idle mode.
+fade_seconds = 2.0
+
 
 # ------------------------------------------------------------------------------
 # Artwork

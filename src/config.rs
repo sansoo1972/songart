@@ -14,11 +14,94 @@ pub struct AppConfig {
     pub paths: PathsConfig,
     pub display: DisplayConfig,
     #[serde(default)]
+    pub idle: IdleConfig,
+    #[serde(default)]
     pub artwork: ArtworkConfig,
     pub display_presets: HashMap<String, DisplayPreset>,
     pub fonts: FontsConfig,
     pub font_themes: HashMap<String, FontTheme>,
     pub visualizer: VisualizerConfig,
+}
+
+// ==============================================================================
+// Idle Display
+// ==============================================================================
+
+/// Controls the application-level display state used while no music is being
+/// recognized. Recognition and audio capture continue while this mode is active.
+#[derive(Debug, Deserialize, Clone)]
+pub struct IdleConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Minutes without a successful recognition before idle mode starts.
+    /// Runtime code clamps this value to the supported 1..=30 minute range.
+    #[serde(default = "default_idle_timeout_minutes")]
+    pub timeout_minutes: u64,
+
+    /// `artwork` cycles through artwork seen during this session; `black`
+    /// fades the composed frame to black.
+    #[serde(default = "default_idle_mode")]
+    pub mode: String,
+
+    /// Seconds each recent artwork remains visible in artwork mode.
+    #[serde(default = "default_idle_artwork_interval_seconds")]
+    pub artwork_interval_seconds: u64,
+
+    /// Maximum number of previously displayed covers retained in memory.
+    #[serde(default = "default_idle_artwork_history_limit")]
+    pub artwork_history_limit: usize,
+
+    /// Minutes spent cycling artwork before the display becomes fully black.
+    #[serde(default = "default_idle_artwork_blackout_minutes")]
+    pub artwork_blackout_minutes: u64,
+
+    /// Action after the artwork idle period: `black` or `exit`.
+    #[serde(default = "default_idle_artwork_timeout_action")]
+    pub artwork_timeout_action: String,
+
+    /// Maximum fraction of the screen used by a bouncing cover.
+    #[serde(default = "default_idle_artwork_size_ratio")]
+    pub artwork_size_ratio: f32,
+
+    /// Horizontal movement speed for bouncing artwork.
+    #[serde(default = "default_idle_artwork_speed")]
+    pub artwork_speed_pixels_per_second: f32,
+
+    /// Duration of the transition into either idle mode.
+    #[serde(default = "default_idle_fade_seconds")]
+    pub fade_seconds: f32,
+}
+
+impl Default for IdleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            timeout_minutes: default_idle_timeout_minutes(),
+            mode: default_idle_mode(),
+            artwork_interval_seconds: default_idle_artwork_interval_seconds(),
+            artwork_history_limit: default_idle_artwork_history_limit(),
+            artwork_blackout_minutes: default_idle_artwork_blackout_minutes(),
+            artwork_timeout_action: default_idle_artwork_timeout_action(),
+            artwork_size_ratio: default_idle_artwork_size_ratio(),
+            artwork_speed_pixels_per_second: default_idle_artwork_speed(),
+            fade_seconds: default_idle_fade_seconds(),
+        }
+    }
+}
+
+impl IdleConfig {
+    pub fn clamped_timeout_minutes(&self) -> u64 {
+        self.timeout_minutes.clamp(1, 30)
+    }
+
+    pub fn clamped_artwork_history_limit(&self) -> usize {
+        self.artwork_history_limit.clamp(1, 50)
+    }
+
+    pub fn clamped_artwork_blackout_minutes(&self) -> u64 {
+        self.artwork_blackout_minutes.clamp(1, 120)
+    }
 }
 
 // ==============================================================================
@@ -124,6 +207,10 @@ pub struct DisplayConfig {
     #[serde(default = "default_display_rotation")]
     pub rotation: String,
     pub frame_delay_ms: u64,
+
+    /// Hide the pointer after this many seconds without mouse movement.
+    #[serde(default = "default_cursor_hide_seconds")]
+    pub cursor_hide_seconds: u64,
 
     /// Configurable colors for the major display regions.
     #[serde(default)]
@@ -461,6 +548,46 @@ fn default_vinyl_animation_quality() -> String {
     "pi4".to_string()
 }
 
+fn default_idle_timeout_minutes() -> u64 {
+    10
+}
+
+fn default_idle_mode() -> String {
+    "black".to_string()
+}
+
+fn default_idle_artwork_interval_seconds() -> u64 {
+    12
+}
+
+fn default_idle_artwork_history_limit() -> usize {
+    10
+}
+
+fn default_idle_artwork_blackout_minutes() -> u64 {
+    30
+}
+
+fn default_idle_artwork_timeout_action() -> String {
+    "black".to_string()
+}
+
+fn default_idle_artwork_size_ratio() -> f32 {
+    0.28
+}
+
+fn default_idle_artwork_speed() -> f32 {
+    120.0
+}
+
+fn default_idle_fade_seconds() -> f32 {
+    2.0
+}
+
+fn default_cursor_hide_seconds() -> u64 {
+    3
+}
+
 // Audio defaults.
 
 fn default_sample_rate() -> usize {
@@ -681,4 +808,42 @@ pub fn load_config(path: &str) -> Result<AppConfig, String> {
         fs::read_to_string(path).map_err(|e| format!("Failed to read config {}: {e}", path))?;
 
     toml::from_str(&raw).map_err(|e| format!("Failed to parse config {}: {e}", path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IdleConfig;
+
+    #[test]
+    fn idle_timeout_is_limited_to_thirty_minutes() {
+        let mut idle = IdleConfig::default();
+        idle.timeout_minutes = 45;
+        assert_eq!(idle.clamped_timeout_minutes(), 30);
+    }
+
+    #[test]
+    fn idle_timeout_has_a_one_minute_floor() {
+        let mut idle = IdleConfig::default();
+        idle.timeout_minutes = 0;
+        assert_eq!(idle.clamped_timeout_minutes(), 1);
+    }
+
+    #[test]
+    fn idle_mode_is_disabled_by_default() {
+        let idle = IdleConfig::default();
+        assert!(!idle.enabled);
+        assert_eq!(idle.mode, "black");
+        assert_eq!(idle.artwork_blackout_minutes, 30);
+        assert_eq!(idle.artwork_timeout_action, "black");
+    }
+
+
+    #[test]
+    fn artwork_history_and_blackout_are_bounded() {
+        let mut idle = IdleConfig::default();
+        idle.artwork_history_limit = 500;
+        idle.artwork_blackout_minutes = 500;
+        assert_eq!(idle.clamped_artwork_history_limit(), 50);
+        assert_eq!(idle.clamped_artwork_blackout_minutes(), 120);
+    }
 }

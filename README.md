@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.18.0 completes the photorealistic turntable enhancement with high-resolution black vinyl, fixed studio reflections, smooth independent label rotation, and selectable Raspberry Pi 3, Pi 4, and Pi 5 animation profiles.
+Version 0.19.0 adds a configurable idle display with bouncing, album-deduplicated artwork, fade-to-black or clean-exit behavior, input wake handling, automatic pointer hiding, and backward-compatible local configuration defaults. It also includes coordinated Unicode font fallback for non-Latin metadata.
 
 ---
 
@@ -18,6 +18,7 @@ Version 0.18.0 completes the photorealistic turntable enhancement with high-reso
 - Oscilloscope audio visualizer
 - Photorealistic 1970s-style dual analog VU meters
 - Keyboard settings overlay with live previews and safe TOML saving
+- Configurable idle display that fades to black or cycles recent session artwork while recognition continues
 - Shared rolling audio buffer for live visualization
 - Configurable display presets for portrait and landscape layouts
 - Application-level SDL output rotation independent of logical layout orientation
@@ -117,6 +118,7 @@ Available modes:
 - Visualizer: `spectrum`, `oscilloscope`, `analog_vu`
 - Spectrum: `full`, `top_only`, `segmented`
 - Sensitivity: `0.25`–`8.0`
+- Idle display: enabled/disabled, `1`–`30` minute timeout, and `black` or `artwork` mode
 
 The overlay only shows controls that apply to the active mode. Vinyl motion is
 shown only for Turntable artwork. Spectrum style is hidden for Oscilloscope and
@@ -131,6 +133,46 @@ record remains crisp on native 1080p layouts and scales cleanly to 4K output.
 
 Saving preserves TOML comments, writes through a temporary file, and keeps the
 previous configuration at `config/songart.toml.bak`.
+
+---
+
+## Idle Display
+
+SongArt can hide the now-playing interface after a configurable period without
+a successful recognition. This is an application-level idle state: audio
+capture and SongRec continue running, and the next recognized song immediately
+restores the normal display.
+
+```toml
+[idle]
+enabled = true
+timeout_minutes = 10 # clamped to 1-30
+mode = "black"       # or "artwork"
+artwork_interval_seconds = 12
+artwork_history_limit = 10
+artwork_blackout_minutes = 30
+artwork_timeout_action = "black" # or "exit"
+artwork_size_ratio = 0.28
+artwork_speed_pixels_per_second = 120.0
+fade_seconds = 2.0
+```
+
+Artwork mode cycles through a bounded, in-memory history of albums recognized
+during the current session. The active cover floats across the screen and
+bounces when it reaches an edge. Only one cover is retained per album. After
+the configured artwork period, SongArt either becomes fully black until a song
+is recognized or exits cleanly and returns control to the OS. If no artwork is
+available, it falls back to black immediately. The enabled state, timeout,
+mode, unique-album count, maximum artwork period, and terminal action are
+available in the F1 settings overlay and can be persisted with `S`.
+
+Mouse movement, a mouse click, scrolling, or any non-Escape key wakes the
+display and restarts its inactivity timer. Escape exits SongArt from either the
+active display or an idle screen. Escape continues to cancel without quitting
+while the settings overlay is open.
+
+The mouse pointer is hidden after `display.cursor_hide_seconds` without mouse
+movement and appears again as soon as the mouse moves.
 
 ---
 
@@ -154,7 +196,8 @@ songart/
 ├── assets/
 │   └── fonts/              # Custom font assets
 ├── config/
-│   └── songart.toml        # Runtime configuration
+│   ├── songart.example.toml # Tracked configuration baseline
+│   └── songart.toml         # Ignored machine-local runtime configuration
 ├── src/
 │   ├── main.rs             # App bootstrap and thread startup
 │   ├── config.rs           # Config structs and loader
@@ -217,12 +260,26 @@ Runtime configuration lives in:
 config/songart.toml
 ```
 
+Create it once from the tracked baseline, then keep machine-specific paths and
+preferences local:
+
+```bash
+cp config/songart.example.toml config/songart.toml
+```
+
+`config/songart.toml` and its temporary/backup files are ignored by Git, so
+branch switches and pulls do not overwrite Raspberry Pi settings. New options
+are added to `config/songart.example.toml` and have backward-compatible code
+defaults; compare the two files when adopting new settings.
+
 ### Configuration model
 
 - `logging` controls log level and log file behavior
 - `audio` controls capture device, rolling buffer, and recognition cadence
 - `paths` defines SongRec and artwork paths
 - `display` selects the active display preset and frame timing
+- `idle` controls display inactivity, artwork history and motion, wake behavior,
+  and the post-artwork black/exit action
 - `display.colors` controls the major display-region backgrounds
 - `artwork.mode` selects the standard cover or turntable-style presentation
 - `artwork.vinyl_animation_quality` selects the Pi 3 (10 fps), Pi 4 (20 fps),
@@ -674,15 +731,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.18.0**.
+This project is now at **0.19.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.18.0 -m "songart 0.18.0"
-git push origin v0.18.0
+git tag -a v0.19.0 -m "songart 0.19.0"
+git push origin v0.19.0
 ```
 
 ---

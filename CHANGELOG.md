@@ -6,7 +6,16 @@ All notable changes to `songart` will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.19.0] - 2026-08-04
+
 ### Added
+- [#45](https://github.com/sansoo1972/songart/issues/45) Configurable 1–30 minute idle display with fade-to-black and recent-session-artwork modes, persistent F1 settings, and automatic wake on successful song recognition.
+- Idle artwork history now retains only one cover per album, supports a configurable unique-album limit, and transitions to black after a configurable artwork-idle period.
+- The mouse pointer automatically hides after a configurable period without movement and reappears on mouse motion.
+- Idle artwork now floats around the display and reflects off screen edges; mouse or keyboard input wakes the UI and restarts the idle timer.
+- Artwork idle can either transition to black or exit SongArt cleanly after its configured maximum period.
 - [#20](https://github.com/sansoo1972/songart/issues/20) Configurable Noto CJK sans, serif, and mono fallback fonts for Korean and other non-Latin metadata.
 
 ### Fixed
