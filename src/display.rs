@@ -15,6 +15,7 @@ use sdl2::surface::Surface;
 use sdl2::video::WindowContext;
 
 use std::fs;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -190,6 +191,9 @@ enum SettingsRow {
     Sensitivity,
     Orientation,
     Rotation,
+    IdleEnabled,
+    IdleTimeout,
+    IdleMode,
 }
 
 fn settings_rows(
@@ -218,6 +222,9 @@ fn settings_rows(
     rows.push(SettingsRow::Sensitivity);
     rows.push(SettingsRow::Orientation);
     rows.push(SettingsRow::Rotation);
+    rows.push(SettingsRow::IdleEnabled);
+    rows.push(SettingsRow::IdleTimeout);
+    rows.push(SettingsRow::IdleMode);
     rows
 }
 
@@ -2439,6 +2446,9 @@ fn save_display_modes(
     visualizer_gain: f32,
     display_orientation: &str,
     display_rotation: &str,
+    idle_enabled: bool,
+    idle_timeout_minutes: u64,
+    idle_mode: &str,
 ) -> Result<(), String> {
     let raw = fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
     let mut document = raw
@@ -2461,6 +2471,10 @@ fn save_display_modes(
     document["visualizer"]["gain"] = toml_edit::value(visualizer_gain as f64);
     document["display"]["orientation"] = toml_edit::value(display_orientation);
     document["display"]["rotation"] = toml_edit::value(display_rotation);
+    document["idle"]["enabled"] = toml_edit::value(idle_enabled);
+    document["idle"]["timeout_minutes"] =
+        toml_edit::value(idle_timeout_minutes.clamp(1, 30) as i64);
+    document["idle"]["mode"] = toml_edit::value(idle_mode);
 
     let backup = format!("{path}.bak");
     let temporary = format!("{path}.tmp");
@@ -2501,6 +2515,9 @@ fn draw_settings_overlay(
     visualizer_gain: f32,
     display_orientation: &str,
     display_rotation: &str,
+    idle_enabled: bool,
+    idle_timeout_minutes: u64,
+    idle_mode: &str,
     selected: usize,
     status: &str,
 ) -> Result<(), String> {
@@ -2567,6 +2584,14 @@ fn draw_settings_overlay(
             SettingsRow::Sensitivity => format!("Sensitivity   {}", slider),
             SettingsRow::Orientation => format!("Orientation   < {} >", display_orientation),
             SettingsRow::Rotation => format!("Rotation      < {} >", display_rotation),
+            SettingsRow::IdleEnabled => format!(
+                "Idle display  < {} >",
+                if idle_enabled { "on" } else { "off" }
+            ),
+            SettingsRow::IdleTimeout => {
+                format!("Idle timeout  < {} min >", idle_timeout_minutes)
+            }
+            SettingsRow::IdleMode => format!("Idle mode     < {} >", idle_mode),
         })
         .collect();
 
@@ -2820,6 +2845,13 @@ pub fn run_display_loop(
     let mut runtime_visualizer_gain = ctx.config.visualizer.gain;
     let mut runtime_display_orientation = ctx.config.display.orientation.clone();
     let mut runtime_display_rotation = configured_rotation.canonical().to_string();
+    let mut runtime_idle_enabled = ctx.config.idle.enabled;
+    let mut runtime_idle_timeout_minutes = ctx.config.idle.clamped_timeout_minutes();
+    let mut runtime_idle_mode = if ctx.config.idle.mode.eq_ignore_ascii_case("artwork") {
+        "artwork".to_string()
+    } else {
+        "black".to_string()
+    };
     if DisplayRotation::parse(&ctx.config.display.rotation).is_none() {
         log_error(
             &ctx,
@@ -2838,11 +2870,15 @@ pub fn run_display_loop(
     let mut settings_original_gain = runtime_visualizer_gain;
     let mut settings_original_orientation = runtime_display_orientation.clone();
     let mut settings_original_rotation = runtime_display_rotation.clone();
+    let mut settings_original_idle_enabled = runtime_idle_enabled;
+    let mut settings_original_idle_timeout_minutes = runtime_idle_timeout_minutes;
+    let mut settings_original_idle_mode = runtime_idle_mode.clone();
     let mut settings_status = String::new();
     let mut loaded_version: u64 = u64::MAX;
     let mut loaded_track_identity = String::new();
     let mut artwork_texture: Option<Texture<'_>> = None;
     let mut previous_artwork_texture: Option<Texture<'_>> = None;
+    let mut artwork_history: VecDeque<Texture<'_>> = VecDeque::new();
     let mut circular_artwork_texture: Option<Texture<'_>> = None;
     let mut previous_circular_artwork_texture: Option<Texture<'_>> = None;
     let mut artwork_started_at = Instant::now();
@@ -2855,6 +2891,7 @@ pub fn run_display_loop(
     let mut frame_counter: u32 = 0;
     let mut frame_timer = Instant::now();
     let mut text_scroll_started_at = Instant::now();
+    let mut idle_started_at: Option<Instant> = None;
 
     let mut smoothed_upper_bins = vec![0.0f32; ctx.config.visualizer.spectrum_bin_count];
     let mut smoothed_lower_bins = vec![0.0f32; ctx.config.visualizer.spectrum_bin_count];
@@ -2952,6 +2989,9 @@ pub fn run_display_loop(
                                 runtime_visualizer_gain = settings_original_gain;
                                 runtime_display_orientation = settings_original_orientation.clone();
                                 runtime_display_rotation = settings_original_rotation.clone();
+                                runtime_idle_enabled = settings_original_idle_enabled;
+                                runtime_idle_timeout_minutes = settings_original_idle_timeout_minutes;
+                                runtime_idle_mode = settings_original_idle_mode.clone();
                                 settings_status.clear();
                                 settings_open = false;
                             }
@@ -3067,6 +3107,24 @@ pub fn run_display_loop(
                                             direction,
                                         );
                                     }
+                                    SettingsRow::IdleEnabled => {
+                                        runtime_idle_enabled = !runtime_idle_enabled;
+                                        if !runtime_idle_enabled {
+                                            idle_started_at = None;
+                                        }
+                                    }
+                                    SettingsRow::IdleTimeout => {
+                                        runtime_idle_timeout_minutes =
+                                            ((runtime_idle_timeout_minutes as i32) + direction)
+                                                .clamp(1, 30) as u64;
+                                    }
+                                    SettingsRow::IdleMode => {
+                                        runtime_idle_mode = cycle_option(
+                                            &runtime_idle_mode,
+                                            &["black", "artwork"],
+                                            direction,
+                                        );
+                                    }
                                 }
 
                                 let row_count = settings_rows(
@@ -3098,6 +3156,9 @@ pub fn run_display_loop(
                                 runtime_visualizer_gain,
                                 &runtime_display_orientation,
                                 &runtime_display_rotation,
+                                runtime_idle_enabled,
+                                runtime_idle_timeout_minutes,
+                                &runtime_idle_mode,
                             ) {
                                 Ok(()) => {
                                     settings_original_artwork = runtime_artwork_mode.clone();
@@ -3109,6 +3170,10 @@ pub fn run_display_loop(
                                     settings_original_orientation =
                                         runtime_display_orientation.clone();
                                     settings_original_rotation = runtime_display_rotation.clone();
+                                    settings_original_idle_enabled = runtime_idle_enabled;
+                                    settings_original_idle_timeout_minutes =
+                                        runtime_idle_timeout_minutes;
+                                    settings_original_idle_mode = runtime_idle_mode.clone();
                                     settings_status = "Saved".to_string();
                                 }
                                 Err(e) => {
@@ -3137,6 +3202,10 @@ pub fn run_display_loop(
                                 settings_original_gain = runtime_visualizer_gain;
                                 settings_original_orientation = runtime_display_orientation.clone();
                                 settings_original_rotation = runtime_display_rotation.clone();
+                                settings_original_idle_enabled = runtime_idle_enabled;
+                                settings_original_idle_timeout_minutes =
+                                    runtime_idle_timeout_minutes;
+                                settings_original_idle_mode = runtime_idle_mode.clone();
                                 settings_selected = 0;
                                 settings_status.clear();
                                 settings_open = true;
@@ -3154,6 +3223,28 @@ pub fn run_display_loop(
             let state_guard = shared_state.lock().unwrap();
             state_guard.clone()
         };
+
+        let idle_timeout = Duration::from_secs(runtime_idle_timeout_minutes * 60);
+        let idle_active = runtime_idle_enabled
+            && !settings_open
+            && state.last_recognized_at.elapsed() >= idle_timeout;
+        match (idle_active, idle_started_at) {
+            (true, None) => {
+                idle_started_at = Some(Instant::now());
+                log_info(
+                    &ctx,
+                    &format!(
+                        "Idle display entered after {} minute(s) without recognition (mode={}).",
+                        runtime_idle_timeout_minutes, runtime_idle_mode
+                    ),
+                );
+            }
+            (false, Some(_)) => {
+                idle_started_at = None;
+                log_info(&ctx, "Idle display exited.");
+            }
+            _ => {}
+        }
 
         let (
             audio_len,
@@ -3524,7 +3615,14 @@ pub fn run_display_loop(
                     const ARTWORK_FADE_SECONDS: f32 = 1.5;
                     let artwork_elapsed = artwork_started_at.elapsed().as_secs_f32();
                     if artwork_elapsed >= ARTWORK_FADE_SECONDS {
-                        previous_artwork_texture = None;
+                        if let Some(mut previous) = previous_artwork_texture.take() {
+                            previous.set_alpha_mod(255);
+                            let limit = ctx.config.idle.artwork_history_limit.clamp(1, 50);
+                            artwork_history.push_back(previous);
+                            while artwork_history.len() > limit {
+                                artwork_history.pop_front();
+                            }
+                        }
                         previous_circular_artwork_texture = None;
                     }
 
@@ -3778,6 +3876,9 @@ pub fn run_display_loop(
                             runtime_visualizer_gain,
                             &runtime_display_orientation,
                             &runtime_display_rotation,
+                            runtime_idle_enabled,
+                            runtime_idle_timeout_minutes,
+                            &runtime_idle_mode,
                             settings_selected,
                             &settings_status,
                         )?;
@@ -3826,6 +3927,49 @@ pub fn run_display_loop(
             false,
             false,
         )?;
+
+        if let Some(started_at) = idle_started_at {
+            let fade_seconds = ctx.config.idle.fade_seconds.clamp(0.1, 10.0);
+            let idle_elapsed = started_at.elapsed().as_secs_f32();
+            let idle_fade = (idle_elapsed / fade_seconds).clamp(0.0, 1.0);
+
+            canvas.set_blend_mode(BlendMode::Blend);
+            canvas.set_draw_color(Color::RGBA(
+                0,
+                0,
+                0,
+                (idle_fade * 255.0).round() as u8,
+            ));
+            canvas.fill_rect(None)?;
+
+            if runtime_idle_mode.eq_ignore_ascii_case("artwork") {
+                let interval = ctx.config.idle.artwork_interval_seconds.clamp(3, 300);
+                let slide_elapsed = started_at.elapsed().as_secs_f32() % interval as f32;
+                let slide_fade = (slide_elapsed / 1.0).clamp(0.0, 1.0);
+                let artwork_alpha = (idle_fade * slide_fade * 255.0).round() as u8;
+                let item_count = artwork_history.len() + usize::from(artwork_texture.is_some());
+
+                if item_count > 0 {
+                    let index =
+                        (started_at.elapsed().as_secs() / interval) as usize % item_count;
+                    let screen = Rect::new(0, 0, canvas_w, canvas_h);
+
+                    if index < artwork_history.len() {
+                        if let Some(texture) = artwork_history.get_mut(index) {
+                            let target = compute_artwork_rect(texture.query(), screen);
+                            texture.set_alpha_mod(artwork_alpha);
+                            canvas.copy(texture, None, target)?;
+                            texture.set_alpha_mod(255);
+                        }
+                    } else if let Some(texture) = artwork_texture.as_mut() {
+                        let target = compute_artwork_rect(texture.query(), screen);
+                        texture.set_alpha_mod(artwork_alpha);
+                        canvas.copy(texture, None, target)?;
+                        texture.set_alpha_mod(255);
+                    }
+                }
+            }
+        }
         canvas.present();
 
         frame_counter += 1;

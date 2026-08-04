@@ -7,6 +7,7 @@ All notable changes to `songart` will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- [#45](https://github.com/sansoo1972/songart/issues/45) Configurable 1–30 minute idle display with fade-to-black and recent-session-artwork modes, persistent F1 settings, and automatic wake on successful song recognition.
 - [#20](https://github.com/sansoo1972/songart/issues/20) Configurable Noto CJK sans, serif, and mono fallback fonts for Korean and other non-Latin metadata.
 
 ### Fixed

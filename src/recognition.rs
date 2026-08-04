@@ -8,7 +8,7 @@ use std::fs;
 use std::process::Command;
 use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc, Mutex };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const UNKNOWN: &str = "Unknown";
 const MUSICBRAINZ_USER_AGENT: &str = "songart/0.11.1 (https://github.com/sansoo1972/songart)";
@@ -860,6 +860,12 @@ pub fn run_recognition_loop(
         let notes = extract_notes(&json);
 
         let current = format!("{artist} - {title}");
+
+        // A valid SongRec match is the wake signal, including repeat matches
+        // for a song that is still playing. Failed attempts never touch it.
+        if json["track"].is_object() && (!is_unknown(title) || !is_unknown(artist)) {
+            shared_state.lock().unwrap().last_recognized_at = Instant::now();
+        }
 
         let preview_url = pick_artwork_url(&json).unwrap_or_default();
         if preview_url.is_empty() {

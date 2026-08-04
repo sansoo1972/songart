@@ -18,6 +18,7 @@ Version 0.18.0 completes the photorealistic turntable enhancement with high-reso
 - Oscilloscope audio visualizer
 - Photorealistic 1970s-style dual analog VU meters
 - Keyboard settings overlay with live previews and safe TOML saving
+- Configurable idle display that fades to black or cycles recent session artwork while recognition continues
 - Shared rolling audio buffer for live visualization
 - Configurable display presets for portrait and landscape layouts
 - Application-level SDL output rotation independent of logical layout orientation
@@ -117,6 +118,7 @@ Available modes:
 - Visualizer: `spectrum`, `oscilloscope`, `analog_vu`
 - Spectrum: `full`, `top_only`, `segmented`
 - Sensitivity: `0.25`–`8.0`
+- Idle display: enabled/disabled, `1`–`30` minute timeout, and `black` or `artwork` mode
 
 The overlay only shows controls that apply to the active mode. Vinyl motion is
 shown only for Turntable artwork. Spectrum style is hidden for Oscilloscope and
@@ -131,6 +133,30 @@ record remains crisp on native 1080p layouts and scales cleanly to 4K output.
 
 Saving preserves TOML comments, writes through a temporary file, and keeps the
 previous configuration at `config/songart.toml.bak`.
+
+---
+
+## Idle Display
+
+SongArt can hide the now-playing interface after a configurable period without
+a successful recognition. This is an application-level idle state: audio
+capture and SongRec continue running, and the next recognized song immediately
+restores the normal display.
+
+```toml
+[idle]
+enabled = true
+timeout_minutes = 10 # clamped to 1-30
+mode = "black"       # or "artwork"
+artwork_interval_seconds = 12
+artwork_history_limit = 10
+fade_seconds = 2.0
+```
+
+Artwork mode cycles through a bounded, in-memory history of covers recognized
+during the current session. If no artwork is available, it falls back to a
+black screen. The enabled state, timeout, and mode are also available in the
+F1 settings overlay and can be persisted with `S`.
 
 ---
 
