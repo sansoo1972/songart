@@ -52,6 +52,10 @@ pub struct IdleConfig {
     #[serde(default = "default_idle_artwork_history_limit")]
     pub artwork_history_limit: usize,
 
+    /// Minutes spent cycling artwork before the display becomes fully black.
+    #[serde(default = "default_idle_artwork_blackout_minutes")]
+    pub artwork_blackout_minutes: u64,
+
     /// Duration of the transition into either idle mode.
     #[serde(default = "default_idle_fade_seconds")]
     pub fade_seconds: f32,
@@ -65,6 +69,7 @@ impl Default for IdleConfig {
             mode: default_idle_mode(),
             artwork_interval_seconds: default_idle_artwork_interval_seconds(),
             artwork_history_limit: default_idle_artwork_history_limit(),
+            artwork_blackout_minutes: default_idle_artwork_blackout_minutes(),
             fade_seconds: default_idle_fade_seconds(),
         }
     }
@@ -73,6 +78,14 @@ impl Default for IdleConfig {
 impl IdleConfig {
     pub fn clamped_timeout_minutes(&self) -> u64 {
         self.timeout_minutes.clamp(1, 30)
+    }
+
+    pub fn clamped_artwork_history_limit(&self) -> usize {
+        self.artwork_history_limit.clamp(1, 50)
+    }
+
+    pub fn clamped_artwork_blackout_minutes(&self) -> u64 {
+        self.artwork_blackout_minutes.clamp(1, 120)
     }
 }
 
@@ -179,6 +192,10 @@ pub struct DisplayConfig {
     #[serde(default = "default_display_rotation")]
     pub rotation: String,
     pub frame_delay_ms: u64,
+
+    /// Hide the pointer after this many seconds without mouse movement.
+    #[serde(default = "default_cursor_hide_seconds")]
+    pub cursor_hide_seconds: u64,
 
     /// Configurable colors for the major display regions.
     #[serde(default)]
@@ -532,8 +549,16 @@ fn default_idle_artwork_history_limit() -> usize {
     10
 }
 
+fn default_idle_artwork_blackout_minutes() -> u64 {
+    30
+}
+
 fn default_idle_fade_seconds() -> f32 {
     2.0
+}
+
+fn default_cursor_hide_seconds() -> u64 {
+    3
 }
 
 // Audio defaults.
@@ -781,5 +806,16 @@ mod tests {
         let idle = IdleConfig::default();
         assert!(!idle.enabled);
         assert_eq!(idle.mode, "black");
+        assert_eq!(idle.artwork_blackout_minutes, 30);
+    }
+
+
+    #[test]
+    fn artwork_history_and_blackout_are_bounded() {
+        let mut idle = IdleConfig::default();
+        idle.artwork_history_limit = 500;
+        idle.artwork_blackout_minutes = 500;
+        assert_eq!(idle.clamped_artwork_history_limit(), 50);
+        assert_eq!(idle.clamped_artwork_blackout_minutes(), 120);
     }
 }

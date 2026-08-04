@@ -76,6 +76,9 @@ rotation = "normal"
 # ~16 ms targets roughly 60 FPS.
 frame_delay_ms = 16
 
+# Hide the mouse pointer after this many seconds without mouse movement.
+cursor_hide_seconds = 3
+
 
 # ------------------------------------------------------------------------------
 # Idle Display
@@ -92,9 +95,12 @@ timeout_minutes = 10
 # "black" fades the entire screen to black.
 mode = "black"
 
-# Slideshow pacing and bounded in-memory history.
+# Slideshow pacing and bounded in-memory history (one image per album).
 artwork_interval_seconds = 12
 artwork_history_limit = 10
+
+# After this many minutes in artwork idle mode, fade fully to black.
+artwork_blackout_minutes = 30
 
 # Duration of the transition into idle mode.
 fade_seconds = 2.0

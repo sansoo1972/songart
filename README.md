@@ -150,13 +150,19 @@ timeout_minutes = 10 # clamped to 1-30
 mode = "black"       # or "artwork"
 artwork_interval_seconds = 12
 artwork_history_limit = 10
+artwork_blackout_minutes = 30
 fade_seconds = 2.0
 ```
 
-Artwork mode cycles through a bounded, in-memory history of covers recognized
-during the current session. If no artwork is available, it falls back to a
-black screen. The enabled state, timeout, and mode are also available in the
-F1 settings overlay and can be persisted with `S`.
+Artwork mode cycles through a bounded, in-memory history of albums recognized
+during the current session. Only one cover is retained per album. After the
+configured artwork blackout period, the display becomes fully black until a
+song is recognized. If no artwork is available, it falls back to black
+immediately. The enabled state, timeout, mode, unique-album count, and blackout
+period are available in the F1 settings overlay and can be persisted with `S`.
+
+The mouse pointer is hidden after `display.cursor_hide_seconds` without mouse
+movement and appears again as soon as the mouse moves.
 
 ---
 
