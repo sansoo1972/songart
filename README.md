@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.18.0 completes the photorealistic turntable enhancement with high-resolution black vinyl, fixed studio reflections, smooth independent label rotation, and selectable Raspberry Pi 3, Pi 4, and Pi 5 animation profiles.
+Version 0.19.0 adds a configurable idle display with bouncing, album-deduplicated artwork, fade-to-black or clean-exit behavior, input wake handling, automatic pointer hiding, and backward-compatible local configuration defaults. It also includes coordinated Unicode font fallback for non-Latin metadata.
 
 ---
 
@@ -196,7 +196,8 @@ songart/
 ├── assets/
 │   └── fonts/              # Custom font assets
 ├── config/
-│   └── songart.toml        # Runtime configuration
+│   ├── songart.example.toml # Tracked configuration baseline
+│   └── songart.toml         # Ignored machine-local runtime configuration
 ├── src/
 │   ├── main.rs             # App bootstrap and thread startup
 │   ├── config.rs           # Config structs and loader
@@ -259,12 +260,26 @@ Runtime configuration lives in:
 config/songart.toml
 ```
 
+Create it once from the tracked baseline, then keep machine-specific paths and
+preferences local:
+
+```bash
+cp config/songart.example.toml config/songart.toml
+```
+
+`config/songart.toml` and its temporary/backup files are ignored by Git, so
+branch switches and pulls do not overwrite Raspberry Pi settings. New options
+are added to `config/songart.example.toml` and have backward-compatible code
+defaults; compare the two files when adopting new settings.
+
 ### Configuration model
 
 - `logging` controls log level and log file behavior
 - `audio` controls capture device, rolling buffer, and recognition cadence
 - `paths` defines SongRec and artwork paths
 - `display` selects the active display preset and frame timing
+- `idle` controls display inactivity, artwork history and motion, wake behavior,
+  and the post-artwork black/exit action
 - `display.colors` controls the major display-region backgrounds
 - `artwork.mode` selects the standard cover or turntable-style presentation
 - `artwork.vinyl_animation_quality` selects the Pi 3 (10 fps), Pi 4 (20 fps),
@@ -716,15 +731,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.18.0**.
+This project is now at **0.19.0**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.18.0 -m "songart 0.18.0"
-git push origin v0.18.0
+git tag -a v0.19.0 -m "songart 0.19.0"
+git push origin v0.19.0
 ```
 
 ---

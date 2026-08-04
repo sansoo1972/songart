@@ -1,7 +1,12 @@
 # Enhancement: Add configurable idle sleep and artwork screensaver mode
 
-**Status:** In progress  
+**Status:** Completed
+
 **Issue:** [#45](https://github.com/sansoo1972/songart/issues/45)
+
+**Release:** 0.19.0
+
+**Completed:** 2026-08-04
 
 ## Summary
 

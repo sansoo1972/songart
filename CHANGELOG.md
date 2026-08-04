@@ -6,6 +6,10 @@ All notable changes to `songart` will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.19.0] - 2026-08-04
+
 ### Added
 - [#45](https://github.com/sansoo1972/songart/issues/45) Configurable 1–30 minute idle display with fade-to-black and recent-session-artwork modes, persistent F1 settings, and automatic wake on successful song recognition.
 - Idle artwork history now retains only one cover per album, supports a configurable unique-album limit, and transitions to black after a configurable artwork-idle period.
