@@ -11,3 +11,8 @@ songart.log
 
 # Workspace settings
 songart.code-workspace
+
+# Machine-specific SongArt configuration
+config/songart.toml
+config/songart.toml.bak
+config/songart.toml.tmp
