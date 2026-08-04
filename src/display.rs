@@ -196,6 +196,7 @@ enum SettingsRow {
     IdleMode,
     IdleArtworkCount,
     IdleArtworkBlackout,
+    IdleArtworkAction,
 }
 
 fn settings_rows(
@@ -242,6 +243,7 @@ fn settings_rows_with_idle(
     if idle_mode.eq_ignore_ascii_case("artwork") {
         rows.push(SettingsRow::IdleArtworkCount);
         rows.push(SettingsRow::IdleArtworkBlackout);
+        rows.push(SettingsRow::IdleArtworkAction);
     }
     rows
 }
@@ -263,6 +265,50 @@ fn artwork_album_key(state: &SongState) -> String {
     } else {
         format!("track:{}\0{}", state.artist.to_lowercase(), state.title.to_lowercase())
     }
+}
+
+fn bounce_position(elapsed_seconds: f32, distance: u32, speed: f32, phase: f32) -> i32 {
+    if distance == 0 {
+        return 0;
+    }
+    let distance = distance as f32;
+    let cycle = distance * 2.0;
+    let position = (elapsed_seconds * speed.max(1.0) + phase).rem_euclid(cycle);
+    if position <= distance {
+        position.round() as i32
+    } else {
+        (cycle - position).round() as i32
+    }
+}
+
+fn bouncing_artwork_rect(
+    query: TextureQuery,
+    canvas_width: u32,
+    canvas_height: u32,
+    elapsed_seconds: f32,
+    size_ratio: f32,
+    speed: f32,
+) -> Rect {
+    let ratio = size_ratio.clamp(0.15, 0.8);
+    let max_width = (canvas_width as f32 * ratio).max(1.0);
+    let max_height = (canvas_height as f32 * ratio).max(1.0);
+    let scale = (max_width / query.width.max(1) as f32)
+        .min(max_height / query.height.max(1) as f32);
+    let width = (query.width as f32 * scale).round().max(1.0) as u32;
+    let height = (query.height as f32 * scale).round().max(1.0) as u32;
+    let x = bounce_position(
+        elapsed_seconds,
+        canvas_width.saturating_sub(width),
+        speed,
+        0.0,
+    );
+    let y = bounce_position(
+        elapsed_seconds,
+        canvas_height.saturating_sub(height),
+        speed * 0.73,
+        canvas_height as f32 * 0.19,
+    );
+    Rect::new(x, y, width, height)
 }
 
 #[derive(Clone, Copy)]
@@ -2275,9 +2321,9 @@ impl DisplayRotation {
 #[cfg(test)]
 mod tests {
     use super::{
-        font_supports_text, metadata_font_theme_name, normalize_display_text, scene_layout,
-        segmented_row_rect, segmented_row_step, selected_font_theme_name, vinyl_rotation,
-        vinyl_surface_rotation, DisplayRotation,
+        bounce_position, font_supports_text, metadata_font_theme_name, normalize_display_text,
+        scene_layout, segmented_row_rect, segmented_row_step, selected_font_theme_name,
+        vinyl_rotation, vinyl_surface_rotation, DisplayRotation,
     };
     use crate::config::DisplayPreset;
 
@@ -2313,6 +2359,14 @@ mod tests {
     #[test]
     fn display_rotation_rejects_unknown_values() {
         assert_eq!(DisplayRotation::parse("sideways"), None);
+    }
+
+    #[test]
+    fn artwork_bounce_reflects_at_both_edges() {
+        assert_eq!(bounce_position(0.0, 100, 10.0, 0.0), 0);
+        assert_eq!(bounce_position(10.0, 100, 10.0, 0.0), 100);
+        assert_eq!(bounce_position(15.0, 100, 10.0, 0.0), 50);
+        assert_eq!(bounce_position(20.0, 100, 10.0, 0.0), 0);
     }
 
     #[test]
@@ -2488,6 +2542,7 @@ fn save_display_modes(
     idle_mode: &str,
     idle_artwork_history_limit: usize,
     idle_artwork_blackout_minutes: u64,
+    idle_artwork_timeout_action: &str,
 ) -> Result<(), String> {
     let raw = fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
     let mut document = raw
@@ -2518,6 +2573,8 @@ fn save_display_modes(
         toml_edit::value(idle_artwork_history_limit.clamp(1, 50) as i64);
     document["idle"]["artwork_blackout_minutes"] =
         toml_edit::value(idle_artwork_blackout_minutes.clamp(1, 120) as i64);
+    document["idle"]["artwork_timeout_action"] =
+        toml_edit::value(idle_artwork_timeout_action);
 
     let backup = format!("{path}.bak");
     let temporary = format!("{path}.tmp");
@@ -2563,6 +2620,7 @@ fn draw_settings_overlay(
     idle_mode: &str,
     idle_artwork_history_limit: usize,
     idle_artwork_blackout_minutes: u64,
+    idle_artwork_timeout_action: &str,
     selected: usize,
     status: &str,
 ) -> Result<(), String> {
@@ -2641,7 +2699,10 @@ fn draw_settings_overlay(
                 format!("Idle albums   < {} >", idle_artwork_history_limit)
             }
             SettingsRow::IdleArtworkBlackout => {
-                format!("Black after   < {} min >", idle_artwork_blackout_minutes)
+                format!("Artwork max   < {} min >", idle_artwork_blackout_minutes)
+            }
+            SettingsRow::IdleArtworkAction => {
+                format!("After artwork < {} >", idle_artwork_timeout_action)
             }
         })
         .collect();
@@ -2907,6 +2968,12 @@ pub fn run_display_loop(
         ctx.config.idle.clamped_artwork_history_limit();
     let mut runtime_idle_artwork_blackout_minutes =
         ctx.config.idle.clamped_artwork_blackout_minutes();
+    let mut runtime_idle_artwork_timeout_action =
+        if ctx.config.idle.artwork_timeout_action.eq_ignore_ascii_case("exit") {
+            "exit".to_string()
+        } else {
+            "black".to_string()
+        };
     if DisplayRotation::parse(&ctx.config.display.rotation).is_none() {
         log_error(
             &ctx,
@@ -2932,6 +2999,8 @@ pub fn run_display_loop(
         runtime_idle_artwork_history_limit;
     let mut settings_original_idle_artwork_blackout_minutes =
         runtime_idle_artwork_blackout_minutes;
+    let mut settings_original_idle_artwork_timeout_action =
+        runtime_idle_artwork_timeout_action.clone();
     let mut settings_status = String::new();
     let mut loaded_version: u64 = u64::MAX;
     let mut loaded_track_identity = String::new();
@@ -2953,6 +3022,7 @@ pub fn run_display_loop(
     let mut frame_timer = Instant::now();
     let mut text_scroll_started_at = Instant::now();
     let mut idle_started_at: Option<Instant> = None;
+    let mut last_user_activity_at = Instant::now();
     let mouse = sdl.mouse();
     let mut cursor_visible = true;
     let mut last_mouse_motion = Instant::now();
@@ -3038,10 +3108,20 @@ pub fn run_display_loop(
             match event {
                 Event::Quit { .. } => running.store(false, Ordering::SeqCst),
                 Event::MouseMotion { .. } => {
+                    last_user_activity_at = Instant::now();
+                    if idle_started_at.take().is_some() {
+                        log_info(&ctx, "Idle display exited by mouse movement.");
+                    }
                     last_mouse_motion = Instant::now();
                     if !cursor_visible {
                         mouse.show_cursor(true);
                         cursor_visible = true;
+                    }
+                }
+                Event::MouseButtonDown { .. } | Event::MouseWheel { .. } => {
+                    last_user_activity_at = Instant::now();
+                    if idle_started_at.take().is_some() {
+                        log_info(&ctx, "Idle display exited by mouse input.");
                     }
                 }
                 Event::KeyDown {
@@ -3049,6 +3129,11 @@ pub fn run_display_loop(
                     repeat: false,
                     ..
                 } => {
+                    last_user_activity_at = Instant::now();
+                    if idle_started_at.take().is_some() {
+                        log_info(&ctx, "Idle display exited by user input.");
+                        continue;
+                    }
                     if settings_open {
                         match key {
                             Keycode::Escape => {
@@ -3067,6 +3152,8 @@ pub fn run_display_loop(
                                     settings_original_idle_artwork_history_limit;
                                 runtime_idle_artwork_blackout_minutes =
                                     settings_original_idle_artwork_blackout_minutes;
+                                runtime_idle_artwork_timeout_action =
+                                    settings_original_idle_artwork_timeout_action.clone();
                                 settings_status.clear();
                                 settings_open = false;
                             }
@@ -3221,6 +3308,13 @@ pub fn run_display_loop(
                                                 + direction)
                                                 .clamp(1, 120) as u64;
                                     }
+                                    SettingsRow::IdleArtworkAction => {
+                                        runtime_idle_artwork_timeout_action = cycle_option(
+                                            &runtime_idle_artwork_timeout_action,
+                                            &["black", "exit"],
+                                            direction,
+                                        );
+                                    }
                                 }
 
                                 let row_count = settings_rows_with_idle(
@@ -3258,6 +3352,7 @@ pub fn run_display_loop(
                                 &runtime_idle_mode,
                                 runtime_idle_artwork_history_limit,
                                 runtime_idle_artwork_blackout_minutes,
+                                &runtime_idle_artwork_timeout_action,
                             ) {
                                 Ok(()) => {
                                     settings_original_artwork = runtime_artwork_mode.clone();
@@ -3277,6 +3372,8 @@ pub fn run_display_loop(
                                         runtime_idle_artwork_history_limit;
                                     settings_original_idle_artwork_blackout_minutes =
                                         runtime_idle_artwork_blackout_minutes;
+                                    settings_original_idle_artwork_timeout_action =
+                                        runtime_idle_artwork_timeout_action.clone();
                                     settings_status = "Saved".to_string();
                                 }
                                 Err(e) => {
@@ -3313,6 +3410,8 @@ pub fn run_display_loop(
                                     runtime_idle_artwork_history_limit;
                                 settings_original_idle_artwork_blackout_minutes =
                                     runtime_idle_artwork_blackout_minutes;
+                                settings_original_idle_artwork_timeout_action =
+                                    runtime_idle_artwork_timeout_action.clone();
                                 settings_selected = 0;
                                 settings_status.clear();
                                 settings_open = true;
@@ -3340,9 +3439,10 @@ pub fn run_display_loop(
         };
 
         let idle_timeout = Duration::from_secs(runtime_idle_timeout_minutes * 60);
+        let last_activity_at = state.last_recognized_at.max(last_user_activity_at);
         let idle_active = runtime_idle_enabled
             && !settings_open
-            && state.last_recognized_at.elapsed() >= idle_timeout;
+            && last_activity_at.elapsed() >= idle_timeout;
         match (idle_active, idle_started_at) {
             (true, None) => {
                 idle_started_at = Some(Instant::now());
@@ -3359,6 +3459,23 @@ pub fn run_display_loop(
                 log_info(&ctx, "Idle display exited.");
             }
             _ => {}
+        }
+
+        if let Some(started_at) = idle_started_at {
+            let artwork_period = Duration::from_secs(
+                runtime_idle_artwork_blackout_minutes.saturating_mul(60),
+            );
+            if runtime_idle_mode.eq_ignore_ascii_case("artwork")
+                && runtime_idle_artwork_timeout_action.eq_ignore_ascii_case("exit")
+                && started_at.elapsed() >= artwork_period
+            {
+                log_info(
+                    &ctx,
+                    "Artwork idle period completed; exiting SongArt and returning control to the OS.",
+                );
+                running.store(false, Ordering::SeqCst);
+                continue;
+            }
         }
 
         let (
@@ -4020,6 +4137,7 @@ pub fn run_display_loop(
                             &runtime_idle_mode,
                             runtime_idle_artwork_history_limit,
                             runtime_idle_artwork_blackout_minutes,
+                            &runtime_idle_artwork_timeout_action,
                             settings_selected,
                             &settings_status,
                         )?;
@@ -4098,17 +4216,29 @@ pub fn run_display_loop(
                 if item_count > 0 {
                     let index =
                         (started_at.elapsed().as_secs() / interval) as usize % item_count;
-                    let screen = Rect::new(0, 0, canvas_w, canvas_h);
-
                     if index < artwork_history.len() {
                         if let Some(texture) = artwork_history.get_mut(index) {
-                            let target = compute_artwork_rect(texture.texture.query(), screen);
+                            let target = bouncing_artwork_rect(
+                                texture.texture.query(),
+                                canvas_w,
+                                canvas_h,
+                                idle_elapsed,
+                                ctx.config.idle.artwork_size_ratio,
+                                ctx.config.idle.artwork_speed_pixels_per_second,
+                            );
                             texture.texture.set_alpha_mod(artwork_alpha);
                             canvas.copy(&texture.texture, None, target)?;
                             texture.texture.set_alpha_mod(255);
                         }
                     } else if let Some(texture) = artwork_texture.as_mut() {
-                        let target = compute_artwork_rect(texture.query(), screen);
+                        let target = bouncing_artwork_rect(
+                            texture.query(),
+                            canvas_w,
+                            canvas_h,
+                            idle_elapsed,
+                            ctx.config.idle.artwork_size_ratio,
+                            ctx.config.idle.artwork_speed_pixels_per_second,
+                        );
                         texture.set_alpha_mod(artwork_alpha);
                         canvas.copy(texture, None, target)?;
                         texture.set_alpha_mod(255);

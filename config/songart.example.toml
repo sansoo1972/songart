@@ -102,6 +102,14 @@ artwork_history_limit = 10
 # After this many minutes in artwork idle mode, fade fully to black.
 artwork_blackout_minutes = 30
 
+# After the artwork period: "black" keeps SongArt listening on a black screen;
+# "exit" closes SongArt cleanly and returns control to the operating system.
+artwork_timeout_action = "black"
+
+# Bouncing artwork size and movement speed.
+artwork_size_ratio = 0.42
+artwork_speed_pixels_per_second = 120.0
+
 # Duration of the transition into idle mode.
 fade_seconds = 2.0
 

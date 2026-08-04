@@ -56,6 +56,18 @@ pub struct IdleConfig {
     #[serde(default = "default_idle_artwork_blackout_minutes")]
     pub artwork_blackout_minutes: u64,
 
+    /// Action after the artwork idle period: `black` or `exit`.
+    #[serde(default = "default_idle_artwork_timeout_action")]
+    pub artwork_timeout_action: String,
+
+    /// Maximum fraction of the screen used by a bouncing cover.
+    #[serde(default = "default_idle_artwork_size_ratio")]
+    pub artwork_size_ratio: f32,
+
+    /// Horizontal movement speed for bouncing artwork.
+    #[serde(default = "default_idle_artwork_speed")]
+    pub artwork_speed_pixels_per_second: f32,
+
     /// Duration of the transition into either idle mode.
     #[serde(default = "default_idle_fade_seconds")]
     pub fade_seconds: f32,
@@ -70,6 +82,9 @@ impl Default for IdleConfig {
             artwork_interval_seconds: default_idle_artwork_interval_seconds(),
             artwork_history_limit: default_idle_artwork_history_limit(),
             artwork_blackout_minutes: default_idle_artwork_blackout_minutes(),
+            artwork_timeout_action: default_idle_artwork_timeout_action(),
+            artwork_size_ratio: default_idle_artwork_size_ratio(),
+            artwork_speed_pixels_per_second: default_idle_artwork_speed(),
             fade_seconds: default_idle_fade_seconds(),
         }
     }
@@ -553,6 +568,18 @@ fn default_idle_artwork_blackout_minutes() -> u64 {
     30
 }
 
+fn default_idle_artwork_timeout_action() -> String {
+    "black".to_string()
+}
+
+fn default_idle_artwork_size_ratio() -> f32 {
+    0.42
+}
+
+fn default_idle_artwork_speed() -> f32 {
+    120.0
+}
+
 fn default_idle_fade_seconds() -> f32 {
     2.0
 }
@@ -807,6 +834,7 @@ mod tests {
         assert!(!idle.enabled);
         assert_eq!(idle.mode, "black");
         assert_eq!(idle.artwork_blackout_minutes, 30);
+        assert_eq!(idle.artwork_timeout_action, "black");
     }
 
 

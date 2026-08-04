@@ -151,15 +151,24 @@ mode = "black"       # or "artwork"
 artwork_interval_seconds = 12
 artwork_history_limit = 10
 artwork_blackout_minutes = 30
+artwork_timeout_action = "black" # or "exit"
+artwork_size_ratio = 0.42
+artwork_speed_pixels_per_second = 120.0
 fade_seconds = 2.0
 ```
 
 Artwork mode cycles through a bounded, in-memory history of albums recognized
-during the current session. Only one cover is retained per album. After the
-configured artwork blackout period, the display becomes fully black until a
-song is recognized. If no artwork is available, it falls back to black
-immediately. The enabled state, timeout, mode, unique-album count, and blackout
-period are available in the F1 settings overlay and can be persisted with `S`.
+during the current session. The active cover floats across the screen and
+bounces when it reaches an edge. Only one cover is retained per album. After
+the configured artwork period, SongArt either becomes fully black until a song
+is recognized or exits cleanly and returns control to the OS. If no artwork is
+available, it falls back to black immediately. The enabled state, timeout,
+mode, unique-album count, maximum artwork period, and terminal action are
+available in the F1 settings overlay and can be persisted with `S`.
+
+Mouse movement, a mouse click, scrolling, or any key wakes the display and
+restarts its inactivity timer. While idle, the first Escape press wakes SongArt;
+a subsequent Escape from the active display exits the application.
 
 The mouse pointer is hidden after `display.cursor_hide_seconds` without mouse
 movement and appears again as soon as the mouse moves.

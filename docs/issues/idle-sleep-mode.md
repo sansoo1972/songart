@@ -16,6 +16,9 @@ as SongRec identifies music again.
 - Recent-artwork mode backed by a bounded in-memory session history
 - One retained artwork entry per album, with a configurable 1–50 album limit
 - Configurable artwork-mode blackout after 1–120 minutes (30 minutes by default)
+- Floating artwork that bounces when it reaches a display edge
+- Configurable post-artwork action: stay black or exit cleanly to the OS
+- Mouse and keyboard activity wake the display and reset its inactivity timer
 - Mouse pointer hidden after inactivity and restored on mouse movement
 - Black fallback when the current session has no artwork
 - Recognition timestamp updated only for successful SongRec matches, including
@@ -32,6 +35,9 @@ as SongRec identifies music again.
 - [x] Artwork mode has a black fallback when no history is available.
 - [x] Artwork mode keeps only one image for each album.
 - [x] Artwork mode becomes fully black after the configured maximum idle period.
+- [x] Artwork moves around the screen and bounces at its edges.
+- [x] The maximum artwork-idle action can be configured as black or application exit.
+- [x] Mouse and keyboard activity wake the display before the terminal action.
 - [x] The mouse pointer is hidden when it is not in use.
 - [x] Black mode fades smoothly and removes the visible UI.
 - [x] A newly recognized song restores the normal now-playing display.
