@@ -2855,6 +2855,7 @@ fn log_visualizer_debug(
 pub fn run_display_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
+    sleeping: Arc<AtomicBool>,
     shared_state: Arc<Mutex<SongState>>,
     shared_audio: Arc<Mutex<SharedAudioBuffer>>,
 ) -> Result<(), String> {
@@ -3110,6 +3111,7 @@ pub fn run_display_loop(
                 Event::MouseMotion { .. } => {
                     last_user_activity_at = Instant::now();
                     if idle_started_at.take().is_some() {
+                        sleeping.store(false, Ordering::SeqCst);
                         log_info(&ctx, "Idle display exited by mouse movement.");
                     }
                     last_mouse_motion = Instant::now();
@@ -3121,6 +3123,7 @@ pub fn run_display_loop(
                 Event::MouseButtonDown { .. } | Event::MouseWheel { .. } => {
                     last_user_activity_at = Instant::now();
                     if idle_started_at.take().is_some() {
+                        sleeping.store(false, Ordering::SeqCst);
                         log_info(&ctx, "Idle display exited by mouse input.");
                     }
                 }
@@ -3136,6 +3139,7 @@ pub fn run_display_loop(
                     }
                     last_user_activity_at = Instant::now();
                     if idle_started_at.take().is_some() {
+                        sleeping.store(false, Ordering::SeqCst);
                         log_info(&ctx, "Idle display exited by user input.");
                         continue;
                     }
@@ -3280,6 +3284,7 @@ pub fn run_display_loop(
                                         runtime_idle_enabled = !runtime_idle_enabled;
                                         if !runtime_idle_enabled {
                                             idle_started_at = None;
+                                            sleeping.store(false, Ordering::SeqCst);
                                         }
                                     }
                                     SettingsRow::IdleTimeout => {
@@ -3450,6 +3455,7 @@ pub fn run_display_loop(
         match (idle_active, idle_started_at) {
             (true, None) => {
                 idle_started_at = Some(Instant::now());
+                sleeping.store(true, Ordering::SeqCst);
                 log_info(
                     &ctx,
                     &format!(
@@ -3460,6 +3466,7 @@ pub fn run_display_loop(
             }
             (false, Some(_)) => {
                 idle_started_at = None;
+                sleeping.store(false, Ordering::SeqCst);
                 log_info(&ctx, "Idle display exited.");
             }
             _ => {}

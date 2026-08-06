@@ -11,8 +11,8 @@
 ## Summary
 
 Add an application-level idle display that activates after 1–30 minutes without
-a successfully recognized song. The app continues listening and wakes as soon
-as SongRec identifies music again.
+a successfully recognized song. Sleep pauses audio capture and SongRec requests;
+mouse activity or a non-Escape key wakes the app and resumes with fresh audio.
 
 ## Implementation
 
@@ -30,6 +30,8 @@ as SongRec identifies music again.
 - Recognition timestamp updated only for successful SongRec matches, including
   repeat detections of a song that is still playing
 - Recognition failures and background processing do not wake the display
+- Audio capture and SongRec submissions pause for the entire idle sleep period
+- Pre-sleep buffered audio is discarded before capture and recognition resume
 
 ## Acceptance criteria
 
@@ -47,6 +49,7 @@ as SongRec identifies music again.
 - [x] Escape exits SongArt from either the active display or an idle screen.
 - [x] The mouse pointer is hidden when it is not in use.
 - [x] Black mode fades smoothly and removes the visible UI.
-- [x] A newly recognized song restores the normal now-playing display.
-- [x] Recognition and audio capture continue while the display is idle.
+- [x] Mouse or non-Escape keyboard input restores the normal now-playing display.
+- [x] Recognition and audio capture remain paused while the display is idle.
+- [x] Wake restarts capture with an empty buffer before SongRec submissions resume.
 - [x] The enabled state, timeout, and mode persist across restarts.

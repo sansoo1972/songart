@@ -36,6 +36,7 @@ fn main() {
     }
 
     let running = Arc::new(AtomicBool::new(true));
+    let sleeping = Arc::new(AtomicBool::new(false));
     let running_flag = Arc::clone(&running);
 
     ctrlc
@@ -50,20 +51,23 @@ fn main() {
     let audio_running = Arc::clone(&running);
     let audio_ctx = Arc::clone(&ctx);
     let audio_buffer = Arc::clone(&shared_audio);
+    let audio_sleeping = Arc::clone(&sleeping);
 
     let audio_thread = thread::spawn(move || {
-        run_audio_capture_loop(audio_ctx, audio_running, audio_buffer);
+        run_audio_capture_loop(audio_ctx, audio_running, audio_sleeping, audio_buffer);
     });
 
     let recognizer_running = Arc::clone(&running);
     let recognizer_state = Arc::clone(&shared_state);
     let recognizer_audio = Arc::clone(&shared_audio);
     let recognizer_ctx = Arc::clone(&ctx);
+    let recognizer_sleeping = Arc::clone(&sleeping);
 
     let recognizer = thread::spawn(move || {
         run_recognition_loop(
             recognizer_ctx,
             recognizer_running,
+            recognizer_sleeping,
             recognizer_state,
             recognizer_audio
         );
@@ -72,6 +76,7 @@ fn main() {
     let display_result = run_display_loop(
         Arc::clone(&ctx),
         Arc::clone(&running),
+        Arc::clone(&sleeping),
         Arc::clone(&shared_state),
         Arc::clone(&shared_audio)
     );

@@ -6,6 +6,9 @@ All notable changes to `songart` will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Idle sleep now stops the active audio-capture process and pauses SongRec submissions until mouse or non-Escape keyboard input wakes SongArt; buffered pre-sleep audio is discarded before capture resumes.
+
 ---
 
 ## [0.19.0] - 2026-08-04
