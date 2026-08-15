@@ -766,6 +766,7 @@ fn download_best_artwork(
 pub fn run_recognition_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
+    sleeping: Arc<AtomicBool>,
     shared_state: Arc<Mutex<SongState>>,
     shared_audio: Arc<Mutex<SharedAudioBuffer>>
 ) {
@@ -778,6 +779,17 @@ pub fn run_recognition_loop(
     log_info(&ctx, "Recognition loop started.");
 
     while running.load(Ordering::SeqCst) {
+        if sleeping.load(Ordering::SeqCst) {
+            log_info(&ctx, "Recognition paused for idle sleep.");
+            while running.load(Ordering::SeqCst) && sleeping.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(100));
+            }
+            if running.load(Ordering::SeqCst) {
+                log_info(&ctx, "Recognition resuming after idle sleep.");
+            }
+            continue;
+        }
+
         log_info(&ctx, "Listening...");
 
         let snapshot = {
@@ -809,6 +821,10 @@ pub fn run_recognition_loop(
             break;
         }
 
+        if sleeping.load(Ordering::SeqCst) {
+            continue;
+        }
+
         let output = match
             Command::new(&ctx.config.paths.songrec_bin)
                 .args(["recognize", &ctx.config.audio.sample_wav, "--json"])
@@ -827,6 +843,9 @@ pub fn run_recognition_loop(
 
         if !running.load(Ordering::SeqCst) {
             break;
+        }
+        if sleeping.load(Ordering::SeqCst) {
+            continue;
         }
 
         log_debug(&ctx, &format!("SongRec exit status: {}", output.status));
@@ -861,8 +880,8 @@ pub fn run_recognition_loop(
 
         let current = format!("{artist} - {title}");
 
-        // A valid SongRec match is the wake signal, including repeat matches
-        // for a song that is still playing. Failed attempts never touch it.
+        // A valid SongRec match resets the inactivity timer while awake,
+        // including repeat matches for a song that is still playing.
         if json["track"].is_object() && (!is_unknown(title) || !is_unknown(artist)) {
             shared_state.lock().unwrap().last_recognized_at = Instant::now();
         }

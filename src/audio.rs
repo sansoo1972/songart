@@ -56,6 +56,12 @@ impl SharedAudioBuffer {
         self.samples.len()
     }
 
+    /// Drops buffered samples so recognition cannot submit audio captured
+    /// before or during an idle transition after the app wakes.
+    pub fn clear(&mut self) {
+        self.samples.clear();
+    }
+
 }
 
 /// Creates the shared live audio buffer from config.
@@ -73,15 +79,28 @@ pub fn create_shared_audio_buffer(ctx: &AppContext) -> Arc<Mutex<SharedAudioBuff
 pub fn run_audio_capture_loop(
     ctx: Arc<AppContext>,
     running: Arc<AtomicBool>,
+    sleeping: Arc<AtomicBool>,
     shared_audio: Arc<Mutex<SharedAudioBuffer>>
 ) {
     log_info(&ctx, "Audio capture loop started.");
 
     let sample_rate_arg = ctx.config.audio.sample_rate.to_string();
     let channels_arg = ctx.config.audio.channels.to_string();
+    let mut buf = vec![0u8; ctx.config.audio.read_chunk_bytes.max(512)];
 
-    let mut child = match
-        Command::new("parec")
+    while running.load(Ordering::SeqCst) {
+        if sleeping.load(Ordering::SeqCst) {
+            shared_audio.lock().unwrap().clear();
+            while running.load(Ordering::SeqCst) && sleeping.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            if running.load(Ordering::SeqCst) {
+                log_info(&ctx, "Audio capture resuming after idle sleep.");
+            }
+            continue;
+        }
+
+        let mut child = match Command::new("parec")
             .args([
                 "--device",
                 &ctx.config.audio.device,
@@ -97,101 +116,86 @@ pub fn run_audio_capture_loop(
             ])
             .stdout(Stdio::piped())
             .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => {
-            log_error(&ctx, &format!("Failed to start parec: {e}"));
-            return;
-        }
-    };
+        {
+            Ok(child) => child,
+            Err(e) => {
+                log_error(&ctx, &format!("Failed to start parec: {e}"));
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                continue;
+            }
+        };
 
-    let mut stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
+        let Some(mut stdout) = child.stdout.take() else {
             log_error(&ctx, "parec stdout was not available.");
             let _ = child.kill();
             let _ = child.wait();
-            return;
-        }
-    };
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            continue;
+        };
 
-    let mut buf = vec![0u8; ctx.config.audio.read_chunk_bytes.max(512)];
-    let mut last_audio_debug = std::time::Instant::now();
-    let mut pushed_chunks: u32 = 0;
-    let mut pushed_samples: usize = 0;
-    let mut last_read_at = std::time::Instant::now();
+        let mut last_audio_debug = std::time::Instant::now();
+        let mut pushed_chunks: u32 = 0;
+        let mut pushed_samples: usize = 0;
+        let mut last_read_at = std::time::Instant::now();
 
-    while running.load(Ordering::SeqCst) {
-        match stdout.read(&mut buf) {
-            Ok(0) => {
-                log_debug(&ctx, "parec returned EOF.");
-                break;
-            }
-            Ok(n) => {
-                let channels = ctx.config.audio.channels.max(1);
-                let mut decoded_raw = Vec::with_capacity(n / 2);
-
-                for chunk in buf[..n].chunks_exact(2) {
-                    let sample =
-                        (i16::from_le_bytes([chunk[0], chunk[1]]) as f32) / (i16::MAX as f32);
-                    decoded_raw.push(sample);
+        while running.load(Ordering::SeqCst) && !sleeping.load(Ordering::SeqCst) {
+            match stdout.read(&mut buf) {
+                Ok(0) => {
+                    log_debug(&ctx, "parec returned EOF.");
+                    break;
                 }
-
-                // Downmix interleaved multi-channel audio to mono.
-                // PS3 Eye is commonly 4ch @ 16kHz, so this prevents ch1/ch2/ch3/ch4
-                // from being treated as a fake high-speed mono stream.
-                let mut mono = Vec::with_capacity(decoded_raw.len() / channels);
-
-                for frame in decoded_raw.chunks_exact(channels) {
-                    let sum: f32 = frame.iter().copied().sum();
-                    mono.push(sum / (channels as f32));
-                }
-
-                if !mono.is_empty() {
-                    let read_gap_ms = last_read_at.elapsed().as_millis();
-                    last_read_at = std::time::Instant::now();
-
-                    {
-                        let mut audio = shared_audio.lock().unwrap();
-                        audio.push_samples(&mono);
-                    }
-
-                    pushed_chunks += 1;
-                    pushed_samples += mono.len();
-
-                    if last_audio_debug.elapsed() >= std::time::Duration::from_secs(5) {
-                        let avg_chunk_samples = if pushed_chunks == 0 {
-                            0
-                        } else {
-                            pushed_samples / (pushed_chunks as usize)
-                        };
-
-                        log_info(
-                            &ctx,
-                            &format!(
-                                "Audio capture debug: chunks={} samples={} avg_chunk_samples={} last_read_gap_ms={}",
-                                pushed_chunks,
-                                pushed_samples,
-                                avg_chunk_samples,
-                                read_gap_ms
-                            )
+                Ok(n) => {
+                    let channels = ctx.config.audio.channels.max(1);
+                    let mut decoded_raw = Vec::with_capacity(n / 2);
+                    for chunk in buf[..n].chunks_exact(2) {
+                        decoded_raw.push(
+                            (i16::from_le_bytes([chunk[0], chunk[1]]) as f32)
+                                / (i16::MAX as f32),
                         );
+                    }
 
-                        pushed_chunks = 0;
-                        pushed_samples = 0;
-                        last_audio_debug = std::time::Instant::now();
+                    let mut mono = Vec::with_capacity(decoded_raw.len() / channels);
+                    for frame in decoded_raw.chunks_exact(channels) {
+                        mono.push(frame.iter().copied().sum::<f32>() / channels as f32);
+                    }
+
+                    if !mono.is_empty() {
+                        let read_gap_ms = last_read_at.elapsed().as_millis();
+                        last_read_at = std::time::Instant::now();
+                        shared_audio.lock().unwrap().push_samples(&mono);
+                        pushed_chunks += 1;
+                        pushed_samples += mono.len();
+
+                        if last_audio_debug.elapsed() >= std::time::Duration::from_secs(5) {
+                            let average = pushed_samples / pushed_chunks.max(1) as usize;
+                            log_info(
+                                &ctx,
+                                &format!(
+                                    "Audio capture debug: chunks={} samples={} avg_chunk_samples={} last_read_gap_ms={}",
+                                    pushed_chunks, pushed_samples, average, read_gap_ms
+                                ),
+                            );
+                            pushed_chunks = 0;
+                            pushed_samples = 0;
+                            last_audio_debug = std::time::Instant::now();
+                        }
                     }
                 }
+                Err(e) => {
+                    log_error(&ctx, &format!("Error reading from parec: {e}"));
+                    break;
+                }
             }
-            Err(e) => {
-                log_error(&ctx, &format!("Error reading from parec: {e}"));
-                break;
-            }
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+
+        if sleeping.load(Ordering::SeqCst) {
+            shared_audio.lock().unwrap().clear();
+            log_info(&ctx, "Audio capture paused for idle sleep.");
         }
     }
-
-    let _ = child.kill();
-    let _ = child.wait();
 
     log_info(&ctx, "Audio capture loop stopped.");
 }
@@ -312,4 +316,19 @@ fn resample_to_points(
 fn sample_to_y(sample: f32, y_offset: f32, y_scale: f32) -> f32 {
     let clamped = sample.clamp(-1.0, 1.0);
     (y_offset - clamped * 0.5 * y_scale).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SharedAudioBuffer;
+
+    #[test]
+    fn clearing_audio_removes_pre_sleep_samples() {
+        let mut audio = SharedAudioBuffer::new(2, 10);
+        audio.push_samples(&[0.1, 0.2, 0.3]);
+        assert_eq!(audio.len(), 3);
+        audio.clear();
+        assert_eq!(audio.len(), 0);
+        assert!(audio.recent_ms(1_000).is_empty());
+    }
 }
