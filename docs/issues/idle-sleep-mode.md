@@ -6,7 +6,11 @@
 
 **Release:** 0.19.0
 
+**Idle-pause fix release:** 0.19.1
+
 **Completed:** 2026-08-04
+
+**Fix verified:** 2026-08-15
 
 ## Summary
 

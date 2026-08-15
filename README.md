@@ -4,7 +4,7 @@ Real-time music recognition, artwork display, and live audio visualization for R
 
 `songart` listens to ambient audio, identifies the currently playing song using SongRec (Shazam API), downloads high-resolution album artwork when available, and renders a configurable SDL-based display with artwork, metadata, and real-time audio visualizers including FFT spectrum analysis and oscilloscope rendering.
 
-Version 0.19.0 adds a configurable idle display with bouncing, album-deduplicated artwork, fade-to-black or clean-exit behavior, input wake handling, automatic pointer hiding, and backward-compatible local configuration defaults. It also includes coordinated Unicode font fallback for non-Latin metadata.
+Version 0.19.1 pauses audio capture and SongRec submissions for the entire idle sleep period, discards buffered pre-sleep audio, and resumes with fresh capture after user input wakes the app. It builds on the configurable idle display and Unicode font fallback introduced in 0.19.0.
 
 ---
 
@@ -732,15 +732,15 @@ tail -f /home/admin/projects/songart/songart.log
 
 ## Versioning
 
-This project is now at **0.19.0**.
+This project is now at **0.19.1**.
 
 Recommended release flow:
 
 ```bash
 git checkout main
 git pull origin main
-git tag -a v0.19.0 -m "songart 0.19.0"
-git push origin v0.19.0
+git tag -a v0.19.1 -m "songart 0.19.1"
+git push origin v0.19.1
 ```
 
 ---
